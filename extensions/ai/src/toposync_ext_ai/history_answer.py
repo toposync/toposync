@@ -78,7 +78,7 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
         async def selection():
             try:
                 return await services.call("vision.identity.history_selection", request=request,
-                    identity_id=body.identity_id, association=body.association)
+                    identity_id=body.identity_id, association=body.association, data_filter=body.data_filter)
             except KeyError as exc:
                 raise HTTPException(503, "Identity history unavailable") from exc
         identity_selection = await selection() if body.identity_id else None

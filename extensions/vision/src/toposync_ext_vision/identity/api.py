@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from typing import Annotated, Callable, Literal
 
@@ -136,11 +137,16 @@ def _authorize(request: Request, *, write: bool = False, cameras: set[str] | Non
 
 
 async def identity_history_selection(*, request: Request, get_store: Callable[[], IdentityStore],
-                                     identity_id: str, association: str = "human") -> dict:
+                                     identity_id: str, association: str = "human", data_filter: dict | None = None) -> dict:
     """Private selection shared by retrieval and answering; every call reauthorizes."""
     from .history import matching_notification_ids
+    from toposync.runtime.notifications.access import NotificationAccess
+    from toposync.runtime.extension_management import disabled_extension_ids_from_settings
 
+    request.state.auth_context = request.app.state.auth.resolve_request(request, refresh=False)
     _authorize(request)
+    if "com.toposync.vision" in disabled_extension_ids_from_settings(await request.app.state.config_store.get_settings()):
+        raise HTTPException(503, "Identity history unavailable")
     request.app.state.auth.authorize(context=request.state.auth_context,
         action="core:notifications:read", resource_type=None, resource_selector="*")
     def select():
@@ -154,6 +160,28 @@ async def identity_history_selection(*, request: Request, get_store: Callable[[]
         except IdentityConflict as exc:
             raise HTTPException(409, "Identity changed; refresh the selection") from exc
     scope = await asyncio.to_thread(select)
+    def owners():
+        gallery = get_store()
+        with gallery._lock:
+            return [row[0] for row in gallery._connection.execute(
+                "SELECT DISTINCT owner_id FROM activity_reference WHERE owner_id<>'independent' "
+                "AND occurrence_id IN (SELECT json_extract(value,'$.occurrence_id') FROM json_each(?)) ORDER BY owner_id",
+                (json.dumps(scope["occurrences"]),))]
+    scope["activities"] = []
+    access = NotificationAccess(request)
+    for identifier in await asyncio.to_thread(owners):
+        document = await asyncio.to_thread(request.app.state.notifications.occurrences.get, identifier, read_filter=access)
+        if document is None or document["status"] in {"deleted", "expired"}:
+            continue
+        projection = await activity_projection(request=request, document=document, get_store=get_store)
+        participants = [key for key, value in projection["participants"].items()
+            if value.get("identity_id") == identity_id and (association == "recognized" or value.get("provenance") == "human")]
+        camera = (data_filter or {}).get("camera_id")
+        if camera:
+            participants = [key for key in participants if any(sample["participant_id"] == key and sample["camera_id"] == camera
+                for sample in document["evidence"].values())]
+        if participants:
+            scope["activities"].append({"id": identifier, "revision": document["revision"], "participants": sorted(participants)})
     identifiers = await asyncio.to_thread(matching_notification_ids, request.app.state.notifications.store, scope)
     return {"scope": scope, "notification_ids": identifiers}
 
@@ -325,14 +353,14 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
         from toposync.runtime.notifications.access import NotificationAccess
         from toposync.runtime.notifications.time_query import resolve_history_time
         response.headers["Cache-Control"] = "private, no-store"
-        selected = await identity_history_selection(request=request, get_store=store,
-            identity_id=identity_id, association=association)
-        scope, identifiers = selected["scope"], selected["notification_ids"]
         runtime = request.app.state.notifications
         try:
             filters = parse_data_filter(data_filter)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        selected = await identity_history_selection(request=request, get_store=get_store,
+            identity_id=identity_id, association=association, data_filter=filters)
+        scope, identifiers = selected["scope"], selected["notification_ids"]
         if created_after is not None and created_before is not None and created_after >= created_before:
             raise HTTPException(422, "Notification time interval must have positive duration")
         interpretation = None
@@ -367,7 +395,7 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
                 **(interpretation or {})}}
         elif interpretation:
             result["search"].update(interpretation)
-        selected = await identity_history_selection(request=request, get_store=store, identity_id=identity_id, association=association)
+        selected = await identity_history_selection(request=request, get_store=get_store, identity_id=identity_id, association=association, data_filter=filters)
         current, current_ids = selected["scope"], selected["notification_ids"]
         if current != scope or not {item["id"] for item in result["notifications"]}.issubset(current_ids):
             raise HTTPException(409, "Identity history changed; refresh the selection")

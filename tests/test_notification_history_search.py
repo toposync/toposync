@@ -42,6 +42,14 @@ def test_history_search_ignores_nontext_metadata(tmp_path: Path) -> None:
         assert runtime.list_sync(query=query)[0] == []
 
 
+def test_multicamera_location_filters_ignore_malformed_evidence(tmp_path):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    for value in ['not json', ['not json'], {'broken': 'not json'}, 3]:
+        runtime.store.upsert(type='event', title='Malformed', payload={'data': {'occurrence': {'evidence': value}}})
+    assert runtime.list_sync(data_filter={'camera_id': 'camera'})[0] == []
+    assert runtime.store.data_options('camera_id', 'camera_name') == []
+
+
 def test_history_time_window_precedes_limit_and_preserves_cursor_and_creation_time(tmp_path):
     runtime = NotificationsRuntime(data_dir=tmp_path)
     # A civil day is not always 24 hours. The caller supplies its explicit time zone.

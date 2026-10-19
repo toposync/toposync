@@ -412,6 +412,15 @@ class NotificationStore:
 
         for key, value in parse_data_filter(data_filter).items():
             path = f"$.data.{key}"
+            if key in {"camera_id", "area_id"}:
+                collection = "$.data.occurrence.evidence" if key == "camera_id" else "$.data.occurrence.scope.area_ids"
+                expression = "CASE WHEN type='object' THEN json_extract(value,'$.camera_id') END" if key == "camera_id" else "value"
+                where_sql.append("CASE WHEN json_valid(payload_json) THEN CASE "
+                    "WHEN json_type(payload_json,'$.data.occurrence')='object' THEN "
+                    f"EXISTS (SELECT 1 FROM json_each(payload_json, ?) WHERE {expression} = ?) "
+                    "ELSE json_type(payload_json, ?) = 'text' AND json_extract(payload_json, ?) = ? END ELSE 0 END")
+                params.extend((collection, value, path, path, value))
+                continue
             where_sql.append("CASE WHEN json_valid(payload_json) THEN "
                              "json_type(payload_json, ?) = 'text' AND json_extract(payload_json, ?) = ? ELSE 0 END")
             params.extend((path, path, value))
@@ -448,9 +457,18 @@ class NotificationStore:
 
     def data_options(self, field: str, label_field: str, *, cancel_check: _CancelCheck | None = None, read_filter: ReadFilter | None = None) -> list[dict[str, Any]]:
         parse_data_filter({field: "value", label_field: "label"})
+        activity_fields = {("camera_id", "camera_name"): ("$.data.occurrence.evidence", "CASE WHEN e.type='object' THEN json_extract(e.value,'$.camera_id') END", "CASE WHEN e.type='object' THEN json_extract(e.value,'$.camera_name') END"),
+                           ("area_id", "area_label"): ("$.data.occurrence.scope.area_ids", "e.value", "NULL")}
+        activity = activity_fields.get((field, label_field))
+        extra = ""
+        if activity:
+            collection, value, label = activity
+            extra = f"UNION ALL SELECT n.seq,{value},{label} FROM notification n, " \
+                "json_each(CASE WHEN json_valid(n.payload_json) THEN n.payload_json ELSE '{}' END, ?) e " \
+                "WHERE n.priority_bucket IN ('low','medium','high') AND notification_visible(n.payload_json)"
         # ponytail: scan visible history; add a maintained facet index only after measured need.
         def read(conn: sqlite3.Connection):
-            return conn.execute("""
+            return conn.execute(f"""
                 SELECT value, label, MAX(seq) AS latest FROM (
                     SELECT seq,
                         CASE WHEN json_valid(payload_json) AND json_type(payload_json, ?) = 'text'
@@ -458,9 +476,10 @@ class NotificationStore:
                         CASE WHEN json_valid(payload_json) AND json_type(payload_json, ?) = 'text'
                             THEN json_extract(payload_json, ?) END AS label
                     FROM notification WHERE priority_bucket IN ('low', 'medium', 'high') AND notification_visible(payload_json)
-                ) WHERE length(value) BETWEEN 1 AND 512
+                    {extra}
+                ) WHERE typeof(value)='text' AND length(value) BETWEEN 1 AND 512
                 GROUP BY value ORDER BY latest DESC
-            """, (f"$.data.{field}", f"$.data.{field}", f"$.data.{label_field}", f"$.data.{label_field}")).fetchall()
+            """, (f"$.data.{field}", f"$.data.{field}", f"$.data.{label_field}", f"$.data.{label_field}", *([collection] if activity else []))).fetchall()
         return [{"value": row["value"], "label": row["label"] if isinstance(row["label"], str) and 0 < len(row["label"]) <= 512 else None}
                 for row in self._run_read(read, cancel_check=cancel_check, read_filter=read_filter)]
 

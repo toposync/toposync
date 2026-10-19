@@ -7,7 +7,7 @@ from test_identity_store import curate, enroll, evidence, policy
 from test_occurrences import contribution, enrichment
 
 
-def trio(client):
+def trio(client, *, third_camera='camera'):
     history = client.app.state.notifications
     gallery = client.portal.call(partial(client.app.state.services.call, 'vision.identity.store'))
     gallery.register_policy(policy())
@@ -16,8 +16,9 @@ def trio(client):
                   for index, vector in enumerate(vectors)]
     sources = []
     for index in range(3):
-        value = contribution(f'open-{index}', camera_id='camera', source_id='camera:source',
-            scope={'camera_ids': ['camera']}, participant_id=f'person-{index}', member_id=f'visit-{index}')
+        camera = third_camera if index == 2 else 'camera'
+        value = contribution(f'open-{index}', camera_id=camera, camera_name=camera.title(), source_id=camera + ':source',
+            scope={'camera_ids': sorted({'camera', third_camera}), 'area_ids': ['garage'] if third_camera != 'camera' else []}, participant_id=f'person-{index}', member_id=f'visit-{index}')
         sources.append(value)
         document = client.portal.call(partial(history.record_occurrence, value, retention_seconds=3600.0, request_notice=True))
     for index, value in enumerate(sources):
@@ -56,6 +57,87 @@ def test_closed_trio_resolves_two_names_and_one_anonymous_in_detail_and_manifest
     assert 'Synthetic person' not in str(history.occurrences.get(document['id'], read_filter=lambda _: True))
     assert 'vector' not in response.text and 'embedding_space' not in response.text
     assert response.headers['cache-control'] == 'private, no-store'
+
+
+def test_nominal_history_uses_current_participant_and_location_before_pagination(client):
+    import json
+    history, gallery, document, identities = trio(client, third_camera='corridor')
+    for index in range(260):
+        history.store.upsert(type='event', title='Unrelated', payload={'data': {'camera_id': 'camera'}})
+    path = f'/api/vision/identities/{identities[0]}/notifications'
+    filters = {'association': 'recognized', 'limit': 1, 'created_after': document['created_at'] - 1,
+        'created_before': document['created_at'] + 1, 'data_filter': json.dumps({'camera_id': 'camera', 'area_id': 'garage'})}
+    response = client.get(path, params=filters)
+    assert response.status_code == 200, response.text
+    items = response.json()['notifications']
+    assert len(items) == 1 and items[0]['payload']['occurrence_id'] == document['id']
+    assert 'Synthetic person' not in response.text
+    assert client.get(path, params={**filters, 'association': 'human'}).json()['notifications'] == []
+    assert client.get(path, params={**filters, 'created_before': document['created_at']}).json()['notifications'] == []
+    assert client.get(path, params={**filters, 'data_filter': json.dumps({'camera_id': 'corridor'})}).json()['notifications'] == []
+    assert client.get('/api/notifications', params={'data_filter': json.dumps({'camera_id': 'corridor'})}).json()['notifications'][0]['payload']['occurrence_id'] == document['id']
+    options = client.get('/api/notifications/data-options', params={'field': 'camera_id', 'label_field': 'camera_name'}).json()['options']
+    assert {'value': 'corridor', 'label': 'Corridor'} in options
+    areas = client.get('/api/notifications/data-options', params={'field': 'area_id', 'label_field': 'area_label'}).json()['options']
+    assert {'value': 'garage', 'label': None} in areas
+    history.occurrences.revoke_enrichment(document['id'], expected_revision=document['revision'])
+    assert client.get(path, params=filters).json()['notifications'] == []
+
+
+def test_nominal_history_revalidates_private_owner_after_slow_search(client):
+    history, gallery, document, identities = trio(client)
+    async def race(**kwargs):
+        items, _ = history.list_sync(notification_ids=kwargs['notification_ids'], read_filter=kwargs['read_filter'])
+        history.occurrences.revoke_enrichment(document['id'], expected_revision=document['revision'])
+        return {'notifications': items, 'search': {}}
+    client.app.state.services.register('ai.search_notifications', race)
+    response = client.get(f'/api/vision/identities/{identities[0]}/notifications',
+        params={'association': 'recognized', 'query': 'people', 'mode': 'text'})
+    assert response.status_code == 409 and 'notifications' not in response.json()
+
+
+def test_nominal_history_does_not_use_stale_recognition_policy(client):
+    _, gallery, _, identities = trio(client)
+    gallery.register_policy(policy(automatic=False))
+    response = client.get(f'/api/vision/identities/{identities[0]}/notifications', params={'association': 'recognized'})
+    assert response.status_code == 200 and response.json()['notifications'] == []
+
+
+def test_nominal_query_and_location_options_do_not_leak_partial_source_access(client):
+    _, _, document, identities = trio(client, third_camera='corridor')
+    user = client.post('/api/access/users', json={'username': 'partial', 'display_name': 'Partial',
+        'role': 'member', 'password': 'password123'}).json()
+    auth = client.app.state.auth.store
+    auth.upsert_grant(user_id=user['id'], action='core:extension:use', resource_type='core:extension', include=['com.toposync.vision'], exclude=[])
+    auth.upsert_grant(user_id=user['id'], action='vision:identities:read', resource_type='core:extension', include=['com.toposync.vision'], exclude=[])
+    auth.upsert_grant(user_id=user['id'], action='core:camera:read', resource_type='core:camera', include=['camera'], exclude=[])
+    client.post('/api/auth/login', json={'username': 'partial', 'password': 'password123', 'device_label': 'test'})
+    response = client.get(f'/api/vision/identities/{identities[0]}/notifications', params={'association': 'recognized'})
+    assert response.status_code == 200 and response.json()['notifications'] == []
+    assert document['id'] not in response.text
+    for field, label in [('camera_id', 'camera_name'), ('area_id', 'area_label')]:
+        assert client.get('/api/notifications/data-options', params={'field': field, 'label_field': label}).json() == {'options': []}
+
+
+def test_activity_nominal_answer_rechecks_owner_after_generation(client):
+    from toposync_ext_ai.history_answer import install_history_answer_routes
+    history, _, document, identities = trio(client)
+    calls = []
+    async def search(**kwargs):
+        calls.append('search')
+        items, _ = history.list_sync(notification_ids=kwargs['notification_ids'], read_filter=kwargs['read_filter'])
+        assert len(items) == 1
+        return {'notifications': items, 'search': {}}
+    class Router:
+        async def generate_local_json(self, **kwargs):
+            calls.append('answer')
+            history.occurrences.revoke_enrichment(document['id'], expected_revision=document['revision'])
+            return {'citations': []}
+    client.app.state.services.register('ai.search_notifications', search)
+    install_history_answer_routes(client.app, client.app.state.services, Router())
+    response = client.post('/api/ai/history/answer', json={'question': 'people', 'identity_id': identities[0], 'association': 'recognized'})
+    assert response.status_code == 409 and calls == ['search', 'answer']
+    assert 'notifications' not in response.json()
 
 
 def test_manifest_reports_retention_classes_and_private_artifacts_without_exporting_vectors(client):

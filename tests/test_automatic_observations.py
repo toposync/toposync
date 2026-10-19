@@ -660,7 +660,7 @@ def test_source_preparation_detects_default_removal_clock_and_mapping_changes_wi
     changed_scope = plan_observation(intent=activity, configuration=changed)["graph"]["meta"]["outputs"][0]["production_scope"]
     assert changed_scope != original_scope
     camera["sources"][0]["origin"]["rtsp_url"] = "rtsp://owner:rotated-password@fixture.invalid/another-view"
-    assert observation_preparation(intent=activity, configuration=changed) in changed_scope
+    assert plan_observation(intent=activity, configuration=changed)["graph"]["meta"]["outputs"][0]["production_scope"] == changed_scope
 
 
 @pytest.mark.parametrize(

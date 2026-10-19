@@ -97,7 +97,7 @@ def resolve_sources(scope, configuration):
     return selected, area, None if selected else "source_unavailable"
 
 
-def observation_preparation(*, intent, configuration):
+def observation_preparations(*, intent, configuration):
     sources, area, reason = resolve_sources(intent.scope, configuration)
     selected = {source["camera_id"] for source in sources}
     settings = CamerasExtensionSettings.model_validate(configuration.settings.extensions.get("com.toposync.cameras", {}))
@@ -123,7 +123,15 @@ def observation_preparation(*, intent, configuration):
         "area": area.model_dump(mode="json") if area else None,
         "mapping": mapping, "reason": reason, "locators": locators,
     }
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    preparation = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    # Area filters have their own operator signatures; they do not own capture or tracking.
+    value.pop("area")
+    source_preparation = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return preparation, source_preparation
+
+
+def observation_preparation(*, intent, configuration):
+    return observation_preparations(intent=intent, configuration=configuration)[0]
 
 
 def validate_observation_preparation(*, intent, configuration, preparation):
@@ -579,7 +587,7 @@ def plan_observation(*, intent, configuration):
             edge["queue"] = {"max_items": 64, "drop_policy": "block"}
             edge["backpressure"] = {"mode": "block"}
             edge["lifecycle"] = {"compact_updates": False}
-    preparation = observation_preparation(intent=intent, configuration=configuration)
+    preparation, source_preparation = observation_preparations(intent=intent, configuration=configuration)
     graph = build_pipeline_graph_v2(
         graph_uid=intent.id,
         nodes=nodes,
@@ -591,7 +599,7 @@ def plan_observation(*, intent, configuration):
                     "name": intent.name,
                     "node_uid": tail,
                     "contract": contract,
-                    "production_scope": "automatic-observation:" + preparation,
+                    "production_scope": "automatic-observation:" + source_preparation,
                     "state_owner": "automatic-observation",
                     "state_partition": "source-or-place",
                 }

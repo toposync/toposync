@@ -107,6 +107,33 @@ def test_every_delivery_rechecks_authorization_revision_and_expiry():
         assert token not in store.sessions
 
 
+def test_access_revoked_while_reading_configuration_cannot_deliver_a_snapshot():
+    app = FastAPI()
+    store = PipelineInspectionStore()
+    pipeline = Pipeline(name="demo", graph={"schema_version": 2, "uid": "demo", "nodes": [], "edges": []})
+    allowed, revoke_during_read = [True], [False]
+
+    async def get_pipeline(name):
+        if revoke_during_read[0]:
+            allowed[0] = False
+        return pipeline
+
+    def authorize(request):
+        if not allowed[0]:
+            raise HTTPException(403, "denied")
+        return "owner"
+
+    app.state.pipeline_inspection = store
+    app.state.config_store = SimpleNamespace(get_pipeline=get_pipeline)
+    install_inspection_routes(app, authorize)
+    with TestClient(app) as client:
+        token = client.post("/api/pipelines/demo/inspection").json()["session"]
+        revoke_during_read[0] = True
+        response = client.get("/api/pipeline-inspection/" + token)
+        assert response.status_code == 403
+        assert token not in store.sessions
+
+
 def test_image_is_exact_analyzed_frame_and_authorization_is_rechecked_after_encoding(monkeypatch):
     import toposync.runtime.pipelines.inspection_api as api
 

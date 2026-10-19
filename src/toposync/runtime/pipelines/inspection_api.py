@@ -17,38 +17,46 @@ def pipeline_image_encoders(app: FastAPI) -> asyncio.Semaphore:
     return app.state.pipeline_image_encoders
 
 
+async def checked_inspection(request: Request, token: str | None = None, pipeline_name: str | None = None):
+    store: PipelineInspectionStore = request.app.state.pipeline_inspection
+    try:
+        authorize = request.app.state.authorize_pipeline_inspection
+        owner = authorize(request)
+        session = store.sessions.get(token) if token else None
+        if token and (session is None or session.owner != owner):
+            raise HTTPException(404, "inspection_session_expired")
+        name = session.pipeline if session else pipeline_name
+        pipeline = await request.app.state.config_store.get_pipeline(name)
+        # Configuration reads can suspend across a permission or session change.
+        if authorize(request) != owner:
+            raise HTTPException(403, "inspection_owner_changed")
+        if token and store.sessions.get(token) is not session:
+            raise HTTPException(410, "inspection_session_expired")
+        if pipeline is None:
+            raise HTTPException(404, "Unknown pipeline")
+        demands = getattr(request.app.state, "pipeline_demands", None)
+        if demands is not None:
+            for output in pipeline.graph.get("meta", {}).get("outputs", []):
+                key = output.get("key", "")
+                if demands.is_blocked(owner, key, "inspection") or not demands.authorized(owner, key, "inspection"):
+                    raise HTTPException(403, "inspection_result_access_revoked")
+        revision = pipeline_inspection_revision(pipeline)
+        if session and session.revision != revision:
+            raise HTTPException(409, "inspection_revision_changed")
+        return store, pipeline, revision, owner
+    except HTTPException:
+        if token:
+            store.close(token)
+        raise
+
+
 def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str]) -> None:
     image_encoders = pipeline_image_encoders(app)
-
-    async def checked(request: Request, token: str | None = None, pipeline_name: str | None = None):
-        store: PipelineInspectionStore = request.app.state.pipeline_inspection
-        try:
-            owner = authorize(request)
-            session = store.sessions.get(token) if token else None
-            if token and (session is None or session.owner != owner):
-                raise HTTPException(404, "inspection_session_expired")
-            name = session.pipeline if session else pipeline_name
-            pipeline = await request.app.state.config_store.get_pipeline(name)
-            if pipeline is None:
-                raise HTTPException(404, "Unknown pipeline")
-            demands = getattr(request.app.state, "pipeline_demands", None)
-            if demands is not None:
-                for output in pipeline.graph.get("meta", {}).get("outputs", []):
-                    key = output.get("key", "")
-                    if demands.is_blocked(owner, key, "inspection") or not demands.authorized(owner, key, "inspection"):
-                        raise HTTPException(403, "inspection_result_access_revoked")
-            revision = pipeline_inspection_revision(pipeline)
-            if session and session.revision != revision:
-                raise HTTPException(409, "inspection_revision_changed")
-            return store, pipeline, revision, owner
-        except HTTPException:
-            if token:
-                store.close(token)
-            raise
+    app.state.authorize_pipeline_inspection = authorize
 
     @app.post("/api/pipelines/{pipeline_name}/inspection", response_model=InspectionSnapshot)
     async def open_inspection(request: Request, pipeline_name: str, response: Response):
-        store, pipeline, revision, owner = await checked(request, pipeline_name=pipeline_name)
+        store, pipeline, revision, owner = await checked_inspection(request, pipeline_name=pipeline_name)
         if pipeline.processing_server_id not in ("", "local", None):
             raise HTTPException(409, "inspection_remote_runtime_unavailable")
         nodes = {str(node["id"]): str(node["operator"]) for node in pipeline.graph.get("nodes", [])}
@@ -79,7 +87,7 @@ def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str])
 
     @app.get("/api/pipeline-inspection/{token}", response_model=InspectionSnapshot)
     async def inspection_snapshot(request: Request, token: str, response: Response):
-        store, _, _, _ = await checked(request, token)
+        store, _, _, _ = await checked_inspection(request, token)
         response.headers["Cache-Control"] = "no-store"
         try:
             return store.snapshot(token)
@@ -88,7 +96,7 @@ def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str])
 
     @app.get("/api/pipeline-inspection/{token}/images/{node}/{sequence}")
     async def inspection_image(request: Request, token: str, node: str, sequence: int):
-        store, _, _, _ = await checked(request, token)
+        store, _, _, _ = await checked_inspection(request, token)
         try:
             frame = store.image(token, node, sequence)
         except KeyError as error:
@@ -106,7 +114,7 @@ def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str])
                 # A canceled client must not release a slot while its native encoder still runs.
                 await encoding
                 raise
-        await checked(request, token)
+        await checked_inspection(request, token)
         try:
             store.image(token, node, sequence)
         except KeyError as error:
@@ -119,6 +127,6 @@ def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str])
 
     @app.delete("/api/pipeline-inspection/{token}", status_code=204)
     async def close_inspection(request: Request, token: str):
-        store, _, _, _ = await checked(request, token)
+        store, _, _, _ = await checked_inspection(request, token)
         store.close(token)
         return Response(status_code=204)

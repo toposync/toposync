@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .runtime import Packet, packet_occurrence_id
-from .image_geometry import inspection_geometry
+from .image_geometry import inspection_geometry, source_pixels
 
 
 def pipeline_inspection_revision(pipeline: Any) -> str:
@@ -163,6 +163,57 @@ class _Session:
 
 def _number(value: Any) -> float | None:
     return float(value) if type(value) in (int, float) and math.isfinite(value) else None
+
+
+async def copy_inspection_frame(context: Any, frame: Any) -> Any:
+    store = getattr(context, "inspection_store", None)
+    if store is None or not context.inspection_active() or not 0 < getattr(frame, "nbytes", 0) <= store.maximum_image_bytes:
+        return None
+    try:
+        return await context.run_blocking(frame.copy, mode="thread_pool")
+    except Exception:
+        # Diagnostic allocation cannot change the functional inference result.
+        return None
+
+
+async def inspect_packet_visuals(context, packet, project_visuals, *, artifact_name="main", reason=None, model_id=None):
+    if not getattr(context, "inspection_active", lambda: False)():
+        return
+    try:
+        visuals = project_visuals()
+        artifact = packet.artifacts.get(artifact_name)
+        frame = await copy_inspection_frame(context, getattr(artifact, "data", None))
+        context.inspect("analyzed", packet, frame=frame, model_id=model_id, reason=reason,
+            geometry=artifact.metadata.get("image_geometry") if artifact else None, visuals=visuals)
+    except Exception:
+        pass  # A diagnostic failure cannot change functional output.
+
+
+def inspection_image_plane(packet: Any, artifact_name: str):
+    import numpy as np
+
+    artifact = packet.artifacts.get(artifact_name)
+    shape = getattr(getattr(artifact, "data", None), "shape", ())
+    reference = frame_reference(packet)
+    if reference is None or len(shape) != 3:
+        return None
+    geometry = inspection_geometry(artifact.metadata.get("image_geometry"), shape[1], shape[0], reference)
+    if geometry is None:
+        return None
+    inverse = np.linalg.inv(np.asarray(geometry["to_source"]))
+    width, height = geometry["source_size"]
+    return reference, shape, inverse, width, height
+
+
+def inspection_stream_point(position, plane):
+    _, shape, inverse, width, height = plane
+    try:
+        x, y = position
+        local = source_pixels([[x * (width - 1), y * (height - 1)]], inverse)[0]
+        normalized = [float(local[0] / shape[1]), float(local[1] / shape[0])]
+        return normalized if all(0 <= value <= 1 for value in normalized) else None
+    except (ValueError, OverflowError):
+        return None
 
 
 def frame_reference(packet: Packet) -> dict[str, Any] | None:

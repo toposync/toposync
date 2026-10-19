@@ -60,7 +60,8 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
       context.lineWidth = 2; context.strokeStyle = "#00ff9d"; context.fillStyle = "#00ff9d";
       const fontSize = Math.max(12, Math.ceil(12 * element.width / (element.clientWidth || element.width)));
       context.font = `${fontSize}px sans-serif`;
-      const occupied: number[][] = [];
+      const occupied: number[][] = visuals.filter(visual => ["mapping", "zones"].includes(visual.layer))
+        .flatMap(visual => visual.points.flatMap(point => point ? [[point[0] - 5, point[1] - 5, point[0] + 5, point[1] + 5]] : []));
       const label = (text: string, x: number, y: number) => {
         const position = placeInspectionLabel(x, y, context.measureText(text).width + 4, element.width, element.height, occupied, fontSize + 2);
         if (!position) return;
@@ -85,6 +86,9 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
             context.beginPath(); context.arc(point[0], point[1], 3, 0, Math.PI * 2); context.fill();
             if (visual.layer === "gestures" && visual.label)
               label(`${t(`inspection.${visual.label}`, {}, visual.label)} · ${t(`inspection.${visual.state}`)}`, point[0] + 5, point[1] - 5);
+            if (visual.layer === "mapping" || visual.layer === "zones")
+              label(visual.layer === "zones" ? `${visual.properties.zone_name || ""} · ${t(`inspection.${visual.state}`)}`
+                : t("inspection.mapping_anchor"), point[0] + 5, point[1] - 5);
           }
         } else if (visual.points.length) {
           context.beginPath();

@@ -12,7 +12,8 @@ from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 from ...pipelines.schemas import VisionSegmentInstancesConfig
 from ...registry.manifests import ModelManifest, ModelRegistry, build_default_model_registry
 from ..artifact_helpers import project_detection_bbox_to_stream_space, project_mask_to_stream_space
-from ..inspection import copy_inspection_frame, mask_visuals
+from toposync.runtime.pipelines.inspection import copy_inspection_frame
+from ..inspection import mask_visuals
 from ..contracts import DetectionObject, SegmentationBackend, SegmentationInstance, normalize_bbox01
 from ..runtime_backends import build_segmenter_backend
 

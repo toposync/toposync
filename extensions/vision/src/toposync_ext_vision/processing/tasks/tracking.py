@@ -19,7 +19,8 @@ from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 from ...pipelines.schemas import VisionTrackConfig
 from ..contracts import DetectionObject, TrackedObject, TrackerBackend, normalize_identifier
 from ..trackers import build_tracker_backend
-from ..inspection import InspectionTrackSamples, copy_inspection_frame
+from toposync.runtime.pipelines.inspection import copy_inspection_frame
+from ..inspection import InspectionTrackSamples
 from .event_assembler import TrackEventAssembler, _bbox_iou, _normalize_bbox
 
 

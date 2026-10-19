@@ -6,8 +6,7 @@ from typing import Any
 from collections import deque
 import time
 
-from toposync.runtime.pipelines.image_geometry import inspection_geometry, source_pixels
-from toposync.runtime.pipelines.inspection import frame_reference
+from toposync.runtime.pipelines.inspection import inspection_image_plane, inspection_stream_point
 
 
 # Edges refer to named landmarks, never to guessed model-specific indices.
@@ -21,36 +20,9 @@ _BODY_CONNECTIONS = (
 )
 
 
-def _image_plane(packet: Any, artifact_name: str):
-    import numpy as np
-
-    artifact = packet.artifacts.get(artifact_name)
-    shape = getattr(getattr(artifact, "data", None), "shape", ())
-    reference = frame_reference(packet)
-    if reference is None or len(shape) != 3:
-        return None
-    geometry = inspection_geometry(artifact.metadata.get("image_geometry"), shape[1], shape[0], reference)
-    if geometry is None:
-        return None
-    inverse = np.linalg.inv(np.asarray(geometry["to_source"]))
-    width, height = geometry["source_size"]
-    return reference, shape, inverse, width, height
-
-
-def _stream_point(position, plane):
-    _, shape, inverse, width, height = plane
-    try:
-        x, y = position
-        local = source_pixels([[x * (width - 1), y * (height - 1)]], inverse)[0]
-        normalized = [float(local[0] / shape[1]), float(local[1] / shape[0])]
-        return normalized if all(0 <= value <= 1 for value in normalized) else None
-    except (ValueError, OverflowError):
-        return None
-
-
 def pose_visuals(packet: Any, artifact_name: str, poses: list) -> list[dict]:
     """Map authoritative stream landmarks back to the analyzed image's pixel plane."""
-    plane = _image_plane(packet, artifact_name)
+    plane = inspection_image_plane(packet, artifact_name)
     if plane is None:
         return []
     visuals = []
@@ -61,7 +33,7 @@ def pose_visuals(packet: Any, artifact_name: str, poses: list) -> list[dict]:
         for landmark in pose.landmarks:
             point = None
             if landmark.position is not None and not landmark.invalid_reason and landmark.visibility != "outside_image":
-                point = _stream_point(landmark.position, plane)
+                point = inspection_stream_point(landmark.position, plane)
             points.append(point)
         names = {point.name: index for index, point in enumerate(pose.landmarks)}
         connections = [[names[a], names[b]] for a, b in _BODY_CONNECTIONS if a in names and b in names]
@@ -84,7 +56,7 @@ class InspectionTrackSamples:
 
     def project(self, packet, artifact_name, tracks, segments, *, now=None) -> list[dict]:
         now = time.time() if now is None else now
-        plane = _image_plane(packet, artifact_name)
+        plane = inspection_image_plane(packet, artifact_name)
         if plane is None:
             self.clear(packet.stream_id)
             return []
@@ -105,7 +77,7 @@ class InspectionTrackSamples:
                                  "state": "unknown", "score_kind": "tracker_score"})
                 continue
             x1, y1, x2, y2 = track.bbox01
-            corners = [_stream_point(point, plane) for point in [(x1,y1), (x2,y1), (x2,y2), (x1,y2)]]
+            corners = [inspection_stream_point(point, plane) for point in [(x1,y1), (x2,y1), (x2,y2), (x1,y2)]]
             if any(point is None for point in corners):
                 continue
             drawings.append({**common, "layer": "tracks", "kind": "polygon", "points": corners,
@@ -120,7 +92,7 @@ class InspectionTrackSamples:
             sample = (packet.stream_id, identity, track.tracking_id, segment, sequence, published_at, ((x1+x2)/2, (y1+y2)/2))
             self.samples.append(sample)
             history = (history + [sample])[-128:]
-            points = [_stream_point(sample[6], plane) for sample in history]
+            points = [inspection_stream_point(sample[6], plane) for sample in history]
             if len(points) > 1 and all(point is not None for point in points):
                 drawings.append({**common, "layer": "trails", "kind": "polyline", "points": points,
                     "state": "sampled_image_centres", "sample_sequences": [sample[4] for sample in history]})
@@ -151,17 +123,6 @@ def mask_visuals(shape, selected):
     return masks, visuals
 
 
-async def copy_inspection_frame(context: Any, frame: Any) -> Any:
-    store = getattr(context, "inspection_store", None)
-    if store is None or not context.inspection_active() or not 0 < getattr(frame, "nbytes", 0) <= store.maximum_image_bytes:
-        return None
-    try:
-        return await context.run_blocking(frame.copy, mode="thread_pool")
-    except Exception:
-        # Diagnostic allocation cannot change the functional inference result.
-        return None
-
-
 def association_visual(packet):
     association = packet.payload["association"]
     group = association.get("group")
@@ -173,10 +134,10 @@ def association_visual(packet):
         properties.update(group_revision=group["revision"], member_count=len(members))
     points = []
     box = packet.payload.get("subject", {}).get("bbox01")
-    plane = _image_plane(packet, "main")
+    plane = inspection_image_plane(packet, "main")
     if group and plane is not None and isinstance(box, (list, tuple)) and len(box) == 4:
         x1, y1, x2, y2 = box
-        corners = [_stream_point(point, plane) for point in [(x1,y1), (x2,y1), (x2,y2), (x1,y2)]]
+        corners = [inspection_stream_point(point, plane) for point in [(x1,y1), (x2,y1), (x2,y2), (x1,y2)]]
         if all(point is not None for point in corners):
             points = corners
     return {"layer": "groups", "kind": "polygon" if points else "points", "points": points,
@@ -188,7 +149,7 @@ def association_visual(packet):
 
 def gesture_visuals(packet, result, observed_points):
     """Only validated current wrists get geometry; retained episodes remain textual."""
-    plane = _image_plane(packet, "main")
+    plane = inspection_image_plane(packet, "main")
     if plane is not None and list(plane[3:]) != packet.payload.get("vision", {}).get("pose_source_size"):
         plane = None
     common = {"layer": "gestures", "kind": "points", "subject_id": result["actor_subject_id"]}
@@ -204,7 +165,7 @@ def gesture_visuals(packet, result, observed_points):
             for side in sides:
                 position = observed_points.get(side + "_wrist")
                 if position is not None:
-                    point = _stream_point([position[0] / (plane[3] - 1), position[1] / (plane[4] - 1)], plane)
+                    point = inspection_stream_point([position[0] / (plane[3] - 1), position[1] / (plane[4] - 1)], plane)
                     if point is not None:
                         points.append(point)
         properties = {"side": item["side"], "evidence": item["evidence"]}

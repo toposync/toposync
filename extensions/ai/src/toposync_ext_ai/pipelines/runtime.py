@@ -22,6 +22,34 @@ from .image_utils import crop_bbox01, expand_bbox01, image_size, normalize_bbox0
 from .schemas import AiConditionFilterConfig, AiSmartCropConfig
 
 
+def _inspect_condition(context, packet, *, result=None, status, reason="", reused=False):
+    if not getattr(context, "inspection_active", lambda: False)():
+        return
+    try:
+        if result and result.observable is False:
+            status = "unknown"
+        properties = {"evaluation_source": "cached_result" if reused else "current_result" if result else "no_result"}
+        reason = reason or (result.reason if result else "")
+        if reason in {"ai_service_unavailable", "all_ai_profiles_failed", "no_ai_profile_available",
+            "invalid_ai_service_response", "concurrency_full", "primary_concurrency_full", "missing_image",
+            "missing_condition_description", "stale_evidence", "missing_image_or_condition", "subject_context_unavailable",
+            "stream_capacity", "replayed_evidence", "evaluation_interval", "evaluation_failed"}:
+            properties["activity_reason"] = reason
+        if result:
+            properties.update({key: value for key in ("model", "provider_id", "profile_id")
+                if (value := getattr(result, key)) and len(value) <= 512})
+            if not reused and result.attempts:
+                elapsed = [attempt.latency_ms for attempt in result.attempts]
+                if all(math.isfinite(value) and value >= 0 for value in elapsed):
+                    properties["evaluation_ms"] = sum(elapsed)
+        context.inspect("analyzed", packet, model_id=result.model if result else None, visuals=[{
+            "layer": "activity", "kind": "points", "points": [], "state": "ai_" + status,
+            "subject_id": (packet.payload.get("subject") or {}).get("id"), "properties": properties,
+            "score": result.confidence if result else None, "score_kind": "ai_model_score" if result else None}])
+    except Exception:
+        pass  # Provider text, prompts and diagnostic failures cannot affect functional decisions.
+
+
 @dataclass(slots=True)
 class _SmartCropState:
     bbox01: tuple[float, float, float, float] | None = None
@@ -520,7 +548,9 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             concurrency_reason: str,
         ) -> None:
             started_ns = time.monotonic_ns()
+            inspect = getattr(context, "inspect", lambda *args, **kwargs: None)
             try:
+                inspect("started", packet)
                 out_packets = await self._process_packet_with_profiles(
                     packet,
                     context,
@@ -529,8 +559,10 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                     concurrency_reason=concurrency_reason,
                 )
             except asyncio.CancelledError:
+                inspect("closed", packet, reason="execution_stopped")
                 raise
             except Exception:
+                inspect("error", packet, reason="operator_error")
                 context.metrics.error_count += 1
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)
                 return
@@ -543,6 +575,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
 
             elapsed_ms = max(0.0, (float(time.monotonic_ns()) - float(started_ns)) / 1_000_000.0)
             context.metrics.record_latency(elapsed_ms)
+            inspect("completed", packet, reason="reason_uninstrumented")
             for out_packet in out_packets:
                 await context.emit(out_packet, port=self.output_port)
 
@@ -580,6 +613,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                             concurrency_reason = "primary_concurrency_full"
 
                 if slot is None:
+                    if self._waiting_packet is not None:
+                        _inspect_condition(context, self._waiting_packet, status="unknown", reason="concurrency_full")
                     if self._config.emit_mode == "annotate":
                         # Do not let a skipped update overtake an earlier inference/open.
                         await drain_tasks()
@@ -694,6 +729,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
             return outputs + self._close_occurrence(state, packet, "stale_evidence")
         _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
+        _inspect_condition(context, packet, result=result,
+            status="matched" if result.observable is not False and result.matches and result.confidence >= self._config.confidence_threshold else "not_matched")
         if result.observable is False:
             return outputs + self._close_occurrence(state, packet, "evidence_unobservable")
         if not result.matches or result.confidence < self._config.confidence_threshold:
@@ -763,7 +800,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         concurrency_reason: str,
     ) -> list[Packet]:
         if self._config.emit_mode == "annotate":
-            return await self._process_annotation(packet, profile_id, fallback_profile_ids)
+            return await self._process_annotation(packet, profile_id, fallback_profile_ids, context)
         stream_key = packet.stream_id
         state = self._states.setdefault(stream_key, _ConditionState())
 
@@ -774,6 +811,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
 
         description = self._config.condition_description.strip()
         if not description:
+            _inspect_condition(context, packet, status="skipped", reason="missing_condition_description")
             return [self._annotate(packet, result=None, status="skipped", reason="missing_condition_description")]
 
         artifact_name, image = resolve_image_artifact_for_data(
@@ -782,10 +820,11 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         )
         image_key = artifact_name
         if image is None:
-            return self._handle_failure(packet, state=state, reason="missing_image")
+            return self._handle_failure(packet, state=state, reason="missing_image", context=context)
 
         now = time.monotonic()
         result = self._cached_result(state=state, now=now)
+        reused = result is not None
         if result is None:
             result = await self._evaluate_condition(
                 image=image,
@@ -804,6 +843,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
 
         passes = bool(result.observable is not False and result.matches and result.confidence >= self._config.confidence_threshold)
         _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
+        _inspect_condition(context, packet, result=result, status="matched" if passes else "not_matched",
+            reason=concurrency_reason, reused=reused)
         if packet.lifecycle == Lifecycle.OPEN:
             state.stream_allowed = passes
         elif state.stream_allowed is None and passes:
@@ -819,9 +860,10 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         )
         return [annotated] if passes else []
 
-    async def _process_annotation(self, packet, profile_id, fallback_profile_ids):
+    async def _process_annotation(self, packet, profile_id, fallback_profile_ids, context):
         # Annotation never decides lifecycle or suppresses the upstream occurrence.
         def unknown(reason):
+            _inspect_condition(context, packet, status="unknown", reason=reason)
             return [self._annotate(packet, result=None, status="unknown", reason=reason)]
 
         if packet.lifecycle == Lifecycle.CLOSE:
@@ -883,6 +925,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         status = "unknown" if (result.observable is False or unavailable
                                or self._config.bind_subject_context and result.observable is not True
                                or result.confidence < self._config.confidence_threshold) else ("matched" if result.matches else "not_matched")
+        _inspect_condition(context, packet, result=result, status=status)
         return [self._annotate(packet, result=result, status=status,
                               input_artifact_name=artifact_name, input_image_key=artifact_name)]
 
@@ -1002,8 +1045,9 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             return result
         return None
 
-    def _handle_failure(self, packet: Packet, *, state: _ConditionState, reason: str) -> list[Packet]:
+    def _handle_failure(self, packet: Packet, *, state: _ConditionState, reason: str, context=None) -> list[Packet]:
         policy = self._config.failure_policy
+        _inspect_condition(context, packet, status="unknown", reason=reason)
         if policy == "pass_through":
             return [self._annotate(packet, result=state.last_result, status="skipped", reason=reason)]
         if (policy == "reuse_last" and state.last_result is not None
@@ -1013,6 +1057,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                 state.last_result.matches and state.last_result.confidence >= self._config.confidence_threshold
             )
             annotated = self._annotate(packet, result=state.last_result, status="reused", reason=reason)
+            _inspect_condition(context, packet, result=state.last_result, status="reused", reason=reason, reused=True)
             return [annotated] if passes else []
         return []
 

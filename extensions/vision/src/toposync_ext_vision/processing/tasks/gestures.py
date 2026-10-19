@@ -19,7 +19,8 @@ from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
-from ..inspection import copy_inspection_frame, gesture_visuals
+from toposync.runtime.pipelines.inspection import copy_inspection_frame
+from ..inspection import gesture_visuals
 
 _SIDE_GESTURES = ("hand_raised", "wave", "pointing_candidate")
 _GESTURE_NAMES = {"both_hands_raised"} | {

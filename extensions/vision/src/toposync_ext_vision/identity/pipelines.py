@@ -24,7 +24,7 @@ from ..registry import build_default_model_registry
 from .contracts import IdentityEvidence, RecognitionDecision, RecognitionPolicy
 from .extraction import IdentityExtractor, extract_in_process, validate_identity_frame
 from .spatial import spatial_context
-from ..processing.inspection import copy_inspection_frame
+from toposync.runtime.pipelines.inspection import copy_inspection_frame
 from .inspection import evidence_visuals, recognition_visual
 
 PRIVATE_EVIDENCE_ARTIFACT = "identity_evidence"

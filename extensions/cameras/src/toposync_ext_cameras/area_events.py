@@ -17,6 +17,8 @@ from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, 
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+from toposync.runtime.pipelines.inspection import inspect_packet_visuals
+from .pipelines.inspection import zone_visual
 
 from .pipelines.postprocess import AreaRestrictionPolygon, _point_in_polygon, resolve_composition_area
 
@@ -206,6 +208,8 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         state.capture = capture
         state.published_at = evidence["published_at"]
         inside = self._classify(packet, subject)
+        await inspect_packet_visuals(context, packet, lambda: [zone_visual(packet, name=self.area.name,
+            identifier=self.area.id, state="zone_unavailable" if inside is None else "zone_inside" if inside else "zone_outside")])
         if inside is None:
             state.inside = None
             return outputs + self._close(key, state, "unconfirmed")

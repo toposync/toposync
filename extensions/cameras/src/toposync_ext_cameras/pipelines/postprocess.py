@@ -41,6 +41,8 @@ from toposync.runtime.pipelines.packet_contract import (
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.pipelines.safe_expression import SafeExpression
 from toposync.runtime.services import ServiceRegistry
+from toposync.runtime.pipelines.inspection import inspect_packet_visuals
+from .inspection import mapping_visual, zone_visual
 
 from ..processing.mapping import (
     ControlPointBoundaryRefinementPoint,
@@ -4005,7 +4007,15 @@ class CameraMappingRuntime(TransformOperatorRuntime):
         }
         return replace(packet, payload=payload)
 
-    async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001, ARG002
+    async def process_packet(self, packet: Packet, context) -> list[Packet]:
+        outputs = await self._map_packet(packet, context)
+        for output in outputs:
+            await inspect_packet_visuals(context, output, lambda: [mapping_visual(output,
+                world_field=self._config.world_field,
+                produced=output.payload.get("mapping") is not packet.payload.get("mapping"))])
+        return outputs
+
+    async def _map_packet(self, packet: Packet, context) -> list[Packet]:
         if self._config.attach_metric_camera:
             spatial = dict(packet.payload.get("spatial") or {})
             spatial["camera"] = {
@@ -4959,14 +4969,20 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
 
     async def process_packet(self, packet: Packet, context) -> list[Packet]:  # noqa: ANN001
         key = _resolve_tracking_key(packet)
+        async def inspected(state, value=packet, areas=()):
+            await inspect_packet_visuals(context, value, lambda: [zone_visual(value,
+                name=area.name, identifier=area.id, state=state) for area in areas[:32]] or [
+                {"layer": "zones", "kind": "points", "points": [], "state": state, "properties": {}}])
         if not await self._reference_available(context):
             self._observation_entries.clear()
+            await inspected("zone_unavailable")
             return []
         mapping = packet.payload.get("mapping")
         if self._config.composition_id and (
             not isinstance(mapping, dict) or mapping.get("composition_id") != self._config.composition_id
         ):
             self._observation_entries.pop(key, None)
+            await inspected("zone_composition_mismatch")
             return []
         payload = dict(packet.payload)
         payload.pop("area_id", None)
@@ -4977,6 +4993,7 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
         world = payload.get(self._config.world_field)
         if not isinstance(world, dict):
             self._observation_entries.pop(key, None)
+            await inspected("zone_position_unavailable", packet)
             return [] if self._config.drop_when_unmapped else [packet]
 
         try:
@@ -4986,6 +5003,7 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
                 raise ValueError("Nonfinite area position")
         except Exception:
             self._observation_entries.pop(key, None)
+            await inspected("zone_position_unavailable", packet)
             return [] if self._config.drop_when_unmapped else [packet]
 
         matched_areas = [
@@ -4993,9 +5011,11 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
         ]
         if self._include and not any(area.name in self._include for area in matched_areas):
             self._observation_entries.pop(key, None)
+            await inspected("zone_not_included", packet, matched_areas)
             return []
         if self._exclude and any(area.name in self._exclude for area in matched_areas):
             self._observation_entries.pop(key, None)
+            await inspected("zone_excluded", packet, matched_areas)
             return []
 
         if packet.lifecycle == Lifecycle.CLOSE:
@@ -5010,6 +5030,7 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
                 if len(self._observation_entries) >= 4096:
                     self._observation_entries = {k: v for k, v in self._observation_entries.items() if now - v[2] <= 5.0}
                 if len(self._observation_entries) >= 4096:
+                    await inspected("zone_capacity", packet)
                     return []
                 previous = (now, scope, now)
             self._observation_entries[key] = (previous[0], scope, now)
@@ -5018,6 +5039,7 @@ class AreaRestrictionRuntime(TransformOperatorRuntime):
         payload[self._config.output_area_label_field] = matched_areas[0].name if matched_areas else None
         if matched_areas and matched_areas[0].id is not None:
             payload["area_id"] = matched_areas[0].id
+        await inspected("zone_inside" if matched_areas else "zone_outside", packet, matched_areas)
         return [replace(packet, payload=payload)]
 
 

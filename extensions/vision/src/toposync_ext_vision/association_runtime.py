@@ -16,8 +16,8 @@ from toposync.runtime.pipelines.runtime import Lifecycle
 from .association import AssociationConfig, AssociationConflict, Observation
 from .identity.pipelines import PRIVATE_DECISION_ARTIFACT, PRIVATE_EVIDENCE_ARTIFACT, occurrence_key
 from .identity.spatial import spatial_context
-from .processing.inspection import association_visual, copy_inspection_frame
-from toposync.runtime.pipelines.inspection import frame_reference
+from .processing.inspection import association_visual
+from toposync.runtime.pipelines.inspection import copy_inspection_frame, frame_reference
 
 
 def observation_from_packet(packet, config: AssociationConfig) -> Observation:

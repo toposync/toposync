@@ -20,7 +20,8 @@ from ..artifact_helpers import (
 )
 from ..contracts import DetectionObject, PoseBackend, PoseObject, normalize_bbox01
 from ..pose_landmarks import project_pose_landmarks, selected_image_to_stream_matrix
-from ..inspection import copy_inspection_frame, pose_visuals
+from toposync.runtime.pipelines.inspection import copy_inspection_frame
+from ..inspection import pose_visuals
 from ..runtime_backends import build_pose_backend
 
 

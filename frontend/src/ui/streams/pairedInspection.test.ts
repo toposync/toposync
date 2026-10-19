@@ -14,6 +14,8 @@ test("overlay labels stay inside the frame and avoid overlap with bounded placem
   assert.equal(covered.length, 1);
   assert.deepEqual(placeInspectionLabel(0, 0, 50, 100, 100, [], 28), [0, 26]);
   assert.equal(placeInspectionLabel(0, 0, 50, 100, 20, [], 28), null);
+  const anchors = [[200, 204, 210, 214]];
+  assert.deepEqual(placeInspectionLabel(75, 205, 200, 640, 360, anchors), [75, 191]);
 });
 
 function fixture(): PairedInspectionMetadata {

@@ -108,12 +108,12 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
         </select>
       </label>
       {error ? <p role="alert">{t("inspection.failed")}</p> : loading || loadingPipelines ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
-      {paired && <div className="pipelineInspectionControls">
+      {snapshot && <div className="pipelineInspectionControls">
         <label><input type="checkbox" checked={boxes} onChange={event => setBoxes(event.target.checked)} />{t("inspection.boxes")}</label>
-        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding", "groups", "gestures"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
+        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding", "groups", "gestures", "mapping", "zones", "activity"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
           const next = new Set(layers); if (event.target.checked) next.add(layer); else next.delete(layer); setLayers(next);
         }} />{t(`inspection.${layer}`)}</label>)}
-        <button type="button" aria-pressed={frozen} onClick={() => { setFrozenAt(Date.now()); setFrozen(!frozen); }}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>
+        {paired && <button type="button" aria-pressed={frozen} onClick={() => { setFrozenAt(Date.now()); setFrozen(!frozen); }}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>}
       </div>}
       <div className="pipelineInspectionGrid">
         {!paired && <section aria-label={t("inspection.frame")}>
@@ -122,10 +122,10 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
           {image && current ? <div className="pipelineInspectionImage" style={{ aspectRatio: `${current.geometry?.width || 1} / ${current.geometry?.height || 1}` }}>
             <img src={image} alt={t("inspection.frame")} onLoad={() => setLoadedImage(image)} onError={() => setLoadedImage("")} />
             {loadedImage === image ? <svg viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
-              {current.detections.map((detection, index) => <rect key={index} x={detection.box[0]} y={detection.box[1]} width={detection.box[2] - detection.box[0]} height={detection.box[3] - detection.box[1]} />)}
+              {boxes && current.detections.map((detection, index) => <rect key={index} x={detection.box[0]} y={detection.box[1]} width={detection.box[2] - detection.box[0]} height={detection.box[3] - detection.box[1]} />)}
             </svg> : <p>{t("inspection.expired")}</p>}
           </div> : <p>{t("inspection.expired")}</p>}
-          {current && loadedImage === image ? <ul>{current.detections.map((detection, index) => <li key={index}>{detection.label} · {t("inspection.score")}: {detection.score.toFixed(3)}</li>)}</ul> : null}
+          {boxes && current && loadedImage === image ? <ul>{current.detections.map((detection, index) => <li key={index}>{detection.label} · {t("inspection.score")}: {detection.score.toFixed(3)}</li>)}</ul> : null}
           {current?.frame ? <details><summary>{current.node_id}</summary><pre>{JSON.stringify({ frame: current.frame, geometry: current.geometry, model: current.model_id, revision: snapshot?.revision }, null, 2)}</pre></details> : null}
         </section>}
         <section aria-label={t("inspection.open")}>
@@ -144,14 +144,16 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
               {state === "waiting" ? <small>{t("inspection.waiting")}</small> : null}
               {node.reason ? <small>{t(["category_rejected", "image_unavailable", "inference_interval", "sample_expired", "operator_error", "flow_limit", "inspection_capacity", "delivery_not_accepted", "execution_stopped", "mask_geometry_unavailable"].includes(node.reason) ? `inspection.${node.reason}` : "inspection.reason")}</small> : null}
               {!expired && node.motion ? <small>{t("inspection.motion")}: {node.motion.current} / {node.motion.maximum} ({t("inspection.window", {seconds:node.motion.window_seconds,samples:node.motion.samples})})</small> : null}
-              {!expired && node.visuals.map((visual, index) => <div className="pipelineInspectionVisual" key={index}>
+              {!expired && (!selectedNodes || selectedNodes.has(node.node_id)) && node.visuals.filter(visual => layers.has(visual.layer)).map((visual, index) => <div className="pipelineInspectionVisual" key={index}>
                 {t(`inspection.${visual.layer}`, {}, visual.layer)}{visual.subject_id && visual.access_scope === "diagnostic_private" ? ` · ${visual.subject_id}` : ""}
                 {visual.label ? ` · ${["groups", "gestures"].includes(visual.layer) ? t(`inspection.${visual.label}`, {}, visual.label) : visual.label}` : ""}
                 {visual.score !== null ? ` · ${t(`inspection.${visual.score_kind}`, {}, visual.score_kind || "")} ${visual.score.toFixed(3)}` : ""}
                 {visual.state ? ` · ${t(`inspection.${visual.layer === "identity" && visual.state === "unknown" ? "identity_unknown" : visual.state}`, {}, visual.state)}` : ""}
                 {visual.local_id ? ` · ${t("inspection.local_id")}: ${visual.local_id}` : ""}
                 {visual.raster ? ` · ${visual.raster.width} × ${visual.raster.height} · ${t("inspection.mask_limit")}` : ""}
-                {Object.entries(visual.properties).map(([key, value]) => <span key={key}> · {t(`inspection.${key}`, {}, key)}: {t(`inspection.${value}`, {}, String(value))}</span>)}
+                {Object.entries(visual.properties).map(([key, value]) => <span key={key}> · {t(`inspection.${key}`, {}, key)}: {
+                  ["association_reason", "gesture_reason", "mapping_reason", "activity_reason", "evaluation_source", "side", "evidence", "provenance"].includes(key)
+                    ? t(`inspection.${value}`, {}, String(value)) : String(value)}</span>)}
                 {visual.subject_id && visual.access_scope !== "diagnostic_private" ? <details><summary>{t("inspection.individual_reference")}</summary>{visual.subject_id}</details> : null}
                 {visual.related_subject_ids.length > 0 ? <details><summary>{t("inspection.group_members")}</summary>
                   <ul>{visual.related_subject_ids.map(identifier => <li key={identifier}>{identifier}</li>)}</ul>

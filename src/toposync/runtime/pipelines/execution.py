@@ -181,7 +181,8 @@ class NodeExecutionContext:
 
     def inspect(self, state: str, packet: Packet | None = None, *, reason: str | None = None,
                 frame: Any = None, detections: Any = None, model_id: str | None = None,
-                geometry: Any = None, visuals: Any = None, masks: Any = None) -> None:
+                geometry: Any = None, visuals: Any = None, masks: Any = None,
+                processing_ms: float | None = None) -> None:
         if self.cancel_event.is_set() and state != "closed":
             return
         if state == "filtered":
@@ -193,7 +194,7 @@ class NodeExecutionContext:
                 self.inspection_store.observe(pipeline=pipeline, node=node, physical=self.node_id,
                     operator=self.operator_id, producer_epoch=self.inspection_epoch, state=state,
                     packet=packet, reason=reason, frame=frame, detections=detections, model_id=model_id,
-                    geometry=geometry, visuals=visuals, masks=masks,
+                    geometry=geometry, visuals=visuals, masks=masks, processing_ms=processing_ms,
                     revision=self.inspection_revisions.get(pipeline))
         except Exception:
             # A diagnostic failure must never change functional processing.
@@ -459,6 +460,7 @@ class SourceOperatorRuntime(BaseOperatorRuntime):
                 await self.idle_sleep(context)
                 continue
             context.metrics.record_completion()
+            context.inspect("completed", packet, processing_ms=latency_ms)
             await context.emit(packet, port="out")
 
 
@@ -499,15 +501,17 @@ class TransformOperatorRuntime(BaseOperatorRuntime):
             try:
                 context.inspect("started", packet)
                 out_packets = await self.process_packet(packet, context)
-                context.metrics.record_latency(_elapsed_ms(started_ns))
+                latency_ms = _elapsed_ms(started_ns)
+                context.metrics.record_latency(latency_ms)
                 context.metrics.record_completion()
-                if not out_packets and context.inspection_filter_reason is None:
-                    context.inspect("completed", packet, reason="reason_uninstrumented")
-                elif out_packets:
+                context.inspect("completed", packet, processing_ms=latency_ms,
+                                reason="reason_uninstrumented" if not out_packets and context.inspection_filter_reason is None else None)
+                if out_packets:
                     context.inspect("passed", packet)
                 for out_packet in out_packets:
                     await context.emit(out_packet, port=self.output_port)
             except asyncio.CancelledError:
+                context.inspect("closed", packet, reason="execution_stopped")
                 if permit is not None:
                     permit.finish(canceled=True)
                 raise

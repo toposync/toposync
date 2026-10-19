@@ -5,6 +5,7 @@ import math
 import uuid
 import time
 
+from toposync.runtime.pipelines.inspection import inspection_execution
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle
 
@@ -42,7 +43,8 @@ class AudioGroupRuntime(TransformOperatorRuntime):
         try:
             while not context.is_cancelled():
                 packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
-                outputs = await self.process_packet(packet, context) if packet is not None else []
+                with inspection_execution(context, packet):
+                    outputs = await self.process_packet(packet, context) if packet is not None else []
                 outputs.extend(self._group_events(self.occurrences.expire_events()))
                 for output in outputs:
                     await context.emit(output, port=self.output_port)

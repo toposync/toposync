@@ -19,7 +19,7 @@ from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
-from toposync.runtime.pipelines.inspection import copy_inspection_frame
+from toposync.runtime.pipelines.inspection import copy_inspection_frame, inspection_execution
 from ..inspection import gesture_visuals
 
 _SIDE_GESTURES = ("hand_raised", "wave", "pointing_candidate")
@@ -118,11 +118,12 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                 packet = await context.read(port="in", timeout_s=0.2)
                 started = time.monotonic_ns()
                 try:
-                    outputs = (
-                        self._flush_due(time.monotonic())
-                        if packet is None
-                        else await self.process_packet(packet, context)
-                    )
+                    with inspection_execution(context, packet):
+                        outputs = (
+                            self._flush_due(time.monotonic())
+                            if packet is None
+                            else await self.process_packet(packet, context)
+                        )
                     if packet is not None:
                         context.metrics.record_completion()
                     for output in outputs:

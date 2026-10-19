@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
+from toposync.runtime.pipelines.inspection import inspection_execution
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, resolve_image_artifact_for_data
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_media_ts
@@ -519,7 +520,9 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             while not context.is_cancelled():
                 packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
                 if packet is not None:
-                    for output in await self._process_occurrence(packet, context):
+                    with inspection_execution(context, packet):
+                        outputs = await self._process_occurrence(packet, context)
+                    for output in outputs:
                         await context.emit(output, port=self.output_port)
                 for state in self._occurrences.values():
                     if (state.last_packet is not None and state.started_at is not None
@@ -575,7 +578,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
 
             elapsed_ms = max(0.0, (float(time.monotonic_ns()) - float(started_ns)) / 1_000_000.0)
             context.metrics.record_latency(elapsed_ms)
-            inspect("completed", packet, reason="reason_uninstrumented")
+            inspect("completed", packet, processing_ms=elapsed_ms)
             for out_packet in out_packets:
                 await context.emit(out_packet, port=self.output_port)
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from scipy.signal import spectrogram
 
 from toposync.runtime.pipelines.runtime import Lifecycle
+from toposync.runtime.pipelines.inspection import inspection_execution
 from toposync.runtime.pipelines.execution import BaseOperatorRuntime
 
 from .audio import AudioClock, decode_wav_pcm
@@ -86,7 +87,8 @@ class AudioCorrelationRuntime(BaseOperatorRuntime):
                     port = pending.pop(task)
                     packet = task.result()
                     if packet is not None:
-                        output = await self.process_packet(packet, context, port)
+                        with inspection_execution(context, packet):
+                            output = await self.process_packet(packet, context, port)
                         await context.emit(output, port="out")
                     if not context.is_cancelled():
                         pending[asyncio.create_task(context.read(port=port))] = port

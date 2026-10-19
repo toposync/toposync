@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .inspection import inspection_execution
 from .execution import TransformOperatorRuntime
 from .operator_registry import OperatorRegistry
 from .runtime import Lifecycle, Packet
@@ -130,12 +131,14 @@ class RouteByCategoryRuntime(TransformOperatorRuntime):
                 decision = limiter.acquire(packet)
                 if not decision.accepted:
                     context.metrics.dropped_packets += 1
+                    context.inspect("dropped", packet, reason="flow_limit")
                     continue
                 permit = decision.permit
 
             started_ns = time.monotonic_ns()
             try:
-                port = self._port_for_packet(packet)
+                with inspection_execution(context, packet):
+                    port = self._port_for_packet(packet)
                 context.metrics.record_latency(_elapsed_ms(started_ns))
                 context.metrics.record_completion()
                 await context.emit(packet, port=port)

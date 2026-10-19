@@ -206,6 +206,7 @@ function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChang
               <strong>{t(`core.ui.pipelines.operator_name.${node.operator}`, {}, node.node_id)}</strong><span>{node.node_id} · {node.operator}</span>
               <span>{t(state === "waiting" ? "inspection.waiting_state" : state === "expired" ? "inspection.expired" : `inspection.${state}`)}</span>
               <small>{t("inspection.counts")}: {node.received_count} / {node.produced_count} / {node.filtered_count}</small>
+              {!expired && node.processing_ms != null ? <small>{t("inspection.processing_ms")}: {node.processing_ms.toFixed(2)}</small> : null}
               {state === "waiting" ? <small>{t("inspection.waiting")}</small> : null}
               {node.reason ? <small>{t(["category_rejected", "image_unavailable", "inference_interval", "sample_expired", "operator_error", "flow_limit", "inspection_capacity", "delivery_not_accepted", "execution_stopped", "mask_geometry_unavailable"].includes(node.reason) ? `inspection.${node.reason}` : "inspection.reason")}</small> : null}
               {!expired && layers.has("motion") && node.motion ? <small>{t("inspection.motion")}: {node.motion.current} / {node.motion.maximum} ({t("inspection.window", {seconds:node.motion.window_seconds,samples:node.motion.samples})})</small> : null}

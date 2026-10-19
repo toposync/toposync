@@ -10,6 +10,7 @@ import json
 from pydantic import BaseModel, ConfigDict
 
 from .execution import BaseOperatorRuntime
+from .inspection import inspection_execution
 from .operator_registry import OperatorRegistry
 from .runtime import Packet
 
@@ -67,11 +68,9 @@ class MergeStreamsRuntime(BaseOperatorRuntime):
                     port = pending.pop(task)
                     packet = task.result()
                     if packet is not None:
-                        await context.emit(
-                            _qualified_packet(
-                                packet, f"{context.pipeline_name}/{context.node_id}/{port}"
-                            )
-                        )
+                        with inspection_execution(context, packet):
+                            output = _qualified_packet(packet, f"{context.pipeline_name}/{context.node_id}/{port}")
+                        await context.emit(output)
                     if not context.cancel_event.is_set():
                         pending[asyncio.create_task(context.read(port=port))] = port
         finally:

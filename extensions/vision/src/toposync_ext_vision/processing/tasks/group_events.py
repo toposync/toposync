@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.inspection import inspection_execution
+
 import math
 import time
 import uuid
@@ -285,11 +287,12 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             packet = await context.read(port="in", timeout_s=0.2)
             started_ns = time.monotonic_ns()
             try:
-                out_packets = (
-                    await self._flush_idle_groups(context)
-                    if packet is None
-                    else await self.process_packet(packet, context)
-                )
+                with inspection_execution(context, packet):
+                    out_packets = (
+                        await self._flush_idle_groups(context)
+                        if packet is None
+                        else await self.process_packet(packet, context)
+                    )
             except Exception as exc:  # noqa: BLE001
                 context.metrics.record_error(exc)
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)

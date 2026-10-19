@@ -539,6 +539,7 @@ export type InspectionNode = {
   received_count: number;
   produced_count: number;
   filtered_count: number;
+  processing_ms: number | null;
   model_id: string | null;
 };
 

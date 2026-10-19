@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import math
 import hashlib
@@ -113,6 +114,7 @@ class InspectionNode(BaseModel):
     received_count: int = 0
     produced_count: int = 0
     filtered_count: int = 0
+    processing_ms: float | None = Field(default=None, ge=0)
     model_id: str | None = Field(default=None, max_length=128)
 
 
@@ -163,6 +165,34 @@ class _Session:
 
 def _number(value: Any) -> float | None:
     return float(value) if type(value) in (int, float) and math.isfinite(value) else None
+
+
+@contextmanager
+def inspection_execution(context: Any, packet: Packet | None):
+    """Observe only this processing interval; never alter operator error handling."""
+    inspect = getattr(context, "inspect", None)
+    if packet is None or not callable(inspect):
+        yield
+        return
+
+    def record(state, **values):
+        try:
+            inspect(state, packet, **values)
+        except Exception:
+            pass
+
+    started = time.monotonic_ns()
+    record("started")
+    try:
+        yield
+    except asyncio.CancelledError:
+        record("closed", reason="execution_stopped")
+        raise
+    except Exception:
+        record("error", reason="operator_error")
+        raise
+    else:
+        record("completed", processing_ms=(time.monotonic_ns() - started) / 1_000_000)
 
 
 async def copy_inspection_frame(context: Any, frame: Any) -> Any:
@@ -408,6 +438,7 @@ class PipelineInspectionStore:
         geometry: Any = None,
         visuals: Any = None,
         masks: Any = None,
+        processing_ms: float | None = None,
     ) -> None:
         # The producer never awaits a subscriber, serializes pixels or reads disk.
         self.expire()
@@ -596,6 +627,11 @@ class PipelineInspectionStore:
                         drawings.append(drawing)
                 values["visuals"] = drawings
             previous = session.nodes[node]
+            measured = _number(processing_ms)
+            values["processing_ms"] = measured if measured is not None and measured >= 0 else None
+            if (processing_ms is None and reference is not None and previous.producer_epoch == producer_epoch
+                    and previous.frame == reference and state in {"passed", "emitted", "delivered"}):
+                values["processing_ms"] = previous.processing_ms
             same_producer = previous.producer_epoch == producer_epoch
             if (state == "analyzed" and reference is not None and same_producer and previous.frame == reference
                     and previous.geometry == values.get("geometry") and previous.model_id == values["model_id"]
@@ -606,6 +642,8 @@ class PipelineInspectionStore:
                     if visual.subject_id and visual.subject_id not in subjects and visual.raster is None]
                 session.dropped += max(0, len(drawings) - 32)
                 values["visuals"] = drawings[:32]
+            if state == "completed" and same_producer and previous.frame == reference and previous.state == "filtered":
+                values["state"] = "filtered"
             values.update(
                 received_count=(previous.received_count if same_producer else 0)
                 + (state == "received"),
@@ -614,7 +652,7 @@ class PipelineInspectionStore:
                 filtered_count=(previous.filtered_count if same_producer else 0)
                 + (state == "filtered"),
             )
-            if state in {"passed", "emitted"} and previous.frame == reference and previous.reason:
+            if state in {"completed", "passed", "emitted"} and previous.frame == reference and previous.reason:
                 values["reason"] = previous.reason
             if (
                 state in {"received", "started", "passed", "emitted", "delivered", "completed"}

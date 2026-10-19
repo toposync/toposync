@@ -1,5 +1,6 @@
 export const inspectionTranslations = {
   en: {
+    "inspection.processing_ms": "Observed processing duration (milliseconds)",
     "inspection.choose_multiple": "Select up to four pipelines",
     "inspection.layers": "Layers and presentation",
     "inspection.configured_cameras": "Cameras declared in pipelines",
@@ -217,6 +218,7 @@ export const inspectionTranslations = {
     "inspection.execution_stopped": "Execution stopped",
   },
   "pt-BR": {
+    "inspection.processing_ms": "Duração observada do processamento (milissegundos)",
     "inspection.choose_multiple": "Selecione até quatro fluxos",
     "inspection.layers": "Camadas e apresentação",
     "inspection.configured_cameras": "Câmeras declaradas nos fluxos",

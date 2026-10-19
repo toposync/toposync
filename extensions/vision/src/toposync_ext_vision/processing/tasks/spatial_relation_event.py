@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.inspection import inspection_execution
+
 import math
 import time
 import uuid
@@ -192,11 +194,12 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
             packet = await context.read(port="in", timeout_s=0.2)
             started_ns = time.monotonic_ns()
             try:
-                outputs = (
-                    self._flush_due(now_monotonic=time.monotonic())
-                    if packet is None
-                    else await self.process_packet(packet, context)
-                )
+                with inspection_execution(context, packet):
+                    outputs = (
+                        self._flush_due(now_monotonic=time.monotonic())
+                        if packet is None
+                        else await self.process_packet(packet, context)
+                    )
             except Exception as exc:  # noqa: BLE001
                 context.metrics.record_error(exc)
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)

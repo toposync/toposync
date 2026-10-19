@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.inspection import inspection_execution
+
 import math
 import os
 import time
@@ -580,11 +582,12 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
             started_ns = time.monotonic_ns()
             try:
-                out_packets = (
-                    await self._flush_idle_events(context)
-                    if packet is None
-                    else await self.process_packet(packet, context)
-                )
+                with inspection_execution(context, packet):
+                    out_packets = (
+                        await self._flush_idle_events(context)
+                        if packet is None
+                        else await self.process_packet(packet, context)
+                    )
             except Exception as exc:
                 context.metrics.record_error(exc)
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)

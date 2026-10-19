@@ -47,6 +47,30 @@ def test_retention_maintenance_failure_is_visible_without_exposing_internal_exce
         assert response.json()['maintenance_error'] == 'occurrence_retention_unavailable'
 
 
+def test_renaming_labels_preserves_occurrence_evidence_links_and_delivery(activity):
+    client, document = activity
+    history = client.app.state.notifications
+    path = '/api/activity/' + document['id']
+    original = client.get(path + '/manifest').json()
+    labels = {'title': 'Renamed activity', 'camera_name': 'Renamed front', 'source_name': 'Renamed source'}
+    duplicate = client.portal.call(partial(history.record_occurrence, contribution(**labels), retention_seconds=60.0, request_notice=True))
+    assert duplicate['id'] == document['id'] and duplicate['revision'] == document['revision']
+    updated = client.portal.call(partial(history.record_occurrence, contribution('renamed', lifecycle='UPDATE',
+        observed_at=11.0, frame_sequence=2, **labels), retention_seconds=60.0, request_notice=True))
+    assert updated['id'] == document['id']
+    manifest = client.get(path + '/manifest').json()
+    assert manifest['name'] == labels['title'] and manifest['deliveries'] == original['deliveries']
+    assert manifest['evidence'][0] == original['evidence'][0]
+    assert 'Renamed front' in manifest['evidence'][1]['name']
+    reference = original['evidence'][0]
+    assert client.get(urljoin(str(client.base_url) + path + '/manifest', reference['href'])).json()['id'] == 'open'
+    closed = contribution('renamed-close', evidence_id='renamed', lifecycle='CLOSE', observed_at=11.0, frame_sequence=2,
+        **{**labels, 'camera_name': 'Another label'})
+    final = client.portal.call(partial(history.record_occurrence, closed, retention_seconds=60.0, request_notice=True))
+    assert final['status'] == 'CLOSE' and final['duration_seconds'] == 1
+    assert final['evidence']['renamed']['camera_name'] == 'Renamed front'
+
+
 def test_api_rechecks_all_cameras_for_counts_metadata_export_and_mutation(activity):
     client, result = activity
     user = client.post('/api/access/users', json={'username': 'limited', 'display_name': 'Limited',

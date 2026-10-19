@@ -196,7 +196,7 @@ class OccurrenceStore:
     @staticmethod
     def _remember(connection, identifier: str, message: BaseModel) -> bool:
         key = _digest([identifier, message.message_id])
-        digest = _digest(message.model_dump(mode="json", exclude={"replay"}))
+        digest = _digest(message.model_dump(mode="json", exclude={"replay", "title", "camera_name", "source_name"}))
         previous = connection.execute("SELECT digest FROM occurrence_message WHERE id = ?", (key,)).fetchone()
         if previous:
             if previous["digest"] != digest:
@@ -264,6 +264,7 @@ class OccurrenceStore:
                 raise OccurrenceConflict("occurrence_member_changed")
             if document["status"] == "CLOSE" or (member and member["closed"]):
                 return OccurrenceChange(document, False)
+            document["title"] = contribution.title
             if member is None and contribution.lifecycle == "CLOSE":
                 raise OccurrenceConflict("occurrence_member_missing")
             if contribution.participant_id not in document["participants"]:
@@ -283,8 +284,11 @@ class OccurrenceStore:
             sample.update({key: getattr(contribution, key) for key in ("camera_name", "source_name")
                            if getattr(contribution, key) is not None})
             previous = document["evidence"].get(contribution.evidence_id)
-            if previous is not None and previous != sample:
-                raise OccurrenceConflict("occurrence_evidence_changed")
+            if previous is not None:
+                # Labels may change; a retained capture keeps its original display metadata.
+                if any(previous.get(key) != value for key, value in sample.items() if key not in {"camera_name", "source_name"}):
+                    raise OccurrenceConflict("occurrence_evidence_changed")
+                sample = previous
             if previous is None and len(document["evidence"]) >= self.maximum_evidence:
                 raise OccurrenceConflict("occurrence_evidence_capacity")
             document["evidence"][contribution.evidence_id] = sample

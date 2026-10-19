@@ -40,17 +40,19 @@ def record(store, value=None, **kwargs):
     return store.record(value or contribution(), retention_seconds=60.0, now=1000.0, **kwargs)
 
 
-def test_independent_participants_two_cameras_one_occurrence_and_one_simulated_notice(tmp_path):
+@pytest.mark.parametrize('category', ['person', 'car'])
+def test_independent_participants_two_cameras_one_occurrence_and_one_simulated_notice(tmp_path, category):
     runtime = NotificationsRuntime(data_dir=tmp_path)
     async def scenario():
         async def send(value):
-            return await runtime.record_occurrence(value, retention_seconds=60.0, request_notice=True, now=1000.0)
+            return await runtime.record_occurrence(value.model_copy(update={'category': category}), retention_seconds=60.0, request_notice=True, now=1000.0)
         first = await send(contribution())
         second = await send(contribution('second', participant_id='entity-2', member_id='visit-2'))
         camera = await send(contribution('garage', camera_id='garage', source_id='garage-main',
             member_id='visit-1b', observed_at=12.0))
         assert first['id'] == second['id'] == camera['id']
         assert set(camera['participants']) == {'entity-1', 'entity-2'}
+        assert all(item['category'] == category for item in camera['participants'].values())
         assert len(runtime.occurrences.deliveries(first['id'])) == 1
         assert runtime.occurrences.deliveries(first['id'])[0]['status'] == 'confirmed'
         assert runtime.occurrences.deliveries(first['id'])[0]['simulated'] is True

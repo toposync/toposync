@@ -176,7 +176,7 @@ def test_maintenance_releases_expired_inactive_scope_capacity(tmp_path, monkeypa
     assert not store.path.exists()
 
 
-@pytest.mark.parametrize("policy", ["no_identification", "anonymous_continuity"])
+@pytest.mark.parametrize("policy", ["no_identification", "anonymous_continuity", "keep_confirmed_identity"])
 def test_no_identification_output_removes_upstream_gallery_handles(tmp_path, policy):
     from toposync.runtime.pipelines import Artifact
     from toposync_ext_vision.association import AssociationStore
@@ -186,7 +186,7 @@ def test_no_identification_output_removes_upstream_gallery_handles(tmp_path, pol
         cfg.sources[0].identity_policy = policy
         runtime = AssociationRuntime(cfg.model_dump(), PipelineRuntimeDependencies())
         runtime.store = AssociationStore(cfg)
-        original = packet(recognition={"occurrence_id": "private-gallery-link"}).with_artifact(
+        original = packet(recognition={"occurrence_id": "private-gallery-link"}, identity_binding={"subject_id": "late-private-link"}).with_artifact(
             Artifact(
                 name="identity_decision",
                 data=b"private decision",
@@ -203,6 +203,10 @@ def test_no_identification_output_removes_upstream_gallery_handles(tmp_path, pol
             [(original, observation_from_packet(original, cfg))],
             SimpleNamespace(emit=emit, inspect=lambda *a, **kw: None),
         )
+        assert emitted[0].payload["identity_binding"] is None
+        if policy == "keep_confirmed_identity":
+            assert "recognition" in emitted[0].payload
+            return
         assert "recognition" not in emitted[0].payload
         assert "identity_decision" not in emitted[0].artifacts
         assert emitted[0].payload["capture_evidence"] == original.payload["capture_evidence"]

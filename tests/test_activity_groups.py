@@ -23,6 +23,42 @@ from toposync_ext_vision.association import AssociationStore
 from toposync_ext_vision.association_runtime import AssociationRuntime
 
 
+def test_shared_result_with_identity_binding_keeps_one_association_for_two_objectives():
+    from toposync.runtime.pipelines.demands import DemandRequest, ResourceDemandRegistry
+    from toposync.runtime.pipelines.result_references import ResultContract
+    operators = registry()
+    operators.register_operator(operator_id='test.shared_source', inputs=[], outputs=[{'name': 'out'}],
+        produces_payload_keys=['subject', 'source', 'media', 'capture_evidence', 'camera_id', 'mapping'],
+        runtime_factory=lambda *_: SourceOperatorRuntime())
+    nodes = [{'id': 'source', 'operator': 'test.shared_source'},
+        {'id': 'binding', 'operator': 'vision.identity_context', 'config': {'enabled': True, 'late_enrichment': True}},
+        {'id': 'associate', 'operator': 'vision.associate_entities', 'config': config().model_dump()},
+        {'id': 'entity', 'operator': 'vision.entity_activity', 'config': {'scope': 'test'}},
+        {'id': 'evidence', 'operator': 'vision.activity_evidence'}]
+    contract = ResultContract(version=1, payload_keys=['activity_observation'])
+    graph = build_pipeline_graph_v2(graph_uid='shared', nodes=nodes, edges=[
+        {'from': {'node': left, 'port': 'out'}, 'to': {'node': right, 'port': 'in'}}
+        for left, right in [('source', 'binding'), ('binding', 'associate'), ('associate', 'entity'), ('entity', 'evidence')]],
+        meta={'outputs': [{'key': 'shared.activity', 'node_uid': 'evidence', 'contract': contract.model_dump(),
+            'production_scope': 'test', 'state_owner': 'automatic-observation', 'state_partition': 'test'}]})
+    producer = Pipeline(name='shared', enabled=False, graph=graph)
+    compiler = PipelineGraphCompiler(operators)
+    demands = ResourceDemandRegistry(lambda *_: True, compiler=compiler)
+    demands.bind([producer])
+    for objective in ('visit', 'overlap'):
+        demand = demands.open('owner', DemandRequest(consumer_id='automatic:' + objective, purpose='automatic',
+            result_key='shared.activity', contract=contract, payload_keys=contract.payload_keys,
+            production_revision=demands.outputs['shared.activity'][2]))
+        demand.consequence = {'operator': 'core.record_occurrence', 'config': settings(objective_id=objective)}
+    compiled = compiler.compile_many(demands.pipelines(), catalog=[producer])
+    for operator in ('vision.identity_context', 'vision.associate_entities', 'vision.entity_activity', 'vision.activity_evidence'):
+        nodes = [node for pipeline in compiled.pipelines for node in pipeline.nodes if node.operator_id == operator]
+        assert len(nodes) == 2 and all(node.shareable for node in nodes)
+        assert len({node.signature for node in nodes}) == 1
+    assert not operators.get('vision.identity_evidence').definition.share_strategy == 'by_signature'
+    assert not operators.get('vision.recognize_identity').definition.share_strategy == 'by_signature'
+
+
 @pytest.mark.parametrize("split", [False, True])
 def test_trio_group_history_keeps_members_sources_overlapping_objectives_and_replay(tmp_path, split):
     async def scenario():

@@ -103,6 +103,24 @@ def test_nominal_history_does_not_use_stale_recognition_policy(client):
     assert response.status_code == 200 and response.json()['notifications'] == []
 
 
+def test_unknown_clustering_does_not_expire_retained_activity_names(client):
+    _, gallery, document, _ = trio(client)
+    before = client.get('/api/activity/' + document['id']).json()['occurrence']
+    decisions = [gallery.decision(f'private-visit-{index}') for index in range(2)]
+    for index in range(2):
+        gallery.observe(evidence(f'unknown-{index}', vector=[0., 0., 1.] + [0.] * 13), policy())
+    revision = gallery.revision
+    gallery.cluster_pending()
+    assert gallery.revision > revision
+    after = client.get('/api/activity/' + document['id']).json()['occurrence']
+    for key in before['participants']:
+        assert after['participants'][key]['identification'].get('name') == before['participants'][key]['identification'].get('name')
+    for index, old in enumerate(decisions):
+        current = gallery.decision(f'private-visit-{index}')
+        assert (current.revision, current.evidence_at) == (old.revision, old.evidence_at)
+    assert after['revision'] == before['revision'] and after['status'] == 'CLOSE'
+
+
 def test_nominal_query_and_location_options_do_not_leak_partial_source_access(client):
     _, _, document, identities = trio(client, third_camera='corridor')
     user = client.post('/api/access/users', json={'username': 'partial', 'display_name': 'Partial',

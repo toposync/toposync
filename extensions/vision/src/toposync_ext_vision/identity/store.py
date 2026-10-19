@@ -860,7 +860,7 @@ class IdentityStore:
                 )
             if changes:
                 connection.executemany("UPDATE observation SET cluster_id=? WHERE id=?", changes)
-                connection.execute("UPDATE gallery SET revision=revision+1")
+                self._advance_maintenance_revision(connection, references_removed=False)
             return {
                 "clusters": proposals,
                 "limited": pending > 0,
@@ -938,11 +938,11 @@ class IdentityStore:
         clustering = self.cluster_pending()
         return {"retention": retention, "clustering": clustering}
 
-    def _advance_retention_revision(self, connection, *, references_removed: bool) -> None:
+    def _advance_maintenance_revision(self, connection, *, references_removed: bool) -> None:
         previous = self.revision
         connection.execute('UPDATE gallery SET revision=revision+1')
         if not references_removed:
-            # Removing another visit must not invalidate recognition against unchanged references.
+            # Maintenance must not invalidate recognition against unchanged references.
             for row in connection.execute('SELECT id,decision FROM occurrence').fetchall():
                 current = RecognitionDecision.model_validate(self._open(row['decision']))
                 if current.gallery_revision == previous:
@@ -997,7 +997,7 @@ class IdentityStore:
                 connection.execute("DELETE FROM occurrence WHERE id=?", (row["id"],))
             counts["occurrences"] = len(occurrences)
             if any(counts.values()):
-                self._advance_retention_revision(connection, references_removed=any(row['reference'] for row in rows))
+                self._advance_maintenance_revision(connection, references_removed=any(row['reference'] for row in rows))
             revision = self.revision
         if any(counts.values()):
             with self._lock:
@@ -1370,7 +1370,7 @@ class IdentityStore:
                     if affected:
                         connection.execute("DELETE FROM feedback WHERE id=?", (row["id"],))
             if targets:
-                self._advance_retention_revision(connection, references_removed=False)
+                self._advance_maintenance_revision(connection, references_removed=False)
         if targets:
             with self._lock:
                 self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")

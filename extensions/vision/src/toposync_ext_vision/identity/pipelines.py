@@ -590,7 +590,7 @@ def register_identity_operators(registry: OperatorRegistry) -> None:
             state_kind="stateless"
             if operator_id == "vision.identity_context"
             else "stateful_per_subject",
-            share_strategy="never",
+            share_strategy="by_signature" if operator_id == "vision.identity_context" else "never",
             ordering="strict",
             resource_kind=resource,
             pressure_behavior="ignore",

@@ -553,6 +553,8 @@ export type InspectionSnapshot = {
   data_class: "diagnostic_private";
   access_scope: "owner";
   policy_revision: string | null;
+  previous_sequence: number | null;
+  gap: boolean;
 };
 
 export type NavigableViewportPoint = { x: number; y: number };

@@ -173,8 +173,9 @@ export async function openPipelineInspection(name: string, options: AbortableReq
   return requestJson(resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}/inspection`), { method: "POST", signal: options.signal }, "Inspection unavailable");
 }
 
-export async function getPipelineInspection(session: string, options: AbortableRequestOptions = {}): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
-  return requestJson(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}`), { signal: options.signal }, "Inspection unavailable");
+export async function getPipelineInspection(session: string, options: AbortableRequestOptions & { after?: number } = {}): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
+  const cursor = options.after === undefined ? "" : `?after=${options.after}`;
+  return requestJson(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}${cursor}`), { signal: options.signal }, "Inspection unavailable");
 }
 
 export async function closePipelineInspection(session: string): Promise<void> {

@@ -128,6 +128,8 @@ class InspectionSnapshot(BaseModel):
     data_class: Literal["diagnostic_private"] = "diagnostic_private"
     access_scope: Literal["owner"] = "owner"
     policy_revision: str | None = None
+    previous_sequence: int | None = None
+    gap: bool = False
 
 
 @dataclass
@@ -155,6 +157,8 @@ class _Session:
     preview_active: bool = False
     preview_not_before: float = 0.0
     masks_not_before: float = 0.0
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+    subscription_active: bool = False
 
 
 def _number(value: Any) -> float | None:
@@ -269,6 +273,7 @@ class PipelineInspectionStore:
     def close(self, token: str) -> None:
         session = self.sessions.pop(token, None)
         if session:
+            session.changed.set()
             if session.timer:
                 session.timer.cancel()
             session.images.clear()
@@ -302,8 +307,10 @@ class PipelineInspectionStore:
                 continue
             for node, value in list(session.nodes.items()):
                 if value.expires_at is not None and value.expires_at <= now:
+                    session.sequence += 1
                     session.nodes[node] = value.model_copy(
                         update={
+                            "sequence": session.sequence,
                             "state": "expired",
                             "reason": "sample_expired",
                             "frame": None,
@@ -318,6 +325,10 @@ class PipelineInspectionStore:
                     )
                     self._remove_image(session, node)
                     session.motion_windows.pop(node, None)
+                    size = len(session.nodes[node].model_dump_json().encode())
+                    session.state_bytes += size - session.node_sizes[node]
+                    session.node_sizes[node] = size
+                    session.changed.set()
 
     @staticmethod
     def _remove_image(session: _Session, node: str) -> None:
@@ -603,6 +614,7 @@ class PipelineInspectionStore:
             session.node_sizes[node] = size
             # Complete snapshots need only the latest state, never an unconsumed history queue.
             session.nodes[node] = observation
+            session.changed.set()
             identifier = packet_occurrence_id(packet) if packet else None
             if identifier:
                 if identifier not in session.occurrence_ids and len(session.occurrence_ids) >= self.maximum_items:
@@ -662,6 +674,24 @@ class PipelineInspectionStore:
             nodes=list(session.nodes.values()),
             dropped=session.dropped,
         )
+
+    async def wait_for_change(self, token: str, after: int) -> None:
+        self.expire()
+        session = self.sessions[token]
+        if after > session.sequence:
+            raise ValueError("inspection_cursor_ahead")
+        if session.subscription_active:
+            raise ValueError("inspection_subscription_busy")
+        session.subscription_active = True
+        try:
+            if session.sequence == after:
+                session.changed.clear()
+                try:
+                    await asyncio.wait_for(session.changed.wait(), timeout=.5)
+                except TimeoutError:
+                    pass
+        finally:
+            session.subscription_active = False
 
     def image(self, token: str, node: str, sequence: int) -> Any:
         self.expire()

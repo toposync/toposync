@@ -59,7 +59,7 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
   useEffect(() => {
     setSnapshot(null); setLoadedImage(""); setLoading(false); setError(false);
     if (!open || !visible || !selected) return;
-    let canceled = false, session = "", released = false, timer = 0, timeout = 0;
+    let canceled = false, session = "", released = false, timer = 0, timeout = 0, after = 0;
     const controller = new AbortController();
     const release = () => {
       if (session && !released) { released = true; void closePipelineInspection(session).catch(() => {}); }
@@ -68,11 +68,12 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
     async function poll() {
       timeout = window.setTimeout(() => controller.abort(), 2500);
       try {
-        const options = { signal: controller.signal };
+        const options = { signal: controller.signal, after };
         const value = session ? await getPipelineInspection(session, options) : await openPipelineInspection(selected, options);
         session = value.session;
         if (canceled) { release(); return; }
         if (controller.signal.aborted) throw new Error("inspection_timeout");
+        after = value.sequence;
         setSnapshot(value); setLoading(false);
         if (!publication) timer = window.setTimeout(poll, 400);
       } catch {

@@ -7,7 +7,7 @@ import hashlib
 import json
 from typing import Callable
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 
 from .inspection import InspectionSnapshot, InspectionVisual, PipelineInspectionStore, pipeline_inspection_revision
 from .operators_sinks import _encode_image_bytes
@@ -49,8 +49,11 @@ async def project_inspection(request: Request, snapshot: InspectionSnapshot) -> 
         "policy_revision": hashlib.sha256(json.dumps(revisions).encode()).hexdigest(),
     })
     if len(result.model_dump_json().encode()) > request.app.state.pipeline_inspection.maximum_bytes:
-        return snapshot.model_copy(update={"nodes": [node.model_copy(update={"visuals": []}) for node in snapshot.nodes],
-                                           "policy_revision": result.policy_revision, "dropped": snapshot.dropped + 1})
+        result = snapshot.model_copy(update={"nodes": [node.model_copy(update={"visuals": []}) for node in snapshot.nodes],
+                                             "policy_revision": result.policy_revision, "dropped": snapshot.dropped + 1})
+        if len(result.model_dump_json().encode()) > request.app.state.pipeline_inspection.maximum_bytes:
+            request.app.state.pipeline_inspection.close(snapshot.session)
+            raise HTTPException(429, "inspection_capacity")
     return result
 
 
@@ -144,18 +147,32 @@ def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str])
                 raise HTTPException(409, "inspection_revision_changed") from error
             raise HTTPException(429, "inspection_capacity") from error
         response.headers["Cache-Control"] = "no-store"
-        return store.snapshot(token)
+        snapshot = store.snapshot(token)
+        if len(snapshot.model_dump_json().encode()) > store.maximum_bytes:
+            store.close(token)
+            raise HTTPException(429, "inspection_capacity")
+        return snapshot
 
     @app.get("/api/pipeline-inspection/{token}", response_model=InspectionSnapshot)
-    async def inspection_snapshot(request: Request, token: str, response: Response):
+    async def inspection_snapshot(request: Request, token: str, response: Response,
+                                  after: int | None = Query(default=None, ge=0, le=9007199254740991)):
         store, _, _, _ = await checked_inspection(request, token)
         response.headers["Cache-Control"] = "no-store"
         try:
-            snapshot = await project_inspection(request, store.snapshot(token))
+            if after is not None:
+                await store.wait_for_change(token, after)
+                await checked_inspection(request, token)
+            snapshot = store.snapshot(token)
+            snapshot = snapshot.model_copy(update={"previous_sequence": after,
+                "gap": after is not None and snapshot.sequence > after + 1})
+            snapshot = await project_inspection(request, snapshot)
             await checked_inspection(request, token)
+            # Coalesced updates always replace the whole snapshot, including after a gap.
             return finalize_inspection(request, snapshot)
         except KeyError as error:
             raise HTTPException(410, "inspection_session_expired") from error
+        except ValueError as error:
+            raise HTTPException(429 if str(error) == "inspection_subscription_busy" else 409, str(error)) from error
 
     @app.get("/api/pipeline-inspection/{token}/images/{node}/{sequence}")
     async def inspection_image(request: Request, token: str, node: str, sequence: int):

@@ -219,7 +219,10 @@ def plan_observation(*, intent, configuration):
     if intent.capability == "vision.route" and len(sources) < 2:
         return unavailable("multiple_sources_required")
     association = condition.association
-    if len(sources) > 1:
+    # Keep per-source identity choices when the user removes another participating camera.
+    scoped_recognition = intent.capability == "vision.recognition" and area is not None and association is not None
+    associate = len(sources) > 1 or scoped_recognition
+    if associate:
         if not association:
             return unavailable("association_preparation_required")
         declared = {
@@ -239,7 +242,7 @@ def plan_observation(*, intent, configuration):
             for item in association.get("transitions", [])
             if item.get("source_camera") in cameras and item.get("target_camera") in cameras
         ]
-        if any(
+        if not scoped_recognition and any(
             source.get("identity_policy") != "anonymous_continuity"
             for source in association["sources"]
         ):
@@ -369,6 +372,24 @@ def plan_observation(*, intent, configuration):
             tail = add(
                 prefix + "gesture", "vision.gesture_recognize", {"output_mode": "annotate"}, tail
             )
+        if scoped_recognition:
+            tail = add(prefix + "categories", "core.category_gate", {"categories": condition.categories}, tail)
+            if native:
+                tail = add(prefix + "retain_observation", "camera.observation_hold", {
+                    "window_id": "automatic", "hold_seconds": condition.evidence_timeout_seconds,
+                }, tail)
+            tail = add(prefix + "occurrence", "camera.area_occurrence", {
+                "minimum_duration_seconds": condition.minimum_duration_seconds,
+                "evidence_timeout_seconds": condition.evidence_timeout_seconds,
+                "mode": "presence", "categories": condition.categories,
+                "area": area.model_dump(), "composition_id": intent.scope.composition_id,
+            }, tail)
+            profile = next(profile for profile in association["sources"]
+                           if (profile["camera_id"], profile["source_id"]) == (source["camera_id"], source["source_id"]))
+            if profile["identity_policy"] == "recognize_here":
+                tail = add(prefix + "identity_context", "vision.identity_context", {"enabled": True}, tail)
+                tail = add(prefix + "identity_evidence", "vision.identity_evidence", {"enabled": True}, tail)
+                tail = add(prefix + "recognize", "vision.recognize_identity", {**condition.resource_parameters, "enabled": True}, tail)
         endpoints.append(tail)
     tail = endpoints[0]
     for index, endpoint in enumerate(endpoints[1:]):
@@ -380,10 +401,10 @@ def plan_observation(*, intent, configuration):
             ]
         )
         tail = merged
-    if len(sources) > 1:
+    if associate:
         tail = add("association", "vision.associate_entities", association, tail)
     tail = add("categories", "core.category_gate", {"categories": condition.categories}, tail)
-    if native:
+    if native and not scoped_recognition:
         tail = add(
             "retain_observation",
             "camera.observation_hold",
@@ -438,7 +459,7 @@ def plan_observation(*, intent, configuration):
             },
             tail,
         )
-    else:
+    elif not scoped_recognition:
         if area:
             tail = add(
                 "occurrence",
@@ -482,7 +503,7 @@ def plan_observation(*, intent, configuration):
                 {**occurrence, "categories": condition.categories},
                 tail,
             )
-    if len(sources) > 1:
+    if associate:
         tail = add(
             "entity_activity",
             "vision.entity_activity",
@@ -494,7 +515,7 @@ def plan_observation(*, intent, configuration):
             },
             tail,
         )
-    if intent.capability == "vision.recognition":
+    if intent.capability == "vision.recognition" and not scoped_recognition:
         tail = add("identity_context", "vision.identity_context", {"enabled": True}, tail)
         tail = add("identity_evidence", "vision.identity_evidence", {"enabled": True}, tail)
         tail = add(
@@ -563,6 +584,8 @@ def plan_observation(*, intent, configuration):
             ("ai.condition_filter", "condition_annotation"),
         )
         if any(node["operator"] == operator for node in nodes)
+        # Identity evidence is source-specific; the private M3 review resolves it by entity.
+        and not (scoped_recognition and field == "recognition")
     ]
     contract = {
         "type": "packet",

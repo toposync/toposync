@@ -230,6 +230,7 @@ export type PipelineOperatorPanel = {
     purpose?: "automatic" | "manual";
     sources?: Array<{ camera_id: string; source_id: string; camera_name: string; source_name: string }>;
     observationCategories?: string[];
+    observationCapability?: string;
     onValidityChange?: (valid: boolean) => void;
     updateConfig: (patch: Record<string, unknown>) => void;
     replaceConfig: (next: Record<string, unknown>) => void;

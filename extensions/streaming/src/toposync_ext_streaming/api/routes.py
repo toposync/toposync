@@ -5859,6 +5859,8 @@ async def reconcile_streaming_publications_for_app(app: FastAPI) -> tuple[Stream
 
 def create_streaming_router() -> APIRouter:
     router = APIRouter(prefix="/api/streams", tags=["streams"])
+    from .inspection_video import install_inspection_video_routes
+    install_inspection_video_routes(router)
 
     @router.get("/health", response_model=StreamingHealthResponse)
     async def streams_health() -> StreamingHealthResponse:

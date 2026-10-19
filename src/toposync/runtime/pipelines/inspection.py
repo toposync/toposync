@@ -17,6 +17,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .runtime import Packet, packet_occurrence_id
+from .image_geometry import inspection_geometry
 
 
 def pipeline_inspection_revision(pipeline: Any) -> str:
@@ -96,6 +97,8 @@ class _Session:
     motion_captures: dict[str, tuple[str, int] | None] = field(default_factory=dict)
     timer: asyncio.TimerHandle | None = None
     demand_ids: tuple[str, ...] = ()
+    preview_active: bool = False
+    preview_not_before: float = 0.0
 
 
 def _number(value: Any) -> float | None:
@@ -274,6 +277,7 @@ class PipelineInspectionStore:
         detections: Any = None,
         model_id: str | None = None,
         revision: str | None = None,
+        geometry: Any = None,
     ) -> None:
         # The producer never awaits a subscriber, serializes pixels or reads disk.
         self.expire()
@@ -401,6 +405,9 @@ class PipelineInspectionStore:
                             "basis": "analyzed_image",
                             "source_projection": "unknown",
                         }
+                        projected = inspection_geometry(geometry, shape[1], shape[0], reference)
+                        if projected is not None:
+                            values["geometry"].update(projected, source_projection="declared")
                         safe = []
                         if isinstance(detections, (list, tuple)) and len(detections) > 32:
                             session.dropped += len(detections) - 32

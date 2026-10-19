@@ -1814,6 +1814,7 @@ export function StreamTilePlayer({
   const playbackSessionIdRef = useRef<string | null>(null);
   const onRefreshUrlsRef = useRef(onRefreshUrls);
   const posterObjectUrlRef = useRef<string | null>(null);
+  const [inspectionPaired, setInspectionPaired] = useState(false);
 
   const [status, setStatus] = useState<TilePlaybackStatus>("idle");
   const [transport, setTransport] = useState<TilePlaybackTransport>("none");
@@ -1841,7 +1842,7 @@ export function StreamTilePlayer({
     if (activeTransport.current === 'hls' && (previous.hlsUrl !== hlsUrl || previous.hlsNativeUrl !== hlsNativeUrl))
       setHlsCredentialRevision(value => value + 1);
   }, [hlsUrl, hlsNativeUrl]);
-  usePresentedFrame(videoRef, active && status === "playing" && transport !== "jsmpeg", `${transmissionId}:${transport}:${endpointsIdentity}`, onFrame ? frame => {
+  usePresentedFrame(videoRef, active && !inspectionPaired && status === "playing" && transport !== "jsmpeg", `${transmissionId}:${transport}:${endpointsIdentity}`, onFrame ? frame => {
     const selectedId = transport === "mse" ? mseOutputId : transport === "webrtc" ? webrtcOutputId : hlsOutputId;
     const output = urls?.outputs.find(output => output.protocol === transport && output.output_id === selectedId);
     const resolutionMatches = frame && output?.resolution?.width === frame.width && output?.resolution?.height === frame.height;
@@ -3751,7 +3752,7 @@ export function StreamTilePlayer({
         </div>
 
 	        {controls && <div className="streamsTileOverlayActions">
-          <PipelineInspectionPanel />
+          <PipelineInspectionPanel transmissionId={transmissionId} playerElement={frameRef} onPairedChange={setInspectionPaired} />
           {variantOptions.length > 0 ? (
             <div className="streamsTileVariantControl" title={currentVariantLabel}>
               <select

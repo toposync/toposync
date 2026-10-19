@@ -1,5 +1,12 @@
 export const inspectionTranslations = {
   en: {
+    "inspection.close": "Close analysis",
+    "inspection.paired_video": "Paired video preview · up to 5 frames/s",
+    "inspection.paired_limit": "Published video preview. Overlays use only the same capture and a declared transform. Other transports remain unverified. Passive inspection does not start models.",
+    "inspection.boxes": "Detection boxes and scores",
+    "inspection.freeze": "Freeze presentation",
+    "inspection.resume": "Resume presentation",
+    "inspection.frozen": "Frozen presentation · analysis continues",
     "inspection.open": "Show analysis",
     "inspection.limit": "Analyzed frame only. Alignment with live video has not been demonstrated. Owner access required.",
     "inspection.choose": "Choose a pipeline",
@@ -39,6 +46,13 @@ export const inspectionTranslations = {
     "inspection.execution_stopped": "Execution stopped",
   },
   "pt-BR": {
+    "inspection.close": "Fechar análise",
+    "inspection.paired_video": "Prévia de vídeo pareada · até 5 quadros/s",
+    "inspection.paired_limit": "Prévia do vídeo publicado. Sobreposições usam somente a mesma captura e uma transformação declarada. Outros transportes seguem sem validação. A inspeção passiva não inicia modelos.",
+    "inspection.boxes": "Caixas e escores de detecção",
+    "inspection.freeze": "Congelar apresentação",
+    "inspection.resume": "Retomar apresentação",
+    "inspection.frozen": "Apresentação congelada · análise continua",
     "inspection.open": "Mostrar análise",
     "inspection.limit": "Somente quadro analisado. Alinhamento com vídeo ao vivo não demonstrado. Acesso restrito ao proprietário.",
     "inspection.choose": "Escolha um fluxo",

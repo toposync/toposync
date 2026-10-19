@@ -1,4 +1,10 @@
-.pipelineInspectionModal { width: min(960px, 94vw); }
+.pipelineInspectionPanel { position: fixed; z-index: 1000; inset: 70px 12px 12px auto; width: min(360px, 90vw); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel, #17202c); color: var(--text, #fff); box-shadow: 0 8px 40px #0008; }
+.pipelineInspectionPanel .pipelineInspectionGrid { grid-template-columns: minmax(0, 1fr); }
+.pipelineInspectionControls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.pairedInspectionVideo { position: absolute; inset: 0; z-index: 2; background: #10151e; pointer-events: none; }
+.pairedInspectionVideo canvas { width: 100%; height: 100%; object-fit: contain; }
+.pairedInspectionStatus { position: absolute; bottom: 48px; left: 8px; right: 8px; padding: 6px; background: #10151ee6; color: #fff; font-size: .8rem; }
+@media (max-width: 640px) { .pipelineInspectionPanel { inset: auto 6px 6px; width: auto; max-height: 42vh; } }
 .pipelineInspectionLimit { color: var(--muted); line-height: 1.5; }
 .pipelineInspectionSelect { display: grid; gap: 6px; margin-block: 16px; }
 .pipelineInspectionSelect select { width: 100%; padding: 10px; }

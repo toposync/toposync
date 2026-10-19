@@ -180,7 +180,8 @@ class NodeExecutionContext:
                    for session in self.inspection_store.sessions.values() for pipeline, node in occurrences)
 
     def inspect(self, state: str, packet: Packet | None = None, *, reason: str | None = None,
-                frame: Any = None, detections: Any = None, model_id: str | None = None) -> None:
+                frame: Any = None, detections: Any = None, model_id: str | None = None,
+                geometry: Any = None) -> None:
         if self.cancel_event.is_set() and state != "closed":
             return
         if state == "filtered":
@@ -192,6 +193,7 @@ class NodeExecutionContext:
                 self.inspection_store.observe(pipeline=pipeline, node=node, physical=self.node_id,
                     operator=self.operator_id, producer_epoch=self.inspection_epoch, state=state,
                     packet=packet, reason=reason, frame=frame, detections=detections, model_id=model_id,
+                    geometry=geometry,
                     revision=self.inspection_revisions.get(pipeline))
         except Exception:
             # A diagnostic failure must never change functional processing.

@@ -427,7 +427,8 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             )
             inspect = getattr(context, "inspect", None)
             if callable(inspect):
-                inspect("analyzed", inference_packet, frame=inspection_frame, detections=raw_detections, model_id=manifest.model_id)
+                inspect("analyzed", inference_packet, frame=inspection_frame, detections=raw_detections, model_id=manifest.model_id,
+                        geometry=inference_packet.artifacts[artifact_name].metadata.get("image_geometry"))
             if self._shutting_down:
                 return []
             detections = self._normalize_detections(

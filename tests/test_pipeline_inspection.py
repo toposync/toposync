@@ -580,7 +580,7 @@ def test_typescript_snapshot_fields_and_states_match_backend_schema():
 
 @pytest.mark.parametrize("transformation", ["crop", "resize", "rotation", "unknown_lens"])
 def test_detector_preserves_the_actual_analyzed_pixels_and_local_geometry(transformation):
-    from toposync.runtime.pipelines.image_geometry import image_geometry
+    from toposync.runtime.pipelines.image_geometry import image_geometry, transformed_geometry
     from toposync.runtime.pipelines.runtime import Artifact
     from toposync_ext_vision.processing.tasks.detection import VisionDetectRuntime
 
@@ -588,16 +588,21 @@ def test_detector_preserves_the_actual_analyzed_pixels_and_local_geometry(transf
         store = PipelineInspectionStore(clock=Clock())
         token = store.open("demo", "revision", {"detect": "vision.detect"})
         pixels = np.arange(20 * 40 * 3, dtype=np.uint8).reshape(20, 40, 3)
+        value = packet()
+        original = Artifact("main", pixels, metadata={
+            "image_geometry": image_geometry(40, 20, value.payload["capture_evidence"])})
+        metadata = original.metadata
         if transformation == "resize":
             pixels = pixels[::2, ::2].copy()
+            metadata = transformed_geometry(original, [[0.5, 0, 0], [0, 0.5, 0], [0, 0, 1]], 20, 10)
         if transformation == "rotation":
             pixels = np.rot90(pixels).copy()
-        value = packet()
-        geometry = image_geometry(
-            pixels.shape[1], pixels.shape[0], value.payload["capture_evidence"]
-        )
+            metadata = transformed_geometry(original, [[0, 1, 0], [-1, 0, 39], [0, 0, 1]], 20, 40)
+        if transformation == "unknown_lens":
+            metadata = {}
+        geometry = metadata.get("image_geometry")
         value.artifacts["main"] = Artifact(
-            name="main", data=pixels, mime_type="image/raw", metadata={"image_geometry": geometry}
+            name="main", data=pixels, mime_type="image/raw", metadata=metadata
         )
         if transformation == "crop":
             value.payload["image_region"] = {
@@ -669,7 +674,12 @@ def test_detector_preserves_the_actual_analyzed_pixels_and_local_geometry(transf
             node.geometry["width"] == seen[0].shape[1]
             and node.geometry["height"] == seen[0].shape[0]
         )
-        assert node.geometry["source_projection"] == "unknown"
+        assert node.geometry["source_projection"] == ("unknown" if transformation == "unknown_lens" else "declared")
+        if transformation != "unknown_lens":
+            expected = {"crop": [[1, 0, 10], [0, 1, 5], [0, 0, 1]],
+                        "resize": [[2, 0, 0], [0, 2, 0], [0, 0, 1]],
+                        "rotation": [[0, -1, 39], [1, 0, 0], [0, 0, 1]]}[transformation]
+            np.testing.assert_allclose(node.geometry["to_source"], expected)
         assert node.detections[0]["box"] == [0.1, 0.2, 0.7, 0.8]
         store.close(token)
 

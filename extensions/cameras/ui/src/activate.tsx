@@ -1,6 +1,6 @@
 import { StationaryObservationSummary, supportsStationaryObservation, stationaryObservationTranslations } from "./notifications/StationaryObservationSummary";
 import React from "react";
-import { AutomaticNativeObservationPanel } from "./pipelines/AutomaticNativeObservationPanel";
+import { AutomaticNativeObservationPanel, AutomaticObservationStatus } from "./pipelines/AutomaticNativeObservationPanel";
 import { VisualRegionPanel, visualRegionTranslations } from "./pipelines/VisualRegionPanel";
 import {
   LivePanoramaSelectorContent,
@@ -21,6 +21,7 @@ import { AudioObservationDetails, audioHistoryTranslations, supportsAudioObserva
 
 export function activate(host: ToposyncHost): void {
   host.registerPipelineOperatorPanel({ id: "com.toposync.cameras.automatic-native", operatorId: "camera.onvif_state_gate", placement: "after",
+    renderStatus: status => <AutomaticObservationStatus status={status} i18n={host.i18n} />,
     renderSummary: config => <p>{host.i18n.t(config.enabled === true ? "ext.cameras.automatic.native.qualified" : "ext.cameras.automatic.native.continuous")}{config.enabled === true && <><br />{host.i18n.t(config.fallback_to_video === true ? "ext.cameras.automatic.native.fallback" : "ext.cameras.automatic.native.no_fallback")}</>}</p>,
     render: props => props.purpose === "automatic" ? <AutomaticNativeObservationPanel {...props} /> : null });
   host.i18n.registerTranslations(visualRegionTranslations);

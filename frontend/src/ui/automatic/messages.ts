@@ -32,6 +32,7 @@ const messages = {
   enabled: ["Enabled", "Ativado"], disabled: ["Paused", "Pausado"],
   active: ["Observation received", "Observação recebida"], waiting: ["Waiting for an observation", "Aguardando observação"],
   paused: ["Paused", "Pausado"], blocked: ["Blocked", "Bloqueado"], unavailable: ["Unavailable", "Indisponível"],
+  diagnosticsUnavailable: ["Source diagnostics unavailable; no absence can be inferred.", "Diagnóstico das fontes indisponível; não é possível concluir ausência."],
   outside_schedule: ["Outside the schedule", "Fora do horário"], preparing: ["Ready to activate", "Pronto para ativar"],
   details: ["Preparation details", "Detalhes da preparação"], flows: ["Flows", "Fluxos"],
   providers: ["Some extensions are unavailable. Their activities remain saved.", "Algumas extensões estão indisponíveis. Suas atividades permanecem salvas."],

@@ -81,6 +81,7 @@ class AiExtension(BaseExtension):
             "resource_parameters_schema": AiConditionFilterConfig.model_json_schema(),
             "resource_operator": "ai.condition_filter",
             "resource_consent_fields": ["profile_id"],
+            "diagnostics_provider": "automatic.diagnostics.camera_observation",
             "configuration_panels": [
                 {"operator": "camera.onvif_state_gate", "field": "native_observation", "minimum_sources": 1,
                  "title": {"en": "Observation and camera events", "pt-BR": "Observação e eventos da câmera"}},

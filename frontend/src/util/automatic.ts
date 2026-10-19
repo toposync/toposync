@@ -31,7 +31,7 @@ export type AutomaticCapability = {
   resource_consent_fields?: string[];
   configuration_panels?: Array<{ operator: string; field: string; minimum_sources: number; title?: Record<string, string> }>;
 };
-export type AutomaticActivity = { state: string; reason: string | null; requested?: boolean; sources: AutomaticSource[]; limitations?: string[]; last_result?: { at: number; received: number } };
+export type AutomaticActivity = { state: string; reason: string | null; requested?: boolean; sources: AutomaticSource[]; limitations?: string[]; last_result?: { at: number; received: number }; diagnostics?: Record<string, Record<string, unknown>>; diagnostics_unavailable?: boolean };
 export type AutomaticSnapshot = {
   configuration: AutomaticConfiguration; catalog: AutomaticCapability[]; targets: AutomaticTarget[];
   activities: Record<string, AutomaticActivity>; provider_errors: string[];

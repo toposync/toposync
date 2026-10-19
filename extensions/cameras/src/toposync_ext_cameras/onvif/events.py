@@ -1075,6 +1075,18 @@ class OnvifEventStateManager:
                        key: dict[str, str] | None = None) -> dict[str, Any]:
         runtime = await self._ensure_runtime(camera_id)
         await self._ensure_watch(runtime)
+        return self.cached_snapshot(camera_id=camera_id, topic=topic, item_name=item_name,
+                                    qualified_topic=qualified_topic, source=source, key=key)
+
+    def cached_snapshot(self, *, camera_id: str, topic: str, item_name: str,
+                        qualified_topic: str = "", source: dict[str, str] | None = None,
+                        key: dict[str, str] | None = None) -> dict[str, Any]:
+        """Inspect existing observation without connecting or renewing its demand."""
+        runtime = self._runtimes.get(camera_id)
+        if runtime is None:
+            return {"camera_id": camera_id, "known": False, "available": False,
+                    "value": None, "observation": "not_started"}
+        observation = "not_started" if runtime.task is None and runtime.session == 0 else "observed"
         candidates = [state for state in runtime.states.values()
                       if state.descriptor.topic == topic and state.descriptor.item_name == item_name
                       and (not qualified_topic or state.descriptor.qualified_topic == qualified_topic)
@@ -1087,10 +1099,10 @@ class OnvifEventStateManager:
         if len(candidates) == 1:
             return {**candidates[0].as_dict(camera_id=runtime.context.camera_id,
                                            available=runtime.watch_available, error=runtime.error),
-                    "session": runtime.session}
+                    "session": runtime.session, "observation": observation}
         return {"camera_id": camera_id, "topic": topic, "item_name": item_name,
                 "known": False, "value": None, "available": runtime.watch_available,
-                "session": runtime.session,
+                "session": runtime.session, "observation": observation,
                 "error": "Ambiguous ONVIF property; select its namespace, source and key" if len(candidates) > 1 or (not qualified_topic and len(namespaces) > 1)
                          else runtime.error or "ONVIF property not synchronized"}
 

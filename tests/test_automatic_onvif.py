@@ -223,6 +223,56 @@ def test_native_provider_cannot_plan_without_qualification_service():
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("change", [None, "fallback", "hold", "profile", "categories"])
+def test_saved_native_qualification_survives_transport_failure_but_not_material_changes(change):
+    async def scenario():
+        config, activity = native_fixture()
+        services = ServiceRegistry()
+        register_automatic_planner(services)
+        services.register("automatic.qualify.camera_native", lambda **kwargs: None)
+        result = await services.call(
+            "automatic.plan.camera_observation", intent=activity, configuration=config
+        )
+        graph = result["graph"]
+        graph["meta"]["automatic"] = {"intent_id": activity.id}
+        config.pipelines.append(
+            Pipeline(name="automatic_" + activity.id, graph=graph, enabled=False)
+        )
+        attempts = []
+
+        def failed(**kwargs):
+            attempts.append(True)
+            raise RuntimeError("Transport unavailable")
+
+        services.register("automatic.qualify.camera_native", failed)
+        native = activity.condition["native_observation"]
+        if change == "fallback":
+            native["fallback_to_video"] = True
+        elif change == "hold":
+            native["sources"]["a"]["signal"]["hold_seconds"] += 1
+        elif change == "categories":
+            native["categories"] = activity.condition["categories"] = ["car"]
+        elif change == "profile":
+            native["sources"]["a"]["profile_token"] = "changed"
+            config.settings.extensions["com.toposync.cameras"]["devices"][0]["sources"][0][
+                "origin"
+            ]["profile_token"] = "changed"
+        result = await services.call(
+            "automatic.plan.camera_observation", intent=activity, configuration=config
+        )
+        if change in {None, "fallback"}:
+            assert "graph" in result and not attempts
+            assert (
+                result["graph"]["meta"]["native_observation_qualification"]
+                == graph["meta"]["native_observation_qualification"]
+            )
+        else:
+            assert "graph" not in result and attempts == [True]
+            assert result["reason"] == "native_source_qualification_required"
+
+    asyncio.run(scenario())
+
+
 def test_gate_reports_false_unknown_and_failure_without_repeating_unchanged_state():
     async def scenario():
         services = ServiceRegistry()

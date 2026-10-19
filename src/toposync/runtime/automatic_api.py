@@ -59,6 +59,7 @@ def install_automatic_routes(app: FastAPI, owner) -> None:
             )
             snapshot["catalog"] = await controller.catalog(config)
             snapshot["targets"] = await controller.targets(config)
+            await controller.add_diagnostics(snapshot)
             snapshot["provider_errors"] = sorted(controller.provider_failures)
             snapshot["activation_errors"] = dict(orchestrator._activation_errors)
             snapshot["manual_flows"] = dict(controller.demands.flow_status)

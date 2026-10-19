@@ -606,6 +606,39 @@ def plan_observation(*, intent, configuration):
     }
 
 
+def observation_diagnostics(*, intents, configuration, events, health):
+    records = health.snapshot()["sources"]
+    result = []
+    for intent in intents:
+        condition = ObservationCondition.model_validate(intent.condition)
+        native = condition.native_observation
+        sources, _, _ = resolve_sources(intent.scope, configuration)
+        observations = []
+        for source in sources:
+            candidates = [record for record in records if record["camera_id"] == source["camera_id"]
+                          and record["camera_source_id"] == source["source_id"]]
+            latest = max(candidates, key=lambda record: record["last_seen_at_unix"], default={})
+            observation = {"camera_id": source["camera_id"], "source_id": source["source_id"],
+                           "camera_name": source["camera_name"], "source_name": source["source_name"],
+                           "video": latest.get("status", "unknown")}
+            if native and native.enabled:
+                binding = native.sources.get(source["camera_id"])
+                raw = events.cached_snapshot(camera_id=source["camera_id"],
+                    **binding.signal.model_dump(exclude={"coverage_confirmed", "hold_seconds"})) if binding else {}
+                if raw.get("observation") == "not_started":
+                    state = "not_observed"
+                elif raw.get("available") is not True:
+                    state = "unavailable"
+                elif raw.get("known") is not True or type(raw.get("value")) is not bool:
+                    state = "unknown"
+                else:
+                    state = "active" if raw["value"] else "inactive"
+                observation.update(native=state, fallback_to_video=native.fallback_to_video)
+            observations.append(observation)
+        result.append({"id": intent.id, "diagnostics": {"native_observation": {"sources": observations}}})
+    return result
+
+
 def observation_targets(*, configuration):
     settings = CamerasExtensionSettings.model_validate(
         configuration.settings.extensions.get("com.toposync.cameras", {})
@@ -691,12 +724,22 @@ def register_automatic_planner(services):
             and condition.native_observation
             and condition.native_observation.enabled
         ):
+            qualification = hashlib.sha256(json.dumps({
+                "preparation": result["preparation"],
+                "selection": condition.native_observation.model_dump(exclude={"fallback_to_video"}),
+            }, sort_keys=True).encode()).hexdigest()
+            previous = next((pipeline for pipeline in kwargs["configuration"].pipelines
+                             if pipeline.graph.get("meta", {}).get("automatic", {}).get("intent_id") == kwargs["intent"].id), None)
+            if previous and previous.graph["meta"].get("native_observation_qualification") == qualification:
+                result["graph"]["meta"]["native_observation_qualification"] = qualification
+                return result
             try:
                 await services.call(
                     "automatic.qualify.camera_native",
                     configuration=kwargs["configuration"],
                     selection=condition.native_observation,
                 )
+                result["graph"]["meta"]["native_observation_qualification"] = qualification
             except Exception:
                 result.pop("graph")
                 result.update(state="unavailable", reason="native_source_qualification_required")

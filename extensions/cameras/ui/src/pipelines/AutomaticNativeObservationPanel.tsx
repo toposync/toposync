@@ -7,6 +7,17 @@ import { CameraOnvifRecipeOptimization } from "../settings/CameraOnvifRecipeOpti
 type Props = Parameters<PipelineOperatorPanel["render"]>[0];
 type Binding = { source_id: string; profile_token: string; signal: CameraOnvifOptimization };
 
+export function AutomaticObservationStatus({ status, i18n }: { status: Record<string, unknown>; i18n: Props["i18n"] }) {
+  const { t } = i18n.useI18n();
+  const sources = (status.sources || []) as Array<{ camera_id: string; source_id: string; camera_name: string; source_name: string; video: string; native?: string; fallback_to_video?: boolean }>;
+  return <div role="status">{sources.map(source => <p key={`${source.camera_id}/${source.source_id}`}>
+    <strong>{source.camera_name} · {source.source_name}</strong><br />
+    {t(`ext.cameras.automatic.status.video_${source.video}`)}
+    {source.native && <><br />{t(`ext.cameras.automatic.status.native_${source.native}`)}<br />
+      {t(source.fallback_to_video ? "ext.cameras.automatic.status.fallback_allowed" : "ext.cameras.automatic.native.no_fallback")}</>}
+  </p>)}</div>;
+}
+
 export function AutomaticNativeObservationPanel({ config, sources = [], observationCategories = [], replaceConfig, onValidityChange, i18n }: Props) {
   const { t } = i18n.useI18n();
   const enabled = config.enabled === true;

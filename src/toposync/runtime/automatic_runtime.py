@@ -98,6 +98,10 @@ class AutomaticController:
                 for entry in entries
             ):
                 raise ValueError("Invalid automatic capability metadata")
+            if identifier.startswith("automatic.diagnostics.") and any(
+                not isinstance(entry.get("diagnostics"), dict) for entry in entries
+            ):
+                raise ValueError("Invalid automatic diagnostics")
         except Exception:
             # A broken optional provider cannot stop unrelated manual pipelines or retry every poll.
             self.provider_failures[identifier] = fingerprint
@@ -536,6 +540,30 @@ class AutomaticController:
         self.failed_demands = {
             key: value for key, value in self.failed_demands.items() if key in retained
         }
+
+    async def add_diagnostics(self, snapshot):
+        if self._privacy_barrier is not None:
+            return
+        groups = {}
+        for intent in self.state.intents:
+            activity = snapshot["activities"].get(intent.id, {})
+            capability = self.capabilities.get(intent.capability, {})
+            provider = capability.get("diagnostics_provider")
+            if provider and capability.get("available") and activity.get("state") in {"active", "waiting"}:
+                effective = intent.model_copy(update={"condition": {
+                    **self.state.defaults.get(intent.capability, {}), **intent.condition, **intent.customizations,
+                }})
+                groups.setdefault(provider, []).append(effective)
+        for provider, intents in groups.items():
+            entries = await self._provider(provider, self.config, intents=intents, configuration=self.config)
+            allowed = {intent.id for intent in intents}
+            reported = set()
+            for entry in entries:
+                if entry["id"] in allowed and isinstance(entry.get("diagnostics"), dict):
+                    snapshot["activities"][entry["id"]]["diagnostics"] = entry["diagnostics"]
+                    reported.add(entry["id"])
+            for identifier in allowed - reported:
+                snapshot["activities"][identifier]["diagnostics_unavailable"] = True
 
     def snapshot(self, activation_errors=None, runtime_error=None):
         activities = {key: dict(value) for key, value in self.statuses.items()}

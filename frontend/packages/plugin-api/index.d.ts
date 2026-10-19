@@ -216,6 +216,7 @@ export type PipelineOperatorPanel = {
   operatorId: string;
   placement?: "replace" | "after";
   renderSummary?: (config: Record<string, unknown>) => import("react").ReactNode;
+  renderStatus?: (status: Record<string, unknown>) => import("react").ReactNode;
   render: (args: {
     i18n: HostI18n;
     operatorId: string;

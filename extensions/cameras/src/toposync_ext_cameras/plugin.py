@@ -2100,6 +2100,9 @@ class CamerasExtension(BaseExtension):
                 await qualify_observation_signal(camera_id=camera_id, source=source.model_dump(mode="json"),
                     selection=binding.signal, catalog=onvif_capabilities, events=onvif_event_manager)
         services.register("automatic.qualify.camera_native", qualify_native_observation)
+        from .automatic import observation_diagnostics
+        services.register("automatic.diagnostics.camera_observation", lambda **kwargs:
+            observation_diagnostics(**kwargs, events=onvif_event_manager, health=get_global_source_health_store()))
 
         async def _svc_onvif_events_list(*, camera_id: str) -> dict[str, Any]:
             return await onvif_event_manager.list_descriptors(str(camera_id or "").strip())

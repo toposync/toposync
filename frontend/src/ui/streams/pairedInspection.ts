@@ -63,7 +63,7 @@ function reference(value: unknown): value is FrameReference {
     && Number.isSafeInteger(r.generation) && r.generation >= 0 && Number.isSafeInteger(r.sequence) && r.sequence > 0);
 }
 
-export async function readPairedResponse(response: Response): Promise<Uint8Array> {
+export async function readInspectionResponse(response: Response): Promise<Uint8Array> {
   if (!response.body || Number(response.headers.get("content-length")) > maximumPairedBytes)
     throw new Error("inspection_frame_capacity");
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];

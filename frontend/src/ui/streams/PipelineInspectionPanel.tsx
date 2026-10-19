@@ -6,70 +6,132 @@ import { listPipelines, openPipelineInspection, getPipelineInspection, closePipe
 import { i18n } from "../../util/i18n";
 import { Icon } from "../Icon";
 import { PairedInspectionVideo } from "./PairedInspectionVideo";
+import { inspectionRead } from "./inspectionRead";
+import { inspectionSources } from "./inspectionSources";
+import { readInspectionResponse } from "./pairedInspection";
 import "./pipelineInspection.css";
 
-export function PipelineInspectionPanel({ transmissionId, playerElement, onPairedChange }: {
-  transmissionId: string; playerElement: React.RefObject<HTMLDivElement>; onPairedChange: (active: boolean) => void;
+export function PipelineInspectionPanel({ transmissionId, playerElement, onPairedChange, enabled = true }: {
+  transmissionId?: string; playerElement?: React.RefObject<HTMLDivElement>; onPairedChange?: (active: boolean) => void; enabled?: boolean;
 }) {
   const { t } = i18n.useI18n();
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [focused, setFocused] = useState("");
+  const [cameras, setCameras] = useState<string[]>([]);
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [visible, setVisible] = useState(!document.hidden);
+  const active = enabled && visible && open;
+  const configuredCameras = [...new Map(pipelines.flatMap(pipeline => inspectionSources(pipeline.graph)).map(source => [source.id, source])).values()];
+  const choices = cameras.length ? pipelines.filter(pipeline => inspectionSources(pipeline.graph).some(source => cameras.includes(source.id))) : pipelines;
+  useEffect(() => {
+    const changed = () => setVisible(!document.hidden);
+    document.addEventListener("visibilitychange", changed);
+    return () => document.removeEventListener("visibilitychange", changed);
+  }, []);
+  useEffect(() => {
+    if (!active) return;
+    let canceled = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2500);
+    setLoading(true); setError(false);
+    listPipelines({ signal: controller.signal }).then(items => { if (!canceled) setPipelines(items); })
+      .catch(() => { if (!canceled) setError(true); })
+      .finally(() => { window.clearTimeout(timeout); if (!canceled) setLoading(false); });
+    return () => { canceled = true; controller.abort(); window.clearTimeout(timeout); };
+  }, [active]);
+  function close() { setOpen(false); setSelected([]); setFocused(""); setCameras([]); trigger.current?.focus(); }
+  useEffect(() => {
+    if (!open) return;
+    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    document.addEventListener("keydown", keydown);
+    return () => document.removeEventListener("keydown", keydown);
+  }, [open]);
+  return <>
+    <button ref={trigger} type="button" className="iconButton streamsTileOverlayButton" title={t("inspection.open")} aria-label={t("inspection.open")} aria-expanded={open} onClick={() => setOpen(true)}><Icon name="eye" /></button>
+    {open ? createPortal(<aside className={`pipelineInspectionPanel${selected.length > 1 ? " isMultiple" : ""}`} aria-label={t("inspection.open")}>
+      <button type="button" autoFocus onClick={close}>{t("inspection.close")}</button>
+      <h2>{t("inspection.open")}</h2>
+      <p className="pipelineInspectionLimit">{t("inspection.multiple_limit")}</p>
+      {configuredCameras.length > 0 ? <details><summary>{t("inspection.configured_cameras")}</summary><fieldset className="pipelineInspectionChoices"><legend>{t("inspection.configured_cameras")}</legend>
+        {configuredCameras.map(camera => <label key={camera.id}><input type="checkbox" checked={cameras.includes(camera.id)} onChange={event =>
+          setCameras(previous => event.target.checked ? [...previous, camera.id] : previous.filter(id => id !== camera.id))} />{camera.name}</label>)}
+        <small>{t("inspection.camera_filter")}</small>
+      </fieldset></details> : null}
+      <fieldset className="pipelineInspectionChoices"><legend>{t("inspection.choose_multiple")}</legend>
+        {choices.map(pipeline => <label key={pipeline.name}><input type="checkbox" checked={selected.includes(pipeline.name)}
+          disabled={!selected.includes(pipeline.name) && selected.length >= 4} onChange={event => {
+            setSelected(previous => event.target.checked ? [...previous, pipeline.name] : previous.filter(name => name !== pipeline.name));
+            if (event.target.checked && !focused) setFocused(pipeline.name);
+            if (!event.target.checked && focused === pipeline.name) setFocused(selected.find(name => name !== pipeline.name) || "");
+          }} />{pipeline.display_name || pipeline.name}</label>)}
+      </fieldset>
+      {error ? <p role="alert">{t("inspection.failed")}</p> : loading ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : null}
+      {active ? <div className="pipelineInspectionFlows">{pipelines.filter(pipeline => selected.includes(pipeline.name)).map(pipeline =>
+        <InspectionFlow key={pipeline.name} pipeline={pipeline} transmissionId={transmissionId}
+          onRemove={() => { setSelected(previous => previous.filter(name => name !== pipeline.name)); if (focused === pipeline.name) setFocused(selected.find(name => name !== pipeline.name) || ""); }}
+          playerElement={focused === pipeline.name ? playerElement : undefined}
+          onPairedChange={focused === pipeline.name ? onPairedChange : undefined}
+          onFocus={playerElement && focused !== pipeline.name ? () => setFocused(pipeline.name) : undefined} />)}</div> : <p>{t("inspection.suspended")}</p>}
+    </aside>, document.body) : null}
+  </>;
+}
+
+function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChange, onFocus, onRemove }: {
+  pipeline: Pipeline; transmissionId?: string; playerElement?: React.RefObject<HTMLDivElement>;
+  onPairedChange?: (active: boolean) => void; onFocus?: () => void;
+  onRemove: () => void;
+}) {
+  const { t } = i18n.useI18n();
+  const article = useRef<HTMLElement>(null);
+  const preview = useRef<HTMLDivElement>(null);
+  const [onscreen, setOnscreen] = useState(true);
   const [snapshot, setSnapshot] = useState<InspectionSnapshot | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [loadingPipelines, setLoadingPipelines] = useState(false);
-  const [visible, setVisible] = useState(!document.hidden);
   const [now, setNow] = useState(Date.now());
   const [loadedImage, setLoadedImage] = useState("");
+  const [image, setImage] = useState("");
   const [frozen, setFrozen] = useState(false);
   const [frozenAt, setFrozenAt] = useState(0);
   const [boxes, setBoxes] = useState(true);
   const [layers, setLayers] = useState<ReadonlySet<string>>(() => new Set(["pose", "tracks", "trails"]));
   const [selectedNodes, setSelectedNodes] = useState<ReadonlySet<string>>();
-  const selectedPipeline = pipelines.find(pipeline => pipeline.name === selected);
-  const graph = selectedPipeline?.graph as { nodes?: Array<{ id: string; operator: string; config?: { transmission_id?: string } }> } | undefined;
-  const publication = graph?.nodes?.find(node => node.operator === "stream.publish_video" && node.config?.transmission_id === transmissionId);
-  const paired = Boolean(open && visible && publication && snapshot);
-  useEffect(() => { onPairedChange(paired); return () => onPairedChange(false); }, [paired, onPairedChange]);
-  useEffect(() => { setFrozen(false); setSelectedNodes(undefined); }, [selected, open]);
+  const graph = pipeline.graph as { nodes?: Array<{ id: string; operator: string; config?: { transmission_id?: string } }> };
+  const publications = graph.nodes?.filter(node => node.operator === "stream.publish_video") || [];
+  const publication = publications.find(node => node.config?.transmission_id === transmissionId) || publications[0];
+  const inPlayer = Boolean(playerElement && publication?.config?.transmission_id === transmissionId);
+  const target = inPlayer ? playerElement! : preview;
+  const paired = Boolean(onscreen && publication && snapshot);
+  useEffect(() => { onPairedChange?.(paired && inPlayer); return () => onPairedChange?.(false); }, [paired, inPlayer, onPairedChange]);
   useEffect(() => {
-    const changed = () => { setVisible(!document.hidden); setSnapshot(null); };
-    document.addEventListener("visibilitychange", changed);
-    return () => document.removeEventListener("visibilitychange", changed);
+    const observer = new IntersectionObserver(entries => setOnscreen(entries.some(entry => entry.isIntersecting)));
+    if (article.current) observer.observe(article.current);
+    return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    if (!open || !visible) { setLoadingPipelines(false); return; }
-    let canceled = false;
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 2500);
-    setLoadingPipelines(true); setError(false); setPipelines([]);
-    listPipelines({ signal: controller.signal }).then(items => { if (!canceled && !controller.signal.aborted) setPipelines(items); })
-      .catch(() => { if (!canceled) setError(true); })
-      .finally(() => { window.clearTimeout(timeout); if (!canceled) setLoadingPipelines(false); });
-    return () => { canceled = true; controller.abort(); window.clearTimeout(timeout); };
-  }, [open, visible]);
-  useEffect(() => {
-    if (!open || !visible) return;
-    setNow(Date.now());
+    if (!onscreen) return;
     const timer = window.setInterval(() => setNow(Date.now()), 100);
     return () => window.clearInterval(timer);
-  }, [open, visible]);
+  }, [onscreen]);
   useEffect(() => {
-    setSnapshot(null); setLoadedImage(""); setLoading(false); setError(false);
-    if (!open || !visible || !selected) return;
-    let canceled = false, session = "", released = false, timer = 0, timeout = 0, after = 0;
+    setSnapshot(null); setLoadedImage(""); setLoading(false); setError(false); setFrozen(false);
+    if (!onscreen) return;
+    let canceled = false, session = "", released = false, timer = 0, after = 0;
     const controller = new AbortController();
     const release = () => {
       if (session && !released) { released = true; void closePipelineInspection(session).catch(() => {}); }
     };
     setLoading(true);
     async function poll() {
-      timeout = window.setTimeout(() => controller.abort(), 2500);
       try {
-        const options = { signal: controller.signal, after };
-        const value = session ? await getPipelineInspection(session, options) : await openPipelineInspection(selected, options);
+        const value = await inspectionRead(signal => {
+          const options = { signal, after };
+          return session ? getPipelineInspection(session, options) : openPipelineInspection(pipeline.name, options);
+        }, controller.signal);
         session = value.session;
         if (canceled) { release(); return; }
         if (controller.signal.aborted) throw new Error("inspection_timeout");
@@ -79,44 +141,47 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
       } catch {
         release();
         if (!canceled) { setSnapshot(null); setLoadedImage(""); setError(true); setLoading(false); }
-      } finally {
-        window.clearTimeout(timeout);
       }
     }
     void poll();
-    return () => { canceled = true; controller.abort(); window.clearTimeout(timer); window.clearTimeout(timeout); release(); };
-  }, [open, visible, selected, publication?.id]);
+    return () => { canceled = true; controller.abort(); window.clearTimeout(timer); release(); };
+  }, [onscreen, pipeline.name, publication?.id]);
   const current = snapshot?.nodes.find(node => (!selectedNodes || selectedNodes.has(node.node_id)) && node.image_available && node.expires_at !== null && node.expires_at * 1000 > now);
-  const image = current && snapshot ? resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(snapshot.session)}/images/${encodeURIComponent(current.node_id)}/${current.image_sequence}`) : "";
-  function close() { setOpen(false); setSelected(""); setSnapshot(null); setError(false); setLoadedImage(""); trigger.current?.focus(); }
+  const imageUrl = !publication && current && snapshot ? resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(snapshot.session)}/images/${encodeURIComponent(current.node_id)}/${current.image_sequence}`) : "";
   useEffect(() => {
-    if (!open) return;
-    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
-    document.addEventListener("keydown", keydown);
-    return () => document.removeEventListener("keydown", keydown);
-  }, [open]);
-  return <>
-    <button ref={trigger} type="button" className="iconButton streamsTileOverlayButton" title={t("inspection.open")} aria-label={t("inspection.open")} aria-expanded={open} onClick={() => setOpen(true)}><Icon name="eye" /></button>
-    {open ? createPortal(<aside className="pipelineInspectionPanel" aria-label={t("inspection.open")}>
-      <button type="button" autoFocus onClick={close}>{t("inspection.close")}</button>
-      <h2>{t("inspection.open")}</h2>
-      <p className="pipelineInspectionLimit">{t(paired ? "inspection.paired_limit" : "inspection.limit")}</p>
-      <label className="pipelineInspectionSelect">{t("inspection.choose")}
-        <select value={selected} onChange={event => setSelected(event.target.value)}>
-          <option value="">{t("inspection.choose")}</option>
-          {pipelines.map(pipeline => <option key={pipeline.name} value={pipeline.name}>{pipeline.display_name || pipeline.name}</option>)}
-        </select>
-      </label>
-      {error ? <p role="alert">{t("inspection.failed")}</p> : loading || loadingPipelines ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
-      {snapshot && <div className="pipelineInspectionControls">
+    setImage(""); setLoadedImage("");
+    if (!imageUrl) return;
+    const controller = new AbortController();
+    let url = "";
+    void inspectionRead(async signal => {
+      const response = await fetch(imageUrl, { signal, credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) throw new Error("inspection_image_unavailable");
+      return readInspectionResponse(response);
+    }, controller.signal).then(bytes => {
+      if (!controller.signal.aborted) { url = URL.createObjectURL(new Blob([new Uint8Array(bytes).buffer], { type: "image/jpeg" })); setImage(url); }
+    }).catch(() => {});
+    return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
+  }, [imageUrl]);
+  const sources = [...new Set(snapshot?.nodes.flatMap(node => node.frame ? [`${node.frame.device_id || ""} / ${node.frame.source_id}`] : []))];
+  return <article className="pipelineInspectionFlow" ref={article}>
+    <h3>{pipeline.display_name || pipeline.name}</h3>
+    <button type="button" onClick={onRemove}>{t("inspection.remove_flow")}</button>
+    {onFocus && publications.some(node => node.config?.transmission_id === transmissionId) ? <button type="button" onClick={onFocus}>{t("inspection.show_in_player")}</button> : null}
+    <p className="pipelineInspectionLimit">{t(publication ? "inspection.paired_video" : "inspection.frame")}</p>
+    {sources.length ? <p>{t("inspection.sources")}: {sources.join(" · ")}</p> : null}
+    {!inPlayer && publication ? <div className="pipelineInspectionPreview" ref={preview} /> : null}
+    {!onscreen ? <p>{t("inspection.suspended")}</p> : error ? <p role="alert">{t("inspection.failed")}</p> : loading ? <p role="status">{t("inspection.loading")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
+      {snapshot && <details className="pipelineInspectionLayers"><summary>{t("inspection.layers")}</summary><div className="pipelineInspectionControls">
         <label><input type="checkbox" checked={boxes} onChange={event => setBoxes(event.target.checked)} />{t("inspection.boxes")}</label>
-        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding", "groups", "gestures", "mapping", "zones", "activity"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
+        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding", "groups", "gestures", "mapping", "zones", "motion", "activity"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
           const next = new Set(layers); if (event.target.checked) next.add(layer); else next.delete(layer); setLayers(next);
         }} />{t(`inspection.${layer}`)}</label>)}
         {paired && <button type="button" aria-pressed={frozen} onClick={() => { setFrozenAt(Date.now()); setFrozen(!frozen); }}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>}
-      </div>}
+        {[...layers].filter(layer => !snapshot.nodes.some(node => node.expires_at !== null && node.expires_at * 1000 > now && (layer === "motion" ? node.motion : node.visuals.some(visual => visual.layer === layer)))).map(layer =>
+          <small key={layer}>{t("inspection.layer_unavailable", { layer: t(`inspection.${layer}`) })}</small>)}
+      </div></details>}
       <div className="pipelineInspectionGrid">
-        {!paired && <section aria-label={t("inspection.frame")}>
+        {!publication && <section aria-label={t("inspection.frame")}>
           <h3>{t("inspection.frame")}</h3>
           <p>{t("inspection.raw")}</p>
           {image && current ? <div className="pipelineInspectionImage" style={{ aspectRatio: `${current.geometry?.width || 1} / ${current.geometry?.height || 1}` }}>
@@ -128,7 +193,7 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
           {boxes && current && loadedImage === image ? <ul>{current.detections.map((detection, index) => <li key={index}>{detection.label} · {t("inspection.score")}: {detection.score.toFixed(3)}</li>)}</ul> : null}
           {current?.frame ? <details><summary>{current.node_id}</summary><pre>{JSON.stringify({ frame: current.frame, geometry: current.geometry, model: current.model_id, revision: snapshot?.revision }, null, 2)}</pre></details> : null}
         </section>}
-        <section aria-label={t("inspection.open")}>
+        <details className="pipelineInspectionDetails"><summary>{t("inspection.operators")}</summary>
           {snapshot?.nodes.map(node => {
             const expired = node.expires_at !== null && node.expires_at * 1000 <= (frozen && paired ? frozenAt : now);
             const state = expired ? "expired" : node.state;
@@ -143,7 +208,7 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
               <small>{t("inspection.counts")}: {node.received_count} / {node.produced_count} / {node.filtered_count}</small>
               {state === "waiting" ? <small>{t("inspection.waiting")}</small> : null}
               {node.reason ? <small>{t(["category_rejected", "image_unavailable", "inference_interval", "sample_expired", "operator_error", "flow_limit", "inspection_capacity", "delivery_not_accepted", "execution_stopped", "mask_geometry_unavailable"].includes(node.reason) ? `inspection.${node.reason}` : "inspection.reason")}</small> : null}
-              {!expired && node.motion ? <small>{t("inspection.motion")}: {node.motion.current} / {node.motion.maximum} ({t("inspection.window", {seconds:node.motion.window_seconds,samples:node.motion.samples})})</small> : null}
+              {!expired && layers.has("motion") && node.motion ? <small>{t("inspection.motion")}: {node.motion.current} / {node.motion.maximum} ({t("inspection.window", {seconds:node.motion.window_seconds,samples:node.motion.samples})})</small> : null}
               {!expired && (!selectedNodes || selectedNodes.has(node.node_id)) && node.visuals.filter(visual => layers.has(visual.layer)).map((visual, index) => <div className="pipelineInspectionVisual" key={index}>
                 {t(`inspection.${visual.layer}`, {}, visual.layer)}{visual.subject_id && visual.access_scope === "diagnostic_private" ? ` · ${visual.subject_id}` : ""}
                 {visual.label ? ` · ${["groups", "gestures"].includes(visual.layer) ? t(`inspection.${visual.label}`, {}, visual.label) : visual.label}` : ""}
@@ -165,14 +230,13 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
               </div>)}
             </article>;
           })}
-        </section>
+        </details>
       </div>
       {snapshot && snapshot.dropped > 0 ? <p>{t("inspection.reduced")}: {snapshot.dropped}</p> : null}
-    </aside>, document.body) : null}
-    {paired && publication && snapshot && playerElement.current ? createPortal(
+    {paired && publication && snapshot && target.current ? createPortal(
       <PairedInspectionVideo session={snapshot.session} nodeId={publication.id} frozen={frozen} boxes={boxes}
         layers={layers} selectedNodes={selectedNodes}
         onSnapshot={setSnapshot} onClosed={() => { void closePipelineInspection(snapshot.session).catch(() => {}); setSnapshot(null); setError(true); }} />,
-      playerElement.current) : null}
-  </>;
+      target.current) : null}
+  </article>;
 }

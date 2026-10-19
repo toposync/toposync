@@ -1,5 +1,5 @@
 declare const require: any;
-import { decodePairedFrame, expirePrivateVisuals, placeInspectionLabel, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
+import { decodePairedFrame, expirePrivateVisuals, placeInspectionLabel, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readInspectionResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
 const test: (name: string, fn: () => void | Promise<void>) => void = require("node:test").test;
 const assert: any = require("node:assert/strict");
 
@@ -159,10 +159,10 @@ test("private frozen layers expire without discarding paired public geometry", (
 test("reader cancels an oversized stream even without Content-Length", async () => {
   let canceled = false;
   const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(400001)); }, cancel() { canceled = true; } });
-  await assert.rejects(readPairedResponse(new Response(stream)), /capacity/);
+  await assert.rejects(readInspectionResponse(new Response(stream)), /capacity/);
   assert.equal(canceled, true);
   const bytes = encode(fixture());
-  assert.deepEqual(await readPairedResponse(new Response(new Uint8Array(bytes).buffer)), bytes);
+  assert.deepEqual(await readInspectionResponse(new Response(new Uint8Array(bytes).buffer)), bytes);
 });
 
 test("pose joints preserve missing slots and require the exact capture and selected operator", () => {

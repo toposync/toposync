@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { resolveToposyncUrl, type InspectionSnapshot } from "@toposync/plugin-api";
 import { i18n } from "../../util/i18n";
-import { decodePairedFrame, expirePrivateVisuals, placeInspectionLabel, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
+import { inspectionRead } from "./inspectionRead";
+import { decodePairedFrame, expirePrivateVisuals, placeInspectionLabel, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readInspectionResponse, type PairedInspectionMetadata } from "./pairedInspection";
 
 export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, selectedNodes, onSnapshot, onClosed }: {
   session: string; nodeId: string; frozen: boolean; boxes: boolean; layers: ReadonlySet<string>; selectedNodes?: ReadonlySet<string>;
@@ -124,22 +125,26 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
         || presented.snapshot.policy_revision !== next.snapshot.policy_revision;
     }
     async function poll() {
-      const timeout = window.setTimeout(() => controller.abort(), 2500);
       let delay = options.current.layers.has("masks") ? 500 : 200;
       try {
-        const response = await fetch(resolveToposyncUrl(`/api/streams/inspection/${encodeURIComponent(session)}/${encodeURIComponent(nodeId)}/frame${options.current.layers.has("masks") ? "?masks=true" : ""}`),
-          { credentials: "same-origin", cache: "no-store", signal: controller.signal });
+        const response = await inspectionRead(async signal => {
+          const response = await fetch(resolveToposyncUrl(`/api/streams/inspection/${encodeURIComponent(session)}/${encodeURIComponent(nodeId)}/frame${options.current.layers.has("masks") ? "?masks=true" : ""}`),
+            { credentials: "same-origin", cache: "no-store", signal });
+          if (response.status === 409 || response.status === 429) return { status: response.status, detail: (await response.json()).detail };
+          if (!response.ok) throw new Error("inspection_unavailable");
+          return { status: response.status, frame: decodePairedFrame(await readInspectionResponse(response)) };
+        }, controller.signal);
         if (disposed) return;
         if (response.status === 409 || response.status === 429) {
-          if (response.status === 409 && (await response.json()).detail !== "inspection_frame_not_paired")
+          if (response.status === 409 && response.detail !== "inspection_frame_not_paired")
             throw new Error("inspection_access_or_capture_changed");
-          if (++emptyReads >= 25) throw new Error("inspection_no_frames");
+          emptyReads = Math.min(25, emptyReads + 1);
           if (!options.current.frozen) clear();
-          setState(options.current.frozen && presented ? "paired" : "waiting"); delay = response.status === 429 ? 1000 : 200;
+          setState(options.current.frozen && presented ? "paired" : "waiting"); delay = response.status === 429 || emptyReads >= 25 ? 1000 : 200;
           return;
         }
-        if (!response.ok) throw new Error("inspection_unavailable");
-        const { metadata, jpeg, masks } = decodePairedFrame(await readPairedResponse(response));
+        if (!response.frame) throw new Error("inspection_unavailable");
+        const { metadata, jpeg, masks } = response.frame;
         if (disposed) return;
         if (metadata.snapshot.session !== session || Date.now() / 1000 >= metadata.expires_at)
           throw new Error("inspection_expired");
@@ -175,7 +180,6 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
         if (!disposed) { clear(); setState("failed"); options.current.onClosed(); }
         disposed = true; controller.abort();
       } finally {
-        window.clearTimeout(timeout);
         if (!disposed) timer = window.setTimeout(poll, delay);
       }
     }

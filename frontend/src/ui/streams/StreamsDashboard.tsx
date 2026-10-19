@@ -3752,7 +3752,7 @@ export function StreamTilePlayer({
         </div>
 
 	        {controls && <div className="streamsTileOverlayActions">
-          <PipelineInspectionPanel transmissionId={transmissionId} playerElement={frameRef} onPairedChange={setInspectionPaired} />
+          <PipelineInspectionPanel transmissionId={transmissionId} playerElement={frameRef} onPairedChange={setInspectionPaired} enabled={active} />
           {variantOptions.length > 0 ? (
             <div className="streamsTileVariantControl" title={currentVariantLabel}>
               <select
@@ -4543,6 +4543,7 @@ function AvailableStreamsDashboard({
 
       {!embedded ? <div className={["streamsHud", uiVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsHudGroup">
+          {controls ? <PipelineInspectionPanel enabled={isActive} /> : null}
           <button
             type="button"
             className={["chipButton", "streamsHudModeButton", gridMode === "2x2" ? "isActive" : ""].filter(Boolean).join(" ")}

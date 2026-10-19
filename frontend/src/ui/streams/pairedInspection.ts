@@ -17,6 +17,20 @@ export type InspectionBox = { points: number[][]; label: string; score: number; 
 export type ProjectedInspectionVisual = Omit<InspectionVisual, "points"> & { points: Array<number[] | null>; node: InspectionNode };
 export const maximumPairedBytes = 400_000;
 
+export function placeInspectionLabel(x: number, y: number, width: number, imageWidth: number, imageHeight: number,
+  occupied: number[][], height = 14): number[] | null {
+  if (width > imageWidth || imageHeight < height) return null;
+  x = Math.max(0, Math.min(x, imageWidth - width));
+  for (const offset of [0, -height, height, -2 * height, 2 * height]) {
+    const top = Math.max(0, Math.min(y - height + 2 + offset, imageHeight - height));
+    const box = [x, top, x + width, top + height];
+    if (occupied.some(other => box[0] < other[2] && box[2] > other[0] && box[1] < other[3] && box[3] > other[1])) continue;
+    occupied.push(box);
+    return [x, top + height - 2];
+  }
+  return null;
+}
+
 export function expirePrivateVisuals(metadata: PairedInspectionMetadata, now: number): PairedInspectionMetadata {
   let changed = false;
   const nodes = metadata.snapshot.nodes.map(node => {

@@ -16,6 +16,8 @@ from toposync.runtime.pipelines.runtime import Lifecycle
 from .association import AssociationConfig, AssociationConflict, Observation
 from .identity.pipelines import PRIVATE_DECISION_ARTIFACT, PRIVATE_EVIDENCE_ARTIFACT, occurrence_key
 from .identity.spatial import spatial_context
+from .processing.inspection import association_visual, copy_inspection_frame
+from toposync.runtime.pipelines.inspection import frame_reference
 
 
 def observation_from_packet(packet, config: AssociationConfig) -> Observation:
@@ -163,6 +165,7 @@ class AssociationRuntime(BaseOperatorRuntime):
         }
         results = self.store.ingest([observation for _, observation in pending])
         emitted = set()
+        inspected = {}
         for packet, observation in pending:
             emission = (observation.id, observation.closed)
             if emission in emitted or (observation.id, True) in emitted:
@@ -199,6 +202,21 @@ class AssociationRuntime(BaseOperatorRuntime):
             output = replace(packet, payload=payload, artifacts=artifacts)
             await context.emit(output)
             context.inspect("passed", output, reason="association_" + record["reason"])
+            if getattr(context, "inspection_active", lambda: False)():
+                reference = frame_reference(output)
+                key = json.dumps(reference, sort_keys=True) if reference else output.packet_id
+                inspected.setdefault(key, []).append(output)
+        for packets in inspected.values():
+            try:
+                packet = packets[-1]
+                artifact = packet.artifacts.get("main")
+                frame = await copy_inspection_frame(context, getattr(artifact, "data", None))
+                context.inspect("analyzed", packet, frame=frame,
+                    geometry=artifact.metadata.get("image_geometry") if artifact else None,
+                    visuals=[association_visual(item) for item in packets[:32]],
+                    reason="inspection_capacity" if len(packets) > 32 else None)
+            except Exception:
+                pass  # Diagnostic projection cannot change emitted association decisions.
 
     async def shutdown(self):
         if self.store is not None:

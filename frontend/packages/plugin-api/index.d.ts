@@ -517,6 +517,7 @@ export type InspectionVisual = {
   raster: InspectionRaster | null;
   access_scope: string;
   properties: Record<string, string | number>;
+  related_subject_ids: string[];
 };
 
 export type InspectionNode = {

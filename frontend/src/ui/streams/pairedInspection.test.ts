@@ -1,7 +1,20 @@
 declare const require: any;
-import { decodePairedFrame, expirePrivateVisuals, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
+import { decodePairedFrame, expirePrivateVisuals, placeInspectionLabel, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
 const test: (name: string, fn: () => void | Promise<void>) => void = require("node:test").test;
 const assert: any = require("node:assert/strict");
+
+test("overlay labels stay inside the frame and avoid overlap with bounded placement attempts", () => {
+  const occupied: number[][] = [];
+  assert.deepEqual(placeInspectionLabel(50, 50, 80, 100, 100, occupied), [20, 50]);
+  assert.deepEqual(placeInspectionLabel(50, 50, 80, 100, 100, occupied), [20, 36]);
+  assert.deepEqual(placeInspectionLabel(-5, 0, 20, 100, 100, occupied), [0, 12]);
+  assert.equal(placeInspectionLabel(0, 20, 101, 100, 100, occupied), null);
+  const covered = [[0, 0, 100, 100]];
+  assert.equal(placeInspectionLabel(20, 50, 30, 100, 100, covered), null);
+  assert.equal(covered.length, 1);
+  assert.deepEqual(placeInspectionLabel(0, 0, 50, 100, 100, [], 28), [0, 26]);
+  assert.equal(placeInspectionLabel(0, 0, 50, 100, 20, [], 28), null);
+});
 
 function fixture(): PairedInspectionMetadata {
   const frame = { source_id: "main", device_id: "camera", capture_instance: "capture", generation: 1, sequence: 7 };
@@ -78,7 +91,7 @@ function maskedFixture(): PairedInspectionMetadata {
   const value = fixture();
   value.snapshot.nodes[0].visuals = [{ layer: "masks", kind: "raster", points: [], connections: [],
     label: "square", score: 0.9, score_kind: "segmentation_model_score", subject_id: null,
-    local_id: null, segment_id: null, state: "sampled_mask", sample_sequences: [], access_scope: "diagnostic_private", properties: {},
+    local_id: null, segment_id: null, state: "sampled_mask", sample_sequences: [], access_scope: "diagnostic_private", properties: {}, related_subject_ids: [],
     raster: { index: 0, width: 25, height: 25, sampling: "nearest_pixel_centres" } }];
   value.masks = [{ node_id: "detect", image_sequence: 1, index: 0, width: 25, height: 25, length: 8 }];
   return value;
@@ -154,7 +167,7 @@ test("pose joints preserve missing slots and require the exact capture and selec
   const value = fixture();
   value.snapshot.nodes[0].visuals = [{ layer: "pose", kind: "points", points: [[0.2,0.3], null, [0.8,0.9]],
     connections: [[0,1],[1,2],[0,2]], subject_id: "track:1", label: "person", score: 0.7, score_kind: "pose_model_score",
-    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null, access_scope: "diagnostic_private", properties: {} }];
+    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null, access_scope: "diagnostic_private", properties: {}, related_subject_ids: [] }];
   const layers = new Set(["pose"]);
   const [visual] = projectInspectionVisuals(value, 100, layers);
   assert.deepEqual(visual.points, [[20,30], null, [80,90]]);
@@ -172,7 +185,7 @@ test("pose crop and rotation, unsupported joints and shared execution stay bound
   const node = value.snapshot.nodes[0];
   node.visuals = [{ layer: "pose", kind: "points", points: [[0.2,0.3], [0.8,0.9]],
     connections: [[0,1]], subject_id: "track:1", label: null, score: null, score_kind: null,
-    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null, access_scope: "diagnostic_private", properties: {} }];
+    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null, access_scope: "diagnostic_private", properties: {}, related_subject_ids: [] }];
   node.geometry!.to_source = [[0, -0.5, 80], [0.5, 0, 10], [0, 0, 1]];
   value.snapshot.nodes.push({ ...node, node_id: "logical-consumer" });
   const layers = new Set(["pose"]);

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { resolveToposyncUrl, type InspectionSnapshot } from "@toposync/plugin-api";
 import { i18n } from "../../util/i18n";
-import { decodePairedFrame, expirePrivateVisuals, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
+import { decodePairedFrame, expirePrivateVisuals, placeInspectionLabel, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
 
 export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, selectedNodes, onSnapshot, onClosed }: {
   session: string; nodeId: string; frozen: boolean; boxes: boolean; layers: ReadonlySet<string>; selectedNodes?: ReadonlySet<string>;
@@ -58,12 +58,21 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
       const drawings = options.current.boxes ? projectInspectionBoxes(presented, presentedAt, options.current.selectedNodes) : [];
       const visuals = projectInspectionVisuals(presented, presentedAt, options.current.layers, options.current.selectedNodes);
       context.lineWidth = 2; context.strokeStyle = "#00ff9d"; context.fillStyle = "#00ff9d";
-      context.font = "12px sans-serif";
+      const fontSize = Math.max(12, Math.ceil(12 * element.width / (element.clientWidth || element.width)));
+      context.font = `${fontSize}px sans-serif`;
+      const occupied: number[][] = [];
+      const label = (text: string, x: number, y: number) => {
+        const position = placeInspectionLabel(x, y, context.measureText(text).width + 4, element.width, element.height, occupied, fontSize + 2);
+        if (!position) return;
+        context.save(); context.strokeStyle = "#000"; context.lineWidth = 3;
+        context.strokeText(text, position[0], position[1]);
+        context.fillText(text, position[0], position[1]); context.restore();
+      };
       for (const box of drawings) {
         context.beginPath();
         box.points.forEach(([x,y], index) => index ? context.lineTo(x,y) : context.moveTo(x,y));
         context.closePath(); context.stroke();
-        context.fillText(`${box.label} · ${box.score.toFixed(3)}`, box.points[0][0], Math.max(12, box.points[0][1] - 4));
+        label(`${box.label} · ${box.score.toFixed(3)}`, box.points[0][0], box.points[0][1] - 4);
       }
       context.strokeStyle = "#ffd166"; context.fillStyle = "#ffd166";
       for (const visual of visuals) {
@@ -74,6 +83,8 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
           }
           for (const point of visual.points) if (point) {
             context.beginPath(); context.arc(point[0], point[1], 3, 0, Math.PI * 2); context.fill();
+            if (visual.layer === "gestures" && visual.label)
+              label(`${t(`inspection.${visual.label}`, {}, visual.label)} · ${t(`inspection.${visual.state}`)}`, point[0] + 5, point[1] - 5);
           }
         } else if (visual.points.length) {
           context.beginPath();
@@ -82,11 +93,15 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
           context.stroke();
           if (visual.layer === "tracks" && visual.subject_id) {
             const point = visual.points[0]!;
-            context.fillText(visual.subject_id, point[0], Math.max(12, point[1] - 4));
+            label(visual.subject_id, point[0], point[1] - 4);
           }
           if (visual.layer === "faces" && visual.label && options.current.layers.has("identity")) {
             const point = visual.points[0]!;
-            context.fillText(visual.label, point[0], Math.max(12, point[1] - 4));
+            label(visual.label, point[0], point[1] - 4);
+          }
+          if (visual.layer === "groups") {
+            const point = visual.points[0]!;
+            label(`${t("inspection.group_member")} · ${visual.properties.member_count}`, point[0], point[1] - 4);
           }
         }
       }

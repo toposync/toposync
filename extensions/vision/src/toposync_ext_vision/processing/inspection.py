@@ -160,3 +160,60 @@ async def copy_inspection_frame(context: Any, frame: Any) -> Any:
     except Exception:
         # Diagnostic allocation cannot change the functional inference result.
         return None
+
+
+def association_visual(packet):
+    association = packet.payload["association"]
+    group = association.get("group")
+    properties = {"association_revision": association["revision"], "association_reason": association["reason"]}
+    properties.update({key: value for key, value in (association.get("components") or {}).items()
+                       if key in {"residual_metres", "error_bound_metres", "candidate_count"}})
+    members = group["members"] if group else []
+    if group:
+        properties.update(group_revision=group["revision"], member_count=len(members))
+    points = []
+    box = packet.payload.get("subject", {}).get("bbox01")
+    plane = _image_plane(packet, "main")
+    if group and plane is not None and isinstance(box, (list, tuple)) and len(box) == 4:
+        x1, y1, x2, y2 = box
+        corners = [_stream_point(point, plane) for point in [(x1,y1), (x2,y1), (x2,y2), (x1,y2)]]
+        if all(point is not None for point in corners):
+            points = corners
+    return {"layer": "groups", "kind": "polygon" if points else "points", "points": points,
+        "subject_id": packet.payload["subject"]["id"], "local_id": association["entity_id"],
+        "segment_id": group["id"] if group else None, "label": "group_member" if group else "individual_association",
+        "state": "group_member" if group else "ungrouped", "properties": properties,
+        "related_subject_ids": members[:32]}
+
+
+def gesture_visuals(packet, result, observed_points):
+    """Only validated current wrists get geometry; retained episodes remain textual."""
+    plane = _image_plane(packet, "main")
+    if plane is not None and list(plane[3:]) != packet.payload.get("vision", {}).get("pose_source_size"):
+        plane = None
+    common = {"layer": "gestures", "kind": "points", "subject_id": result["actor_subject_id"]}
+    drawings = [{**common, "points": [], "state": "gesture_" + result["status"],
+        "properties": {"gesture_reason": result["reason"], "evidence": "heuristic_2d"}}]
+    current = {(item["name"], item["side"]) for item in result["active"] if item["evidence_current"]}
+    entries = [(item, "gesture_active" if item["evidence_current"] else "gesture_retained") for item in result["active"]]
+    entries.extend((item, "gesture_candidate") for item in result["candidates"] if (item["name"], item["side"]) not in current)
+    for item, state in entries[:16]:
+        points = []
+        if state != "gesture_retained" and plane is not None and observed_points:
+            sides = ("left", "right") if item["side"] == "both" else (item["side"],)
+            for side in sides:
+                position = observed_points.get(side + "_wrist")
+                if position is not None:
+                    point = _stream_point([position[0] / (plane[3] - 1), position[1] / (plane[4] - 1)], plane)
+                    if point is not None:
+                        points.append(point)
+        properties = {"side": item["side"], "evidence": item["evidence"]}
+        if "duration_seconds" in item:
+            properties["duration_seconds"] = item["duration_seconds"]
+        drawings.append({**common, "points": points, "state": state, "label": item["name"],
+            "segment_id": item.get("event_id"), "properties": properties})
+    for side, evidence in result["side_evidence"].items():
+        if evidence["status"] == "unknown":
+            drawings.append({**common, "points": [], "state": "gesture_unknown",
+                "properties": {"side": side, "gesture_reason": evidence["reason"]}})
+    return drawings

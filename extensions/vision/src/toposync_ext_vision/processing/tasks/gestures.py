@@ -19,6 +19,7 @@ from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.execution import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
+from ..inspection import copy_inspection_frame, gesture_visuals
 
 _SIDE_GESTURES = ("hand_raised", "wave", "pointing_candidate")
 _GESTURE_NAMES = {"both_hands_raised"} | {
@@ -589,6 +590,24 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
     async def process_packet(self, packet: Packet, context) -> list[Packet]:
         now = time.monotonic()
         outputs = self._flush_due(now)
+
+        async def annotate(actor, *, points=None, **values):
+            active = getattr(context, "inspection_active", lambda: False)()
+            if self._config.output_mode != "annotate" and not active:
+                return
+            annotated = self._annotation(packet, actor, **values)
+            if self._config.output_mode == "annotate":
+                outputs.append(annotated)
+            if active:
+                try:
+                    artifact = packet.artifacts.get("main")
+                    frame = await copy_inspection_frame(context, getattr(artifact, "data", None))
+                    context.inspect("analyzed", packet, frame=frame,
+                        geometry=artifact.metadata.get("image_geometry") if artifact else None,
+                        visuals=gesture_visuals(packet, annotated.payload["vision"]["gestures"], points))
+                except Exception:
+                    pass  # Inspection must not change gesture lifecycle or outputs.
+
         key = self._identity(packet)
         actor = self._actors.get(key)
         subject = _mapping(packet.payload.get("subject"))
@@ -596,8 +615,7 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
         if self._config.enabled and key[2] and subject_closed and (
             packet.lifecycle == Lifecycle.CLOSE or subject.get("lifecycle") == "close"
         ):
-            if self._config.output_mode == "annotate":
-                outputs.append(self._annotation(packet, None, status="unknown", reason="source_closed"))
+            await annotate(None, status="unknown", reason="source_closed")
             return outputs
         if (
             not self._config.enabled
@@ -626,31 +644,14 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
             if self._closed.capacity_reached:
                 for remaining in list(self._actors.values()):
                     outputs.extend(self._retire(remaining, "closed_subject_capacity_reached"))
-            if self._config.output_mode == "annotate":
-                outputs.append(self._annotation(packet, None, status="unknown", reason=reason))
+            await annotate(None, status="unknown", reason=reason)
             return outputs
         if not key[1] or not key[2]:
-            if self._config.output_mode == "annotate":
-                outputs.append(
-                    self._annotation(
-                        packet, None, status="unknown", reason="actor_identity_missing"
-                    )
-                )
+            await annotate(None, status="unknown", reason="actor_identity_missing")
             return outputs
         if self._closed.capacity_reached or subject_closed:
-            if self._config.output_mode == "annotate":
-                outputs.append(
-                    self._annotation(
-                        packet,
-                        None,
-                        status="unknown",
-                        reason=(
-                            "closed_subject_capacity_reached"
-                            if self._closed.capacity_reached
-                            else "actor_closed"
-                        ),
-                    )
-                )
+            await annotate(None, status="unknown", reason="closed_subject_capacity_reached"
+                if self._closed.capacity_reached else "actor_closed")
             return outputs
         vision = _mapping(packet.payload.get("vision"))
         timestamp = _number(_mapping(packet.payload.get("media")).get("ts"))
@@ -689,19 +690,13 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
                 # Keep a bounded watermark for rejection, without joint/event history.
                 if reason == "out_of_order_frame":
                     self._actors[key] = actor
-            if self._config.output_mode == "annotate":
-                outputs.append(
-                    self._annotation(
-                        packet, None, status="unknown", reason=reason, timestamp=timestamp
-                    )
-                )
+            await annotate(None, status="unknown", reason=reason, timestamp=timestamp)
             return outputs
         if actor is None and len(self._actors) >= self._config.maximum_subjects:
             oldest = min(self._actors.values(), key=lambda value: value.last_seen)
             outputs.extend(self._retire(oldest, "capacity_limit"))
         if self._closed.observe(key, subject):
-            if self._config.output_mode == "annotate":
-                outputs.append(self._annotation(packet, None, status="unknown", reason="closed_subject_capacity_reached"))
+            await annotate(None, status="unknown", reason="closed_subject_capacity_reached")
             return outputs
         if actor is None:
             actor = _Actor(key, fingerprint, timestamp, now, frame_id, self._snapshot(packet))
@@ -721,24 +716,10 @@ class VisionGestureRecognizeRuntime(TransformOperatorRuntime):
             if unknown:
                 reason = "partial_landmarks"
         outputs.extend(self._advance(actor, candidates, timestamp, unknown))
-        if self._config.output_mode == "annotate":
-            status = (
-                "active"
-                if any(value.event_id and name in candidates for name, value in actor.gestures.items())
-                else "unknown"
-                if unknown
-                else "none"
-            )
-            outputs.append(
-                self._annotation(
-                    packet,
-                    actor,
-                    status=status,
-                    reason=reason or "evaluated",
-                    timestamp=timestamp,
-                    candidates=candidates,
-                    observed=evaluation is not None,
-                    side_evidence=side_evidence,
-                )
-            )
+        status = (
+            "active" if any(value.event_id and name in candidates for name, value in actor.gestures.items())
+            else "unknown" if unknown else "none"
+        )
+        await annotate(actor, points=points, status=status, reason=reason or "evaluated",
+            timestamp=timestamp, candidates=candidates, observed=evaluation is not None, side_evidence=side_evidence)
         return outputs

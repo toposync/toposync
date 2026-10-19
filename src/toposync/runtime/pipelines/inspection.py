@@ -53,6 +53,7 @@ class InspectionVisual(BaseModel):
     raster: InspectionRaster | None = None
     access_scope: str = Field(default="diagnostic_private", pattern=r"^[a-z][a-z0-9_.]{0,63}$")
     properties: dict[str, str | int | float] = Field(default_factory=dict, max_length=12)
+    related_subject_ids: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(default_factory=list, max_length=32)
 
     @model_validator(mode="after")
     def drawing_contract(self) -> InspectionVisual:
@@ -508,31 +509,41 @@ class PipelineInspectionStore:
                                     }
                                 )
                         values["detections"] = safe
-                        drawings = []
-                        if isinstance(visuals, (list, tuple)):
-                            session.dropped += max(0, len(visuals) - 32)
-                            for visual in visuals[:32]:
-                                try:
-                                    drawing = InspectionVisual.model_validate(visual)
-                                except ValidationError:
-                                    session.dropped += 1
-                                    continue
-                                if drawing.raster is not None:
-                                    raster = drawing.raster
-                                    mask = masks[raster.index] if isinstance(masks, (list, tuple)) and raster.index < len(masks) else None
-                                    if (getattr(mask, "shape", ()) != (raster.height, raster.width)
-                                            or str(getattr(mask, "dtype", "")) != "uint8"
-                                            or sum(active.image_bytes for active in self.sessions.values()) + mask.nbytes > self.maximum_image_bytes):
-                                        session.dropped += 1
-                                        continue
-                                    saved = session.masks.setdefault(node, (session.sequence, {}))[1]
-                                    if raster.index not in saved:
-                                        saved[raster.index] = mask
-                                        session.image_bytes += int(mask.nbytes)
-                                drawings.append(drawing)
-                        values["visuals"] = drawings
+            if state == "analyzed":
+                drawings = []
+                if isinstance(visuals, (list, tuple)):
+                    session.dropped += max(0, len(visuals) - 32)
+                    for visual in visuals[:32]:
+                        try:
+                            drawing = InspectionVisual.model_validate(visual)
+                        except ValidationError:
+                            session.dropped += 1
+                            continue
+                        if drawing.raster is not None:
+                            raster = drawing.raster
+                            mask = masks[raster.index] if isinstance(masks, (list, tuple)) and raster.index < len(masks) else None
+                            if (not values.get("image_available") or getattr(mask, "shape", ()) != (raster.height, raster.width)
+                                    or str(getattr(mask, "dtype", "")) != "uint8"
+                                    or sum(active.image_bytes for active in self.sessions.values()) + mask.nbytes > self.maximum_image_bytes):
+                                session.dropped += 1
+                                continue
+                            saved = session.masks.setdefault(node, (session.sequence, {}))[1]
+                            if raster.index not in saved:
+                                saved[raster.index] = mask
+                                session.image_bytes += int(mask.nbytes)
+                        drawings.append(drawing)
+                values["visuals"] = drawings
             previous = session.nodes[node]
             same_producer = previous.producer_epoch == producer_epoch
+            if (state == "analyzed" and reference is not None and same_producer and previous.frame == reference
+                    and previous.geometry == values.get("geometry") and previous.model_id == values["model_id"]
+                    and values.get("visuals")):
+                subjects = {visual.subject_id for visual in values["visuals"]}
+                # Individual packets from one capture share a node; never carry geometry to the next frame.
+                drawings = values["visuals"] + [visual for visual in previous.visuals
+                    if visual.subject_id and visual.subject_id not in subjects and visual.raster is None]
+                session.dropped += max(0, len(drawings) - 32)
+                values["visuals"] = drawings[:32]
             values.update(
                 received_count=(previous.received_count if same_producer else 0)
                 + (state == "received"),
@@ -544,14 +555,14 @@ class PipelineInspectionStore:
             if state in {"passed", "emitted"} and previous.frame == reference and previous.reason:
                 values["reason"] = previous.reason
             if (
-                state in {"passed", "emitted", "delivered", "completed"}
+                state in {"received", "started", "passed", "emitted", "delivered", "completed"}
                 and same_producer
                 and previous.frame == reference
-                and previous.state == "analyzed"
+                and (previous.state == "analyzed" or previous.image_available or previous.visuals)
             ):
                 # Keep the exact inference frame; later states do not renew its lifetime.
                 values.update(
-                    state="completed" if state == "completed" else "analyzed",
+                    state=state if state in {"received", "started", "completed"} else "analyzed",
                     model_id=previous.model_id,
                     geometry=previous.geometry,
                     detections=previous.detections,

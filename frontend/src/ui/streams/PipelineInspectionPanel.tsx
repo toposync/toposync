@@ -109,7 +109,7 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
       {error ? <p role="alert">{t("inspection.failed")}</p> : loading || loadingPipelines ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
       {paired && <div className="pipelineInspectionControls">
         <label><input type="checkbox" checked={boxes} onChange={event => setBoxes(event.target.checked)} />{t("inspection.boxes")}</label>
-        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
+        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding", "groups", "gestures"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
           const next = new Set(layers); if (event.target.checked) next.add(layer); else next.delete(layer); setLayers(next);
         }} />{t(`inspection.${layer}`)}</label>)}
         <button type="button" aria-pressed={frozen} onClick={() => { setFrozenAt(Date.now()); setFrozen(!frozen); }}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>
@@ -145,14 +145,18 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
               {!expired && node.motion ? <small>{t("inspection.motion")}: {node.motion.current} / {node.motion.maximum} ({t("inspection.window", {seconds:node.motion.window_seconds,samples:node.motion.samples})})</small> : null}
               {!expired && node.visuals.map((visual, index) => <div className="pipelineInspectionVisual" key={index}>
                 {t(`inspection.${visual.layer}`, {}, visual.layer)}{visual.subject_id && visual.access_scope === "diagnostic_private" ? ` · ${visual.subject_id}` : ""}
-                {visual.label ? ` · ${visual.label}` : ""}
+                {visual.label ? ` · ${["groups", "gestures"].includes(visual.layer) ? t(`inspection.${visual.label}`, {}, visual.label) : visual.label}` : ""}
                 {visual.score !== null ? ` · ${t(`inspection.${visual.score_kind}`, {}, visual.score_kind || "")} ${visual.score.toFixed(3)}` : ""}
                 {visual.state ? ` · ${t(`inspection.${visual.layer === "identity" && visual.state === "unknown" ? "identity_unknown" : visual.state}`, {}, visual.state)}` : ""}
                 {visual.local_id ? ` · ${t("inspection.local_id")}: ${visual.local_id}` : ""}
                 {visual.raster ? ` · ${visual.raster.width} × ${visual.raster.height} · ${t("inspection.mask_limit")}` : ""}
                 {Object.entries(visual.properties).map(([key, value]) => <span key={key}> · {t(`inspection.${key}`, {}, key)}: {t(`inspection.${value}`, {}, String(value))}</span>)}
                 {visual.subject_id && visual.access_scope !== "diagnostic_private" ? <details><summary>{t("inspection.individual_reference")}</summary>{visual.subject_id}</details> : null}
-                {visual.segment_id ? <details><summary>{t("inspection.segment")}</summary>{visual.segment_id}
+                {visual.related_subject_ids.length > 0 ? <details><summary>{t("inspection.group_members")}</summary>
+                  <ul>{visual.related_subject_ids.map(identifier => <li key={identifier}>{identifier}</li>)}</ul>
+                  {Number(visual.properties.member_count) > visual.related_subject_ids.length ? <span>{t("inspection.reduced")}</span> : null}
+                </details> : null}
+                {visual.segment_id ? <details><summary>{t(visual.layer === "groups" ? "inspection.group_reference" : visual.layer === "gestures" ? "inspection.gesture_episode" : "inspection.segment")}</summary>{visual.segment_id}
                   {visual.sample_sequences.length > 0 ? <span> · {t("inspection.samples")}: {visual.sample_sequences.join(", ")}</span> : null}
                 </details> : null}
               </div>)}

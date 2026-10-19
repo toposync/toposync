@@ -6,7 +6,7 @@ from dataclasses import replace
 import hashlib
 import json
 
-from ..notifications.occurrences import Contribution, Enrichment, Identifier, OccurrenceReference, Scope
+from ..notifications.occurrences import Contribution, Enrichment, Identifier, OccurrenceConflict, OccurrenceReference, Scope
 from .execution import SinkRuntime, TransformOperatorRuntime
 from .runtime import Lifecycle
 
@@ -50,10 +50,18 @@ class RecordOccurrenceRuntime(SinkRuntime):
         value = Contribution.model_validate({**evidence, **fixed})
         if value.lifecycle != packet.lifecycle.value.upper():
             raise ValueError("Occurrence lifecycle differs from its packet")
-        result = await self.services.call("occurrences.record", contribution=value,
-            retention_seconds=float(self.config.retention_days * 86400),
-            request_notice=self.config.notice == "simulated",
-            **({"return_change": True} if self.config.enrich else {}))
+        try:
+            result = await self.services.call("occurrences.record", contribution=value,
+                retention_seconds=float(self.config.retention_days * 86400),
+                request_notice=self.config.notice == "simulated",
+                **({"return_change": True} if self.config.enrich else {}))
+        except OccurrenceConflict as error:
+            if str(error) != "occurrence_unavailable":
+                raise
+            # A removed episode stays removed even while its producer finishes emitting it.
+            if context is not None:
+                context.inspect("filtered", packet, reason="occurrence_unavailable")
+            return []
         if not self.config.enrich or not result.changed or value.replay:
             return []
         document = result.document

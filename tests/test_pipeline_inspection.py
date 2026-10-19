@@ -68,6 +68,26 @@ def observe(store, state="analyzed", value=None, **kwargs):
     )
 
 
+def test_occurrence_invalidation_closes_its_diagnostic_projection_and_releases_pixels():
+    store = PipelineInspectionStore(clock=Clock())
+    removed = store.open("demo", "revision", {"detect": "vision.detect"})
+    kept = store.open("another", "revision", {"detect": "vision.detect"})
+    frame = np.zeros((12, 20, 3), dtype=np.uint8)
+    observe(store, value=packet(occurrence_reference={"occurrence_id": "removed"}), frame=frame)
+    store.observe(pipeline="another", node="detect", physical="detect", operator="vision.detect",
+                  producer_epoch="runtime", revision="revision", state="analyzed",
+                  packet=packet(occurrence_reference={"occurrence_id": "kept"}), frame=frame)
+    session = store.sessions[removed]
+    sequence = session.nodes["detect"].image_sequence
+    assert store.image(removed, "detect", sequence) is frame
+    store.invalidate_occurrence("removed")
+    assert removed not in store.sessions
+    assert not session.images and not session.occurrence_ids and session.image_bytes == 0
+    with pytest.raises(KeyError):
+        store.image(removed, "detect", sequence)
+    assert store.image(kept, "detect", store.sessions[kept].nodes["detect"].image_sequence) is frame
+
+
 def test_snapshot_is_passive_bounded_private_and_expires():
     clock = Clock()
     store = PipelineInspectionStore(clock=clock)

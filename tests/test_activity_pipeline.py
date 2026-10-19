@@ -67,8 +67,11 @@ def test_camera_contributions_duplicate_close_and_restart_keep_one_occurrence(tm
         reopened = NotificationsRuntime(data_dir=tmp_path)
         assert reopened.occurrences.get(identifier, read_filter=lambda _: True) == result
         await reopened.erase_occurrence(identifier, expected_revision=result["revision"])
-        with pytest.raises(OccurrenceConflict, match="unavailable"):
-            await sink.process_packet((await adapter.process_packet(original, None))[0], None)
+        for source in (original, other, closed):
+            assert await sink.process_packet((await adapter.process_packet(source, None))[0], None) == []
+        tombstone = reopened.occurrences.get(identifier, read_filter=lambda _: True)
+        assert tombstone["status"] == "deleted"
+        assert not reopened.occurrences.deliveries(identifier)
     asyncio.run(scenario())
 
 
@@ -92,6 +95,18 @@ def test_evidence_validation_fails_without_persistence(tmp_path, mutation):
                 evidence["observed_at"] = None
             await sink.process_packet(value, None)
         assert history.occurrences.list(read_filter=lambda _: True)[0] == []
+    asyncio.run(scenario())
+
+
+def test_recording_does_not_hide_a_changed_message_as_a_removed_episode(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        sink = RecordOccurrenceRuntime(settings(), dependencies(history))
+        packet = (await ActivityEvidenceRuntime().process_packet(event(), None))[0]
+        await sink.process_packet(packet, None)
+        changed = {**packet.payload["activity_observation"], "reason": "different"}
+        with pytest.raises(OccurrenceConflict, match="occurrence_message_changed"):
+            await sink.process_packet(replace(packet, payload={"activity_observation": changed}), None)
     asyncio.run(scenario())
 
 

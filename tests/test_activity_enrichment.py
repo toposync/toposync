@@ -33,7 +33,7 @@ def test_missing_enrichment_services_fail_during_preparation_without_repeated_ef
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("interruption", [None, "revoke", "delete", "demand", "missing_image"])
+@pytest.mark.parametrize("interruption", [None, "revoke", "delete", "expire", "demand", "missing_image"])
 def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path, interruption):
     async def scenario():
         history = NotificationsRuntime(data_dir=tmp_path)
@@ -119,6 +119,7 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
         services.register("ai.infer.evaluate_condition", infer)
         compiled = compiler.compile_many(demands.pipelines(), catalog=[producer])
         runtime = PipelineBundleRuntime(compiled, operators, PipelineRuntimeDependencies(services=services, demand_registry=demands))
+        history.invalidate_occurrence_runtime = runtime.invalidate_occurrence
         await runtime.start()
         try:
             await asyncio.wait_for(closed.wait(), 3)
@@ -146,8 +147,19 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
                 await history.revoke_occurrence_enrichment(identifier, expected_revision=before["revision"])
             elif interruption == "delete":
                 await history.erase_occurrence(identifier, expected_revision=before["revision"])
+            elif interruption == "expire":
+                assert await history.expire_occurrences(now=before["expires_at"] + 1) == 1
             elif interruption == "demand":
                 demands.release(demand.id)
+            if interruption in ("revoke", "delete", "expire"):
+                assert processed.is_set(), "Removal must cancel inference before returning, without releasing the model"
+                assert not release_inference.is_set()
+                conditions = [node for node in runtime._runtime._runtimes if isinstance(node, AiConditionFilterRuntime)]
+                assert len(conditions) == 1
+                assert not conditions[0]._annotation_tasks
+                assert conditions[0]._waiting_packet is None
+                assert not conditions[0]._states
+                assert demand.latest is None
             release_inference.set()
             await asyncio.wait_for(processed.wait(), 2)
             if interruption in (None, "missing_image"):
@@ -167,9 +179,9 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
             demands.release(demand.id)
             await runtime.stop()
             await runtime.dependencies.execution_scheduler.shutdown()
-        if interruption in ("revoke", "delete", "demand"):
+        if interruption in ("revoke", "delete", "expire", "demand"):
             after = history.occurrences.get(identifier, read_filter=lambda _: True)
             assert len(calls) == 1
             assert not after.get("enrichments")
-            assert after["status"] == ("deleted" if interruption == "delete" else "CLOSE")
+            assert after["status"] == {"delete": "deleted", "expire": "expired"}.get(interruption, "CLOSE")
     asyncio.run(asyncio.wait_for(scenario(), 7))

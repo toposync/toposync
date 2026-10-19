@@ -13,7 +13,7 @@ from typing import Any
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, resolve_image_artifact_for_data
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_media_ts
-from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
+from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet, packet_occurrence_id
 from toposync.runtime.pipelines.telemetry import METRIC_AI_CONDITION_CONFIDENCE
 
 from toposync_ext_ai.providers import ConditionEvaluationResult, RegionDetection, RegionDetectionResult
@@ -39,6 +39,7 @@ class _SmartCropState:
 
 @dataclass(slots=True)
 class _ConditionState:
+    occurrence_id: str | None = None
     last_eval_at: float = 0.0
     last_result: ConditionEvaluationResult | None = None
     stream_allowed: bool | None = None
@@ -466,6 +467,24 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         self._states: dict[str, _ConditionState] = {}
         self._fallback_profile_ids_cache: list[str] | None = None
         self._occurrences: OrderedDict[str, _ConditionOccurrence] = OrderedDict()
+        self._annotation_tasks: dict[asyncio.Task[None], str | None] = {}
+        self._waiting_packet: Packet | None = None
+
+    async def invalidate_occurrence(self, identifier: str) -> None:
+        if self._waiting_packet is not None and packet_occurrence_id(self._waiting_packet) == identifier:
+            self._waiting_packet = None
+        tasks = {task for task, occurrence in self._annotation_tasks.items() if occurrence == identifier}
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            done, pending = await asyncio.wait(tasks, timeout=2)
+            await asyncio.gather(*done, return_exceptions=True)
+            if pending:
+                raise RuntimeError("Occurrence inference did not acknowledge cancellation")
+        self._states = {key: state for key, state in self._states.items() if state.occurrence_id != identifier}
+        for key, state in list(self._occurrences.items()):
+            if state.last_packet is not None and packet_occurrence_id(state.last_packet) == identifier:
+                self._occurrences.pop(key)
 
     async def run(self, context) -> None:  # noqa: ANN001
         if self._config.emit_mode == "occurrence":
@@ -482,10 +501,10 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             return
         primary_slots = asyncio.Semaphore(int(self._config.max_concurrency))
         fallback_slots = asyncio.Semaphore(int(self._config.max_concurrency))
-        tasks: set[asyncio.Task[None]] = set()
+        tasks = self._annotation_tasks
 
         def discard_task(task: asyncio.Task[None]) -> None:
-            tasks.discard(task)
+            tasks.pop(task, None)
 
         async def drain_tasks() -> None:
             if not tasks:
@@ -545,6 +564,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                     continue
 
                 policy = self._config.concurrency_policy
+                self._waiting_packet, packet = packet, None
                 slot = await self._acquire_condition_slot(primary_slots, wait=policy == "queue")
                 profile_id: str | None = None
                 fallback_profile_ids: list[str] | None = None
@@ -563,11 +583,17 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                     if self._config.emit_mode == "annotate":
                         # Do not let a skipped update overtake an earlier inference/open.
                         await drain_tasks()
-                        await context.emit(self._annotate(packet, result=None, status="unknown", reason="concurrency_full"), port=self.output_port)
+                        if self._waiting_packet is not None:
+                            await context.emit(self._annotate(self._waiting_packet, result=None, status="unknown", reason="concurrency_full"), port=self.output_port)
                     else:
                         context.metrics.dropped_packets += 1
+                    self._waiting_packet = None
                     continue
 
+                packet, self._waiting_packet = self._waiting_packet, None
+                if packet is None:
+                    slot.release()
+                    continue
                 task = asyncio.create_task(
                     process_with_slot(
                         packet,
@@ -578,9 +604,11 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                     ),
                     name=f"ai.condition_filter[{context.node_id}]",
                 )
-                tasks.add(task)
+                tasks[task] = packet_occurrence_id(packet)
+                packet = None
                 task.add_done_callback(discard_task)
         finally:
+            self._waiting_packet = None
             if tasks:
                 done, pending = await asyncio.wait(set(tasks), timeout=2.0)
                 for task in pending:
@@ -827,6 +855,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             if len(self._states) >= self._config.maximum_occurrence_streams:
                 return unknown("stream_capacity")
         state = self._states.setdefault(packet.stream_id, _ConditionState())
+        state.occurrence_id = packet_occurrence_id(packet)
         evidence = packet.payload["capture_evidence"]
         capture = (evidence["capture_instance"], evidence["generation"], evidence["sequence"])
         if float(evidence["published_at"]) < state.last_publication_time:

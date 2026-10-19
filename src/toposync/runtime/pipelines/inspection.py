@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .runtime import Packet
+from .runtime import Packet, packet_occurrence_id
 
 
 def pipeline_inspection_revision(pipeline: Any) -> str:
@@ -86,6 +86,7 @@ class _Session:
     sequence: int = 0
     dropped: int = 0
     images: dict[str, tuple[int, Any]] = field(default_factory=dict)
+    occurrence_ids: dict[str, str] = field(default_factory=dict)
     image_bytes: int = 0
     captures: dict[str, tuple[str, int]] = field(default_factory=dict)
     last_frames: dict[tuple[str, str], tuple[str, int, int, float]] = field(default_factory=dict)
@@ -212,6 +213,7 @@ class PipelineInspectionStore:
             if session.timer:
                 session.timer.cancel()
             session.images.clear()
+            session.occurrence_ids.clear()
             session.image_bytes = 0
             session.nodes.clear()
             session.motion_windows.clear()
@@ -220,6 +222,12 @@ class PipelineInspectionStore:
             if self.demand_registry is not None:
                 for identifier in session.demand_ids:
                     self.demand_registry.release(identifier)
+
+    def invalidate_occurrence(self, identifier: str) -> None:
+        for token, session in list(self.sessions.items()):
+            if identifier in session.occurrence_ids.values():
+                # Closing also invalidates in-flight image reads and the inspection lease.
+                self.close(token)
 
     def expire(self) -> None:
         now = self.clock()
@@ -483,6 +491,11 @@ class PipelineInspectionStore:
             session.node_sizes[node] = size
             # Complete snapshots need only the latest state, never an unconsumed history queue.
             session.nodes[node] = observation
+            identifier = packet_occurrence_id(packet) if packet else None
+            if identifier:
+                session.occurrence_ids[node] = identifier
+            else:
+                session.occurrence_ids.pop(node, None)
 
     def observe_motion(
         self,

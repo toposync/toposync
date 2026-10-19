@@ -6,11 +6,14 @@ import pytest
 
 from toposync.runtime.pipelines.runtime import (
     Artifact,
+    ArtifactMemoryCounter,
     BoundedChannel,
+    KeyedBoundedChannel,
     DropPolicy,
     Lifecycle,
     Packet,
     QueueOperationStatus,
+    packet_occurrence_id,
 )
 
 
@@ -18,6 +21,39 @@ def packet(phase=Lifecycle.OPEN):
     return Packet.create(stream_id="cancel-test", lifecycle=phase).with_artifact(
         Artifact(name="private", data=b"x" * 16, private=True)
     )
+
+
+@pytest.mark.parametrize("keyed", [False, True])
+def test_discard_occurrence_releases_images_preserves_other_events_and_wakes_waiting_writer(keyed):
+    async def scenario():
+        counter = ArtifactMemoryCounter(limit_bytes=1024)
+        channel = (KeyedBoundedChannel if keyed else BoundedChannel)(name="private", maxsize=4,
+            drop_policy=DropPolicy.BLOCK, pipeline_artifact_counter=counter,
+            **({"key_fn": lambda packet: packet.stream_id} if keyed else {}))
+        def sample(identifier, phase):
+            return Packet.create(stream_id=identifier, lifecycle=phase,
+                metadata={"recording_occurrence_id": identifier}).with_artifact(Artifact("main", b"x" * 16))
+        packets = [sample("removed", Lifecycle.OPEN), sample("kept", Lifecycle.OPEN),
+                   sample("removed", Lifecycle.CLOSE), sample("kept", Lifecycle.CLOSE)]
+        for item in packets:
+            await channel.put(item)
+        assert counter.current_bytes == 64
+        extra = sample("next", Lifecycle.OPEN)
+        writer = asyncio.create_task(channel.put(extra, timeout_s=1))
+        await asyncio.sleep(0)
+        assert not writer.done()
+        assert channel.discard(lambda item: packet_occurrence_id(item) == "removed") == 2
+        assert channel.depth == 2 and counter.current_bytes == 32
+        assert (await writer).status == QueueOperationStatus.ACCEPTED
+        values = [(await channel.get(timeout_s=.1)).item for _ in range(3)]
+        assert [item for item in values if item.stream_id == "kept"] == [packets[1], packets[3]]
+        assert extra in values
+        assert counter.current_bytes == 0
+        assert channel.discard(lambda _: True) == 0
+        assert (await channel.get(timeout_s=.01)).status == QueueOperationStatus.TIMEOUT
+        await channel.put(extra)
+        assert (await channel.get(timeout_s=.1)).item is extra
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("with_timeout", [False, True])

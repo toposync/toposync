@@ -29,6 +29,7 @@ from .runtime import (
     ChannelMetricsSnapshot,
     KeyedBoundedChannel,
     Packet,
+    packet_occurrence_id,
     QueueOperationStatus,
 )
 from .runtime_info import build_graph_runtime_info
@@ -424,6 +425,10 @@ class NodeExecutionContext:
 
 
 class BaseOperatorRuntime:
+    async def invalidate_occurrence(self, identifier: str) -> None:
+        """Release work retained for a deleted, expired or revoked activity."""
+        return None
+
     async def prepare(self, context: NodeExecutionContext) -> None:
         """Prepare resources without consuming packets or running effects."""
         return None
@@ -679,6 +684,23 @@ class PipelineRuntime:
                 channel.clear()
             except Exception:
                 continue
+
+    async def invalidate_occurrence(self, identifier: str) -> None:
+        def belongs(item):
+            return isinstance(item, Packet) and packet_occurrence_id(item) == identifier
+        for channel in self.channel_map.values():
+            channel.discard(belongs)
+        if self.dependencies.demand_registry is not None:
+            self.dependencies.demand_registry.invalidate_occurrence(identifier)
+        if self.dependencies.inspection_store is not None:
+            self.dependencies.inspection_store.invalidate_occurrence(identifier)
+        results = await asyncio.gather(*(runtime.invalidate_occurrence(identifier) for runtime in self._runtimes), return_exceptions=True)
+        # A canceled worker may have been awaiting an emit when invalidation began.
+        for channel in self.channel_map.values():
+            channel.discard(belongs)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
     async def run_for(self, duration_s: float) -> dict[str, Any]:
         await self.start()

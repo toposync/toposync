@@ -136,6 +136,7 @@ class PipelinesOrchestrator:
         self._activation_retry_requested = False
         self._last_activation_compositions: list[Composition] = []
         self._reconcile_lock = asyncio.Lock()
+        self._notifications.invalidate_occurrence_runtime = self.invalidate_occurrence
         if self._runtime_deps_base.demand_registry is not None:
             self._runtime_deps_base.demand_registry.changed = self.trigger_reload
 
@@ -160,6 +161,21 @@ class PipelinesOrchestrator:
                 demands.release(identifier, "manual_flow_host_stopped")
             demands.flow_leases.clear()
         await self._runtime_deps_base.execution_scheduler.shutdown()
+
+    async def invalidate_occurrence(self, identifier: str) -> None:
+        async with self._reconcile_lock:
+            demands = self._runtime_deps_base.demand_registry
+            if demands is not None:
+                demands.invalidate_occurrence(identifier)
+            if self._runtime_deps_base.inspection_store is not None:
+                self._runtime_deps_base.inspection_store.invalidate_occurrence(identifier)
+            runtimes = [handle.runtime for handle in self._pipelines.values()]
+            if self._local_bundle is not None:
+                runtimes.append(self._local_bundle.runtime)
+            results = await asyncio.gather(*(runtime.invalidate_occurrence(identifier) for runtime in runtimes), return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
 
     def trigger_reload(self) -> None:
         self._failed_local_plan = None

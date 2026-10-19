@@ -228,6 +228,9 @@ class PipelineBundleRuntime:
     async def stop(self) -> None:
         await self._runtime.stop()
 
+    async def invalidate_occurrence(self, identifier: str) -> None:
+        await self._runtime.invalidate_occurrence(identifier)
+
     async def reconcile(self, report: CompilationReport, dependencies: PipelineRuntimeDependencies | None = None) -> None:
         plan = build_merged_pipeline_plan(report, bundle_name=self.bundle_name)
         dependencies = replace(dependencies or self.dependencies,

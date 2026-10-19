@@ -16,9 +16,10 @@ import weakref
 from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.config_store import Pipeline, _atomic_write_json
+from toposync.runtime.notifications.occurrences import OccurrenceStore
 
 from .result_references import ResultContract, ResultFieldName, ResultOutput, _ancestors
-from .runtime import ChannelGetResult, ChannelPutResult, Lifecycle, Packet, QueueOperationStatus
+from .runtime import ChannelGetResult, ChannelPutResult, Lifecycle, Packet, QueueOperationStatus, packet_occurrence_id
 from .runtime import _estimate_packet_artifact_bytes
 from .inspection import frame_reference
 from .templates import build_pipeline_graph_v2
@@ -487,6 +488,14 @@ class ResourceDemandRegistry:
             pipelines.append(Pipeline(name=f"demand_{demand.id}", graph=graph))
         return pipelines
 
+    def invalidate_occurrence(self, identifier: str) -> None:
+        for demand in self.demands.values():
+            if demand.latest is not None and packet_occurrence_id(demand.latest) == identifier:
+                demand.latest = None
+                if demand.result_timer:
+                    demand.result_timer.cancel()
+                    demand.result_timer = None
+
     def project(self, identifier: str, packet: Packet) -> Packet | None:
         if not self.allowed(identifier):
             return None
@@ -506,6 +515,14 @@ class ResourceDemandRegistry:
         ):
             demand.filtered += 1
             return None
+        metadata = {"frame": frame_reference(packet)}
+        effect = demand.consequence or {}
+        observation = packet.payload.get("activity_observation")
+        if effect.get("operator") == "core.record_occurrence" and isinstance(observation, dict):
+            objective = effect.get("config", {}).get("objective_id")
+            episode = observation.get("episode_id")
+            if isinstance(objective, str) and isinstance(episode, str):
+                metadata["recording_occurrence_id"] = OccurrenceStore.identifier(objective, episode)
         return replace(
             packet,
             payload={
@@ -518,7 +535,7 @@ class ResourceDemandRegistry:
                 for key in demand.request.artifacts
                 if key in packet.artifacts
             },
-            metadata={"frame": frame_reference(packet)},
+            metadata=metadata,
         )
 
     def receive(self, identifier: str, packet: Packet) -> None:

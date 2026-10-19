@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,12 @@ class NotificationsRuntime:
         self.store = NotificationStore(data_dir / "notifications" / "notifications.sqlite3")
         self.occurrences = OccurrenceStore(self.store)
         self.broadcaster = EventBroadcaster()
+        self.invalidate_occurrence_runtime: Callable[[str], Awaitable[None]] | None = None
+
+    async def _invalidate_occurrence(self, change: OccurrenceChange) -> None:
+        self.broadcaster.discard(change.invalidated_notifications)
+        if self.invalidate_occurrence_runtime is not None:
+            await self.invalidate_occurrence_runtime(change.document["id"])
 
     async def _publish_occurrence(self, identifier: str, *, now: float | None = None) -> None:
         published = await asyncio.to_thread(self.occurrences.publish, identifier, now=now)
@@ -74,19 +80,21 @@ class NotificationsRuntime:
 
     async def erase_occurrence(self, identifier: str, *, expected_revision: int) -> dict:
         change = await asyncio.to_thread(self.occurrences.erase, identifier, expected_revision=expected_revision)
-        self.broadcaster.discard(change.invalidated_notifications)
+        await self._invalidate_occurrence(change)
         return change.document
 
     async def revoke_occurrence_enrichment(self, identifier: str, *, expected_revision: int) -> dict:
         change = await asyncio.to_thread(self.occurrences.revoke_enrichment, identifier, expected_revision=expected_revision)
-        self.broadcaster.discard(change.invalidated_notifications)
+        await self._invalidate_occurrence(change)
         await self._publish_occurrence(identifier)
         return change.document
 
     async def expire_occurrences(self, *, now: float | None = None) -> int:
         changes = await asyncio.to_thread(self.occurrences.expire, now=now)
-        for change in changes:
-            self.broadcaster.discard(change.invalidated_notifications)
+        results = await asyncio.gather(*(self._invalidate_occurrence(change) for change in changes), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
         return len(changes)
 
     async def list(

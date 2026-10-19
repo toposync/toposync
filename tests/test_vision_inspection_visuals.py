@@ -114,6 +114,7 @@ def test_pose_runtime_only_projects_when_inspected_without_changing_inferences()
             def inspection_active(self):
                 return bool(store.sessions)
             async def run_blocking(self, function, *args, **kwargs):
+                kwargs.pop("mode", None)
                 kwargs.pop("concurrency_key", None)
                 return function(*args, **kwargs)
             def inspect(self, state, value, **kwargs):

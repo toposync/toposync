@@ -24,6 +24,8 @@ from ..registry import build_default_model_registry
 from .contracts import IdentityEvidence, RecognitionDecision, RecognitionPolicy
 from .extraction import IdentityExtractor, extract_in_process, validate_identity_frame
 from .spatial import spatial_context
+from ..processing.inspection import copy_inspection_frame
+from .inspection import evidence_visuals, recognition_visual
 
 PRIVATE_EVIDENCE_ARTIFACT = "identity_evidence"
 PRIVATE_DECISION_ARTIFACT = "identity_decision"
@@ -311,6 +313,7 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
         if image_error:
             return [_summary(packet, status="unobservable", reason=image_error, occurrence_id=key)]
         self._sampled[key] = now
+        inspection_frame = await copy_inspection_frame(context, artifact.data)
         if self.config.late_enrichment:
             self._activity_owners[key] = packet.payload["occurrence_reference"]["occurrence_id"]
         try:
@@ -362,6 +365,14 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
         output = _summary(packet, status=result.status, reason=result.reason, occurrence_id=key)
         if result.evidence is not None:
             evidence = result.evidence
+            if inspection_frame is not None:
+                try:
+                    context.inspect("analyzed", packet, frame=inspection_frame,
+                        model_id=self.config.person_model_id if species == "person" else self.config.pet_model_id,
+                        geometry=artifact.metadata.get("image_geometry"),
+                        visuals=evidence_visuals(evidence, occurrence_id=key))
+                except Exception:
+                    pass  # Private inspection cannot change functional recognition.
             if self.config.keyframe_min_region_change and previous:
                 last = previous[0]
                 # ponytail: box/quality novelty; add visual comparison if stationary pose changes matter.
@@ -524,6 +535,14 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
             store = await self.dependencies.services.call("vision.identity.store")
             current = await context.run_blocking(self._resolve, packet, store, key, artifact)
             if current is not None:
+                frame = packet.artifacts.get("main")
+                inspection_frame = await copy_inspection_frame(context, getattr(frame, "data", None))
+                if inspection_frame is not None:
+                    try:
+                        context.inspect("analyzed", packet, frame=inspection_frame,
+                            geometry=frame.metadata.get("image_geometry"), visuals=[recognition_visual(packet, current)])
+                    except Exception:
+                        pass
                 payload = dict(clean.payload)
                 payload["recognition"] = current.packet_summary()
                 output = replace(clean, payload=payload).with_artifact(

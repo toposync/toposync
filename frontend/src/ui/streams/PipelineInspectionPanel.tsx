@@ -24,6 +24,7 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
   const [now, setNow] = useState(Date.now());
   const [loadedImage, setLoadedImage] = useState("");
   const [frozen, setFrozen] = useState(false);
+  const [frozenAt, setFrozenAt] = useState(0);
   const [boxes, setBoxes] = useState(true);
   const [layers, setLayers] = useState<ReadonlySet<string>>(() => new Set(["pose", "tracks", "trails"]));
   const [selectedNodes, setSelectedNodes] = useState<ReadonlySet<string>>();
@@ -86,10 +87,16 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
   }, [open, visible, selected, publication?.id]);
   const current = snapshot?.nodes.find(node => (!selectedNodes || selectedNodes.has(node.node_id)) && node.image_available && node.expires_at !== null && node.expires_at * 1000 > now);
   const image = current && snapshot ? resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(snapshot.session)}/images/${encodeURIComponent(current.node_id)}/${current.image_sequence}`) : "";
-  const close = () => { setOpen(false); setSelected(""); setSnapshot(null); setError(false); setLoadedImage(""); trigger.current?.focus(); };
+  function close() { setOpen(false); setSelected(""); setSnapshot(null); setError(false); setLoadedImage(""); trigger.current?.focus(); }
+  useEffect(() => {
+    if (!open) return;
+    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    document.addEventListener("keydown", keydown);
+    return () => document.removeEventListener("keydown", keydown);
+  }, [open]);
   return <>
     <button ref={trigger} type="button" className="iconButton streamsTileOverlayButton" title={t("inspection.open")} aria-label={t("inspection.open")} aria-expanded={open} onClick={() => setOpen(true)}><Icon name="eye" /></button>
-    {open ? createPortal(<aside className="pipelineInspectionPanel" aria-label={t("inspection.open")} onKeyDown={event => { if (event.key === "Escape") close(); }}>
+    {open ? createPortal(<aside className="pipelineInspectionPanel" aria-label={t("inspection.open")}>
       <button type="button" autoFocus onClick={close}>{t("inspection.close")}</button>
       <h2>{t("inspection.open")}</h2>
       <p className="pipelineInspectionLimit">{t(paired ? "inspection.paired_limit" : "inspection.limit")}</p>
@@ -102,10 +109,10 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
       {error ? <p role="alert">{t("inspection.failed")}</p> : loading || loadingPipelines ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
       {paired && <div className="pipelineInspectionControls">
         <label><input type="checkbox" checked={boxes} onChange={event => setBoxes(event.target.checked)} />{t("inspection.boxes")}</label>
-        {["pose", "tracks", "trails", "masks"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
+        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
           const next = new Set(layers); if (event.target.checked) next.add(layer); else next.delete(layer); setLayers(next);
         }} />{t(`inspection.${layer}`)}</label>)}
-        <button type="button" aria-pressed={frozen} onClick={() => setFrozen(!frozen)}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>
+        <button type="button" aria-pressed={frozen} onClick={() => { setFrozenAt(Date.now()); setFrozen(!frozen); }}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>
       </div>}
       <div className="pipelineInspectionGrid">
         {!paired && <section aria-label={t("inspection.frame")}>
@@ -122,7 +129,7 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
         </section>}
         <section aria-label={t("inspection.open")}>
           {snapshot?.nodes.map(node => {
-            const expired = node.expires_at !== null && node.expires_at * 1000 <= now;
+            const expired = node.expires_at !== null && node.expires_at * 1000 <= (frozen && paired ? frozenAt : now);
             const state = expired ? "expired" : node.state;
             return <article className="pipelineInspectionNode" key={node.node_id}>
               <label><input type="checkbox" checked={!selectedNodes || selectedNodes.has(node.node_id)} onChange={event => {
@@ -137,11 +144,14 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
               {node.reason ? <small>{t(["category_rejected", "image_unavailable", "inference_interval", "sample_expired", "operator_error", "flow_limit", "inspection_capacity", "delivery_not_accepted", "execution_stopped", "mask_geometry_unavailable"].includes(node.reason) ? `inspection.${node.reason}` : "inspection.reason")}</small> : null}
               {!expired && node.motion ? <small>{t("inspection.motion")}: {node.motion.current} / {node.motion.maximum} ({t("inspection.window", {seconds:node.motion.window_seconds,samples:node.motion.samples})})</small> : null}
               {!expired && node.visuals.map((visual, index) => <div className="pipelineInspectionVisual" key={index}>
-                {t(`inspection.${visual.layer}`, {}, visual.layer)}{visual.subject_id ? ` · ${visual.subject_id}` : ""}
+                {t(`inspection.${visual.layer}`, {}, visual.layer)}{visual.subject_id && visual.access_scope === "diagnostic_private" ? ` · ${visual.subject_id}` : ""}
+                {visual.label ? ` · ${visual.label}` : ""}
                 {visual.score !== null ? ` · ${t(`inspection.${visual.score_kind}`, {}, visual.score_kind || "")} ${visual.score.toFixed(3)}` : ""}
-                {visual.state ? ` · ${t(`inspection.${visual.state}`, {}, visual.state)}` : ""}
+                {visual.state ? ` · ${t(`inspection.${visual.layer === "identity" && visual.state === "unknown" ? "identity_unknown" : visual.state}`, {}, visual.state)}` : ""}
                 {visual.local_id ? ` · ${t("inspection.local_id")}: ${visual.local_id}` : ""}
                 {visual.raster ? ` · ${visual.raster.width} × ${visual.raster.height} · ${t("inspection.mask_limit")}` : ""}
+                {Object.entries(visual.properties).map(([key, value]) => <span key={key}> · {t(`inspection.${key}`, {}, key)}: {t(`inspection.${value}`, {}, String(value))}</span>)}
+                {visual.subject_id && visual.access_scope !== "diagnostic_private" ? <details><summary>{t("inspection.individual_reference")}</summary>{visual.subject_id}</details> : null}
                 {visual.segment_id ? <details><summary>{t("inspection.segment")}</summary>{visual.segment_id}
                   {visual.sample_sequences.length > 0 ? <span> · {t("inspection.samples")}: {visual.sample_sequences.join(", ")}</span> : null}
                 </details> : null}

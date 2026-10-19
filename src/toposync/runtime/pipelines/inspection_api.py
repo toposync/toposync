@@ -3,12 +3,73 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Request, Response
 
-from .inspection import InspectionSnapshot, PipelineInspectionStore, pipeline_inspection_revision
+from .inspection import InspectionSnapshot, InspectionVisual, PipelineInspectionStore, pipeline_inspection_revision
 from .operators_sinks import _encode_image_bytes
+
+
+async def project_inspection(request: Request, snapshot: InspectionSnapshot) -> InspectionSnapshot:
+    """Extensions authorize their private projections at delivery; missing services hide them."""
+    services = getattr(request.app.state, "services", None)
+    prefix = "pipeline.inspection.project."
+    projected = {node.node_id: [visual for visual in node.visuals if visual.access_scope == "diagnostic_private"]
+                 for node in snapshot.nodes}
+    revisions = []
+    request.state.inspection_private_checks = []
+    for service in services.list_ids(prefix) if services else ():
+        scope = service[len(prefix):]
+        nodes = [node.model_copy(update={"visuals": [v for v in node.visuals if v.access_scope == scope]})
+                 for node in snapshot.nodes]
+        try:
+            revision, drawings, validate = await services.call(service, request=request, nodes=nodes)
+            if not isinstance(revision, str) or len(revision) > 512 or not isinstance(drawings, dict) or not callable(validate):
+                raise ValueError("invalid_inspection_projection")
+            for node in nodes:
+                values = drawings.get(node.node_id, [])
+                if not isinstance(values, list) or len(values) > 32:
+                    raise ValueError("invalid_inspection_projection")
+                values = [InspectionVisual.model_validate(value) for value in values]
+                if any(value.access_scope != scope for value in values):
+                    raise ValueError("invalid_inspection_scope")
+                projected[node.node_id].extend(values)
+            revisions.append((scope, revision))
+            request.state.inspection_private_checks.append(validate)
+        except Exception:
+            # No partial private projection may survive a failed permission check.
+            for node in nodes:
+                projected[node.node_id] = [v for v in projected[node.node_id] if v.access_scope != scope]
+            revisions.append((scope, "unavailable"))
+    result = snapshot.model_copy(update={
+        "nodes": [node.model_copy(update={"visuals": projected[node.node_id][:32]}) for node in snapshot.nodes],
+        "policy_revision": hashlib.sha256(json.dumps(revisions).encode()).hexdigest(),
+    })
+    if len(result.model_dump_json().encode()) > request.app.state.pipeline_inspection.maximum_bytes:
+        return snapshot.model_copy(update={"nodes": [node.model_copy(update={"visuals": []}) for node in snapshot.nodes],
+                                           "policy_revision": result.policy_revision, "dropped": snapshot.dropped + 1})
+    return result
+
+
+def finalize_inspection(request: Request, snapshot: InspectionSnapshot) -> InspectionSnapshot:
+    """No await after these checks: revoke private data changed during any pending read."""
+    store = request.app.state.pipeline_inspection
+    store.expire()
+    if snapshot.session not in store.sessions:
+        raise HTTPException(410, "inspection_session_expired")
+    try:
+        if any(validate() is not True for validate in getattr(request.state, "inspection_private_checks", ())):
+            raise ValueError("inspection_private_access_changed")
+    except Exception as error:
+        store.close(snapshot.session)
+        raise HTTPException(409, "inspection_private_access_changed") from error
+    now = store.clock()
+    return snapshot.model_copy(update={"nodes": [node.model_copy(update={"visuals": [], "detections": [],
+        "geometry": None, "image_available": False}) if node.expires_at is None or node.expires_at <= now else node
+        for node in snapshot.nodes]})
 
 
 def pipeline_image_encoders(app: FastAPI) -> asyncio.Semaphore:
@@ -90,7 +151,9 @@ def install_inspection_routes(app: FastAPI, authorize: Callable[[Request], str])
         store, _, _, _ = await checked_inspection(request, token)
         response.headers["Cache-Control"] = "no-store"
         try:
-            return store.snapshot(token)
+            snapshot = await project_inspection(request, store.snapshot(token))
+            await checked_inspection(request, token)
+            return finalize_inspection(request, snapshot)
         except KeyError as error:
             raise HTTPException(410, "inspection_session_expired") from error
 

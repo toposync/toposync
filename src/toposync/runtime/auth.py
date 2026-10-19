@@ -1784,10 +1784,15 @@ class AuthRuntime:
         )
         return self._principal_from_user(user), access_token, refresh_token
 
-    def logout(self, raw_refresh_token: str | None) -> None:
+    def logout(self, raw_refresh_token: str | None, *, access_token: str | None = None) -> str | None:
         token = str(raw_refresh_token or "").strip()
         if token:
+            session = self.store.get_refresh_session(token)
             self.store.revoke_refresh_token(token)
+            if session is not None:
+                return session.user.id
+        principal = self._principal_from_access(access_token) if access_token else None
+        return principal.user_id if principal is not None else None
 
     def start_pairing(self, *, user_id: str, device_label: str | None = None) -> tuple[str, float]:
         return self.store.create_pairing_code(

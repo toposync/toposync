@@ -94,6 +94,8 @@ class VisionExtension(BaseExtension):
         services.register("vision.identity.store", identity_store)
         services.register("vision.identity.history_selection", partial(identity_history_selection, get_store=identity_store))
         services.register("occurrences.private_projection", partial(activity_projection, get_store=identity_store))
+        from .identity.inspection import project_identity_inspection
+        services.register("pipeline.inspection.project.vision.identity", partial(project_identity_inspection, get_store=identity_store))
 
         def maintain_existing_gallery():
             association_repository().maintain()

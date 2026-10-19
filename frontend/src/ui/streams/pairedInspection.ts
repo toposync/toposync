@@ -17,6 +17,18 @@ export type InspectionBox = { points: number[][]; label: string; score: number; 
 export type ProjectedInspectionVisual = Omit<InspectionVisual, "points"> & { points: Array<number[] | null>; node: InspectionNode };
 export const maximumPairedBytes = 400_000;
 
+export function expirePrivateVisuals(metadata: PairedInspectionMetadata, now: number): PairedInspectionMetadata {
+  let changed = false;
+  const nodes = metadata.snapshot.nodes.map(node => {
+    if (node.expires_at !== null && now < node.expires_at) return node;
+    const visuals = node.visuals.filter(visual => visual.access_scope === "diagnostic_private");
+    if (visuals.length === node.visuals.length) return node;
+    changed = true;
+    return { ...node, visuals };
+  });
+  return changed ? { ...metadata, snapshot: { ...metadata.snapshot, nodes } } : metadata;
+}
+
 function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 function size(value: unknown): value is [number, number] {
   return Array.isArray(value) && value.length === 2 && value.every(n => Number.isInteger(n) && n > 0 && n <= 8192);

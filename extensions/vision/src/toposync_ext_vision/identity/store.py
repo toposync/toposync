@@ -502,6 +502,26 @@ class IdentityStore:
                 return {key: {"status": "unknown"} for key in document["participants"]}
             return result
 
+    def inspection_identity(self, occurrence_id: str, *, decision_revision: int, observed_at: float,
+                            camera_id: str | None, authorize_cameras: Callable) -> dict | None:
+        """Return only a current authorized name; never candidates, vectors or a fake probability."""
+        with self._lock:
+            row = self._connection.execute("SELECT camera_id FROM occurrence WHERE id=?", (occurrence_id,)).fetchone()
+            if row is None or row["camera_id"] != camera_id:
+                return None
+            current = self.validated_decision(occurrence_id, decision_revision=decision_revision,
+                observed_at=observed_at, max_age_seconds=10)
+            if current is None:
+                return None
+            result = {"status": current.status, "provenance": current.provenance,
+                      "decision_revision": current.revision, "gallery_revision": self.revision}
+            if current.identity_id is not None:
+                if authorize_cameras(self.camera_ids(identity_id=current.identity_id)) is False:
+                    return None
+                identity = self._identity(self._connection, current.identity_id)
+                result["name"] = self._open(identity["name"])[:64]
+            return result
+
     def activity_artifacts(self, document: dict) -> dict:
         with self._lock:
             enabled = bool(self._connection.execute('SELECT enabled FROM retention_policy').fetchone()[0])

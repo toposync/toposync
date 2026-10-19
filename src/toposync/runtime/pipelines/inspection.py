@@ -51,9 +51,14 @@ class InspectionVisual(BaseModel):
     score: float | None = None
     score_kind: str | None = Field(default=None, max_length=64)
     raster: InspectionRaster | None = None
+    access_scope: str = Field(default="diagnostic_private", pattern=r"^[a-z][a-z0-9_.]{0,63}$")
+    properties: dict[str, str | int | float] = Field(default_factory=dict, max_length=12)
 
     @model_validator(mode="after")
     def drawing_contract(self) -> InspectionVisual:
+        if any(not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+               or isinstance(value, str) and len(value) > 512 for key, value in self.properties.items()):
+            raise ValueError("invalid_inspection_property")
         if (self.kind == "raster") != (self.raster is not None) or (self.raster and (self.points or self.connections)):
             raise ValueError("invalid_inspection_raster")
         if any(point is not None and any(v < 0 or v > 1 for v in point)
@@ -136,7 +141,7 @@ class _Session:
     dropped: int = 0
     images: dict[str, tuple[int, Any]] = field(default_factory=dict)
     masks: dict[str, tuple[int, dict[int, Any]]] = field(default_factory=dict)
-    occurrence_ids: dict[str, str] = field(default_factory=dict)
+    occurrence_ids: set[str] = field(default_factory=set)
     image_bytes: int = 0
     captures: dict[str, tuple[str, int]] = field(default_factory=dict)
     last_frames: dict[tuple[str, str], tuple[str, int, int, float]] = field(default_factory=dict)
@@ -279,8 +284,13 @@ class PipelineInspectionStore:
 
     def invalidate_occurrence(self, identifier: str) -> None:
         for token, session in list(self.sessions.items()):
-            if identifier in session.occurrence_ids.values():
+            if identifier in session.occurrence_ids:
                 # Closing also invalidates in-flight image reads and the inspection lease.
+                self.close(token)
+
+    def close_owner(self, owner: str) -> None:
+        for token, session in list(self.sessions.items()):
+            if session.owner == owner:
                 self.close(token)
 
     def expire(self) -> None:
@@ -584,9 +594,11 @@ class PipelineInspectionStore:
             session.nodes[node] = observation
             identifier = packet_occurrence_id(packet) if packet else None
             if identifier:
-                session.occurrence_ids[node] = identifier
-            else:
-                session.occurrence_ids.pop(node, None)
+                if identifier not in session.occurrence_ids and len(session.occurrence_ids) >= self.maximum_items:
+                    self.close(token)
+                    continue
+                # A frozen client may still hold an earlier occurrence from this session.
+                session.occurrence_ids.add(identifier)
 
     def observe_motion(
         self,

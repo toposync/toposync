@@ -90,6 +90,16 @@ def test_occurrence_invalidation_closes_its_diagnostic_projection_and_releases_p
     assert store.image(kept, "detect", store.sessions[kept].nodes["detect"].image_sequence) is frame
 
 
+def test_prior_occurrence_invalidation_also_closes_a_frozen_client_session():
+    store = PipelineInspectionStore(clock=Clock())
+    token = store.open("demo", "revision", {"detect": "vision.detect"})
+    observe(store, value=packet(occurrence_reference={"occurrence_id": "first"}))
+    observe(store, value=packet(occurrence_reference={"occurrence_id": "second"}))
+    assert store.sessions[token].occurrence_ids == {"first", "second"}
+    store.invalidate_occurrence("first")
+    assert token not in store.sessions
+
+
 def test_snapshot_is_passive_bounded_private_and_expires():
     clock = Clock()
     store = PipelineInspectionStore(clock=clock)

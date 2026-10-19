@@ -1,5 +1,5 @@
 declare const require: any;
-import { decodePairedFrame, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
+import { decodePairedFrame, expirePrivateVisuals, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
 const test: (name: string, fn: () => void | Promise<void>) => void = require("node:test").test;
 const assert: any = require("node:assert/strict");
 
@@ -78,7 +78,7 @@ function maskedFixture(): PairedInspectionMetadata {
   const value = fixture();
   value.snapshot.nodes[0].visuals = [{ layer: "masks", kind: "raster", points: [], connections: [],
     label: "square", score: 0.9, score_kind: "segmentation_model_score", subject_id: null,
-    local_id: null, segment_id: null, state: "sampled_mask", sample_sequences: [],
+    local_id: null, segment_id: null, state: "sampled_mask", sample_sequences: [], access_scope: "diagnostic_private", properties: {},
     raster: { index: 0, width: 25, height: 25, sampling: "nearest_pixel_centres" } }];
   value.masks = [{ node_id: "detect", image_sequence: 1, index: 0, width: 25, height: 25, length: 8 }];
   return value;
@@ -128,6 +128,19 @@ test("logical consumers share a mask only from the same physical producer and mo
   assert.equal(projectInspectionMasks(value, 100, new Set(["consumer"])).length, 0);
 });
 
+test("private frozen layers expire without discarding paired public geometry", () => {
+  const value = maskedFixture();
+  value.snapshot.nodes[0].visuals.push({ ...value.snapshot.nodes[0].visuals[0], kind: "points", raster: null,
+    access_scope: "vision.identity", layer: "identity", label: "Synthetic person" });
+  assert.equal(expirePrivateVisuals(value, 100), value);
+  const filtered = expirePrivateVisuals(value, 101);
+  assert.equal(filtered.snapshot.nodes[0].visuals.length, 1);
+  assert.equal(filtered.snapshot.nodes[0].visuals[0].layer, "masks");
+  assert.equal(filtered.presentation, value.presentation);
+  assert.equal(filtered.snapshot.nodes[0].detections.length, 1);
+  assert.equal(expirePrivateVisuals(filtered, 102), filtered);
+});
+
 test("reader cancels an oversized stream even without Content-Length", async () => {
   let canceled = false;
   const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(400001)); }, cancel() { canceled = true; } });
@@ -141,7 +154,7 @@ test("pose joints preserve missing slots and require the exact capture and selec
   const value = fixture();
   value.snapshot.nodes[0].visuals = [{ layer: "pose", kind: "points", points: [[0.2,0.3], null, [0.8,0.9]],
     connections: [[0,1],[1,2],[0,2]], subject_id: "track:1", label: "person", score: 0.7, score_kind: "pose_model_score",
-    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null }];
+    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null, access_scope: "diagnostic_private", properties: {} }];
   const layers = new Set(["pose"]);
   const [visual] = projectInspectionVisuals(value, 100, layers);
   assert.deepEqual(visual.points, [[20,30], null, [80,90]]);
@@ -159,7 +172,7 @@ test("pose crop and rotation, unsupported joints and shared execution stay bound
   const node = value.snapshot.nodes[0];
   node.visuals = [{ layer: "pose", kind: "points", points: [[0.2,0.3], [0.8,0.9]],
     connections: [[0,1]], subject_id: "track:1", label: null, score: null, score_kind: null,
-    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null }];
+    local_id: null, segment_id: null, state: null, sample_sequences: [], raster: null, access_scope: "diagnostic_private", properties: {} }];
   node.geometry!.to_source = [[0, -0.5, 80], [0.5, 0, 10], [0, 0, 1]];
   value.snapshot.nodes.push({ ...node, node_id: "logical-consumer" });
   const layers = new Set(["pose"]);

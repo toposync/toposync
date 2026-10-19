@@ -156,7 +156,7 @@ async def copy_inspection_frame(context: Any, frame: Any) -> Any:
     if store is None or not context.inspection_active() or not 0 < getattr(frame, "nbytes", 0) <= store.maximum_image_bytes:
         return None
     try:
-        return await context.run_blocking(frame.copy)
+        return await context.run_blocking(frame.copy, mode="thread_pool")
     except Exception:
         # Diagnostic allocation cannot change the functional inference result.
         return None

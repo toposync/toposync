@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { resolveToposyncUrl, type InspectionSnapshot } from "@toposync/plugin-api";
 import { i18n } from "../../util/i18n";
-import { decodePairedFrame, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
+import { decodePairedFrame, expirePrivateVisuals, projectInspectionBoxes, projectInspectionMasks, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
 
 export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, selectedNodes, onSnapshot, onClosed }: {
   session: string; nodeId: string; frozen: boolean; boxes: boolean; layers: ReadonlySet<string>; selectedNodes?: ReadonlySet<string>;
@@ -14,6 +14,7 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
   const repaint = useRef<() => void>(() => {});
   const [state, setState] = useState("waiting");
   const [stamp, setStamp] = useState<number | null>(null);
+  const [privateExpired, setPrivateExpired] = useState(false);
   useEffect(() => {
     let disposed = false, timer = 0, expiry = 0, emptyReads = 0;
     let presented: PairedInspectionMetadata | null = null;
@@ -22,6 +23,7 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
     const controller = new AbortController();
     const clear = () => {
       presented = null; setStamp(null);
+      setPrivateExpired(false);
       retained?.close(); retained = null;
       retainedMasks.forEach(mask => mask.close()); retainedMasks = [];
       if (canvas.current) {
@@ -82,6 +84,10 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
             const point = visual.points[0]!;
             context.fillText(visual.subject_id, point[0], Math.max(12, point[1] - 4));
           }
+          if (visual.layer === "faces" && visual.label && options.current.layers.has("identity")) {
+            const point = visual.points[0]!;
+            context.fillText(visual.label, point[0], Math.max(12, point[1] - 4));
+          }
         }
       }
       const reference = presented.presentation.frame;
@@ -95,7 +101,8 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
     function changedCapture(next: PairedInspectionMetadata): boolean {
       if (!presented) return false;
       const a = presented.presentation.frame, b = next.presentation.frame;
-      return a.capture_instance !== b.capture_instance || a.generation !== b.generation || a.source_id !== b.source_id || a.device_id !== b.device_id;
+      return a.capture_instance !== b.capture_instance || a.generation !== b.generation || a.source_id !== b.source_id || a.device_id !== b.device_id
+        || presented.snapshot.policy_revision !== next.snapshot.policy_revision;
     }
     async function poll() {
       const timeout = window.setTimeout(() => controller.abort(), 2500);
@@ -105,6 +112,8 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
           { credentials: "same-origin", cache: "no-store", signal: controller.signal });
         if (disposed) return;
         if (response.status === 409 || response.status === 429) {
+          if (response.status === 409 && (await response.json()).detail !== "inspection_frame_not_paired")
+            throw new Error("inspection_access_or_capture_changed");
           if (++emptyReads >= 25) throw new Error("inspection_no_frames");
           if (!options.current.frozen) clear();
           setState(options.current.frozen && presented ? "paired" : "waiting"); delay = response.status === 429 ? 1000 : 200;
@@ -116,7 +125,6 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
         if (metadata.snapshot.session !== session || Date.now() / 1000 >= metadata.expires_at)
           throw new Error("inspection_expired");
         emptyReads = 0;
-        options.current.onSnapshot(metadata.snapshot);
         if (changedCapture(metadata)) clear();
         if (options.current.frozen && presented) return;
         let bitmap: ImageBitmap | null = await createImageBitmap(new Blob([new Uint8Array(jpeg).buffer], { type: "image/jpeg" }));
@@ -139,6 +147,8 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
           retained?.close(); retained = bitmap; bitmap = null;
           retainedMasks.forEach(mask => mask.close()); retainedMasks = decodedMasks; decodedMasks = [];
           presented = metadata;
+          options.current.onSnapshot(metadata.snapshot);
+          setPrivateExpired(false);
           presentedAt = Date.now() / 1000;
           paint(); setStamp(presentedAt); setState("paired");
         } finally { bitmap?.close(); decodedMasks.forEach(mask => mask.close()); }
@@ -152,6 +162,12 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
     }
     expiry = window.setInterval(() => {
       if (presented && !options.current.frozen && Date.now() / 1000 >= presented.expires_at) { clear(); setState("waiting"); }
+      if (presented && options.current.frozen) {
+        const filtered = expirePrivateVisuals(presented, Date.now() / 1000);
+        if (filtered !== presented) {
+          presented = filtered; options.current.onSnapshot(filtered.snapshot); setPrivateExpired(true); paint();
+        }
+      }
     }, 100);
     void poll();
     return () => { disposed = true; controller.abort(); window.clearTimeout(timer); window.clearInterval(expiry); repaint.current = () => {}; clear(); };
@@ -162,6 +178,7 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
     <div className="pairedInspectionStatus" role="status">
       {t(state === "paired" ? frozen ? "inspection.frozen" : "inspection.paired_video" : state === "failed" ? "inspection.failed" : "inspection.waiting")}
       {stamp !== null && frozen ? ` · ${new Date(stamp * 1000).toLocaleTimeString()}` : ""}
+      {privateExpired ? ` · ${t("inspection.private_expired")}` : ""}
     </div>
   </div>;
 }

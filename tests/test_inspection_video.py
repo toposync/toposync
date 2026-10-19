@@ -101,6 +101,22 @@ def test_masks_are_binary_attachments_on_demand_with_a_lower_rate(preview):
     assert len(decode(preview.client.get(preview.url + "?masks=true"))[0]["masks"]) == 1
 
 
+def test_private_mask_is_never_encoded_or_exported_without_its_projection(preview, monkeypatch):
+    preview.publish(with_mask=True)
+    session = preview.store.sessions[preview.token]
+    node = session.nodes["detect"]
+    session.nodes["detect"] = node.model_copy(update={"visuals": [value.model_copy(
+        update={"access_scope": "vision.identity"}) for value in node.visuals]})
+    original = inspection_video._encode_packet
+    def encode(frame, presentation, masks):
+        assert masks == []
+        return original(frame, presentation, masks)
+    monkeypatch.setattr(inspection_video, "_encode_packet", encode)
+    metadata, _ = decode(preview.client.get(preview.url + "?masks=true"))
+    assert metadata["masks"] == []
+    assert next(value for value in metadata["snapshot"]["nodes"] if value["node_id"] == "detect")["visuals"] == []
+
+
 def test_logical_consumers_do_not_encode_the_same_physical_mask_twice(preview, monkeypatch):
     preview.publish(with_mask=True)
     session = preview.store.sessions[preview.token]

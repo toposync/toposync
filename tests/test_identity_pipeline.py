@@ -40,6 +40,7 @@ class Context:
     node_id = "identity"
 
     async def run_blocking(self, function, *args, **kwargs):
+        kwargs.pop("mode", None)
         kwargs.pop("concurrency_key", None)
         kwargs.pop("process_pool_key", None)
         kwargs.pop("process_pool_deadline_seconds", None)

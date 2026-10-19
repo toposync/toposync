@@ -1748,9 +1748,7 @@ def create_app() -> FastAPI:
     async def _refresh_result_access(request: Request, user_id: str) -> None:
         registry = request.app.state.pipeline_demands
         registry.expire()
-        for token, session in list(request.app.state.pipeline_inspection.sessions.items()):
-            if session.owner == user_id:
-                request.app.state.pipeline_inspection.close(token)
+        request.app.state.pipeline_inspection.close_owner(user_id)
         await request.app.state.pipelines_orchestrator._reconcile()
 
     def _validate_client_pipeline(request: Request, pipeline: Pipeline) -> None:
@@ -1981,7 +1979,11 @@ def create_app() -> FastAPI:
     @app.post("/api/auth/logout")
     async def auth_logout(request: Request) -> Response:
         auth: AuthRuntime = request.app.state.auth
-        auth.logout(request.cookies.get(auth.refresh_cookie_name))
+        principal = _auth_context(request).principal
+        owner = auth.logout(request.cookies.get(auth.refresh_cookie_name),
+                            access_token=request.cookies.get(auth.access_cookie_name))
+        if owner or principal is not None:
+            request.app.state.pipeline_inspection.close_owner(owner or principal.user_id)
         response = JSONResponse({"ok": True})
         auth.clear_session_cookies(response)
         return response

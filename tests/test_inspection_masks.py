@@ -98,6 +98,7 @@ def test_segmentation_runtime_inspects_the_selected_mask_without_changing_result
             def inspection_active(self):
                 return bool(store.sessions)
             async def run_blocking(self, function, *args, **kwargs):
+                kwargs.pop("mode", None)
                 kwargs.pop("concurrency_key", None)
                 return function(*args, **kwargs)
             def inspect(self, state, value, **kwargs):

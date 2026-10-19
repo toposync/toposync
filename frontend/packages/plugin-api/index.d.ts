@@ -515,6 +515,8 @@ export type InspectionVisual = {
   score: number | null;
   score_kind: string | null;
   raster: InspectionRaster | null;
+  access_scope: string;
+  properties: Record<string, string | number>;
 };
 
 export type InspectionNode = {

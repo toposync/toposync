@@ -8,7 +8,7 @@ import json
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from toposync.runtime.pipelines.image_geometry import inspection_geometry, transformed_geometry
-from toposync.runtime.pipelines.inspection_api import checked_inspection, pipeline_image_encoders
+from toposync.runtime.pipelines.inspection_api import checked_inspection, pipeline_image_encoders, project_inspection, finalize_inspection
 from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
 from toposync.runtime.pipelines.runtime import Artifact
 
@@ -98,7 +98,7 @@ def install_inspection_video_routes(router: APIRouter) -> None:
                         continue
                     for visual in node.visuals:
                         raster = visual.raster
-                        if raster is None or len(mask_images) >= 4:
+                        if raster is None or visual.access_scope != "diagnostic_private" or len(mask_images) >= 4:
                             continue
                         identity = (node.physical_node_id, node.producer_epoch, node.model_id, raster.index)
                         if identity in seen_masks:
@@ -121,6 +121,9 @@ def install_inspection_video_routes(router: APIRouter) -> None:
                     await encoding
                     raise
             await checked_inspection(request, token)
+            snapshot = await project_inspection(request, snapshot)
+            await checked_inspection(request, token)
+            snapshot = finalize_inspection(request, snapshot)
             store.expire()
             if store.sessions.get(token) is not session or store.clock() >= published.expires_at:
                 raise HTTPException(410, "inspection_frame_expired")

@@ -177,10 +177,12 @@ def test_manual_activation_failure_releases_demand_without_retry_loop(tmp_path, 
         assert len(validations) == 2 and not registry.demands
 
 
-def register_capability(client, calls):
+def register_capability(client, calls, *, packets=()):
     class Source(SourceOperatorRuntime):
         async def run(self, context):
             calls.append("started")
+            for packet in packets:
+                await context.emit(packet)
             await context.cancel_event.wait()
 
         async def shutdown(self):
@@ -192,7 +194,7 @@ def register_capability(client, calls):
         outputs=[{"name": "out"}],
         capabilities=["vision"],
         state_kind="runtime_resource",
-        produces_payload_keys=["subject"],
+        produces_payload_keys=["subject", "activity_observation"],
         runtime_factory=lambda *_: Source(),
     )
     services = client.app.state.automatic.services
@@ -234,7 +236,7 @@ def register_capability(client, calls):
                             "contract": {
                                 "type": "packet",
                                 "version": 1,
-                                "payload_keys": ["subject"],
+                                "payload_keys": ["subject", "activity_observation"],
                                 "artifacts": [],
                             },
                         }

@@ -44,6 +44,7 @@ class Contribution(BaseModel):
     source_id: Identifier
     lifecycle: Literal["OPEN", "UPDATE", "CLOSE"]
     observed_at: Timestamp
+    started_at: Timestamp | None = None
     clock_domain: Identifier
     evidence_id: Identifier
     capture_instance: Identifier | None = None
@@ -60,6 +61,8 @@ class Contribution(BaseModel):
 
     @model_validator(mode="after")
     def source_scope(self):
+        if self.started_at is not None and self.started_at > self.observed_at:
+            raise ValueError("Observed start cannot follow its evidence")
         if self.camera_id not in self.scope.camera_ids:
             raise ValueError("Occurrence contribution is outside the source scope")
         if self.position is not None and (self.coordinate_reference is None or self.mapping_revision is None):
@@ -233,7 +236,8 @@ class OccurrenceStore:
                                      "area_ids": contribution.scope.area_ids},
                     "status": "OPEN", "revision": 0, "privacy_revision": 1, "enrichment_allowed": True,
                     "created_at": now, "updated_at": now, "expires_at": now + retention_seconds,
-                    "started_at": contribution.observed_at, "last_observed_at": contribution.observed_at,
+                    "started_at": contribution.started_at if contribution.started_at is not None else contribution.observed_at,
+                    "last_observed_at": contribution.observed_at,
                     "ended_at": None, "close_reason": None, "clock_domain": contribution.clock_domain,
                     "duration_status": "observed", "duration_seconds": 0,
                     "participants": {}, "members": {}, "evidence": {}, "enrichments": [],
@@ -262,7 +266,7 @@ class OccurrenceStore:
             if member is None and len(document["members"]) >= self.maximum_members:
                 raise OccurrenceConflict("occurrence_member_capacity")
             sample = {key: getattr(contribution, key) for key in (
-                "participant_id", "camera_id", "source_id", "observed_at", "clock_domain",
+                "participant_id", "camera_id", "source_id", "observed_at", "started_at", "clock_domain",
                 "capture_instance", "capture_generation", "frame_sequence", "position",
                 "coordinate_reference", "mapping_revision", "position_error_metres", "association_reason", "gap")}
             sample = json.loads(_json(sample))
@@ -278,7 +282,8 @@ class OccurrenceStore:
             if document["clock_domain"] != contribution.clock_domain:
                 document["duration_status"] = "incomparable_clocks"
             if document["duration_status"] == "observed":
-                document["started_at"] = min(document["started_at"], contribution.observed_at)
+                document["started_at"] = min(document["started_at"], contribution.started_at
+                    if contribution.started_at is not None else contribution.observed_at)
                 document["last_observed_at"] = max(document["last_observed_at"], contribution.observed_at)
                 document["duration_seconds"] = document["last_observed_at"] - document["started_at"]
             else:

@@ -232,7 +232,10 @@ def expand_result_references(
                 "from": {"node": prefix + root, "port": output.port},
                 "to": {"node": node["id"], "port": "in"},
             }
-            if graph.get("meta", {}).get("result_consumer", {}).get("node_uid") == node["uid"]:
+            durable_sinks = {item["id"] for item in graph["nodes"] if item["operator"] == "core.record_occurrence"}
+            records_occurrences = any(edge["from"]["node"] == node["id"] and edge["to"]["node"] in durable_sinks
+                                      for edge in graph["edges"])
+            if records_occurrences or graph.get("meta", {}).get("result_consumer", {}).get("node_uid") == node["uid"]:
                 # Saved event flows must retain distinct subjects and terminal events.
                 incoming.update(queue={"max_items": 64, "drop_policy": "block"},
                                 backpressure={"mode": "block"}, lifecycle={"compact_updates": False})

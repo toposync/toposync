@@ -11,6 +11,7 @@ from .automatic import AutomaticState
 from .config_store import Pipeline, PipelineAlreadyExistsError
 from .pipelines.demands import DemandRequest
 from .pipelines.runtime import Lifecycle
+from .pipelines.occurrence_sink import RecordActivityParameters
 from .pipelines.operators_gates import (
     ScheduleGateConfig,
     _normalize_weekdays,
@@ -44,9 +45,20 @@ class AutomaticController:
                 "kind": "consequence",
                 "extension_id": "core",
                 "title": {"en": "Record activity locally", "pt-BR": "Registrar atividade local"},
-                "operators": ["core.notify"],
+                "operators": ["core.record_occurrence"],
                 "required_consents": [],
-                "fields": [],
+                "parameters_schema": RecordActivityParameters.model_json_schema(),
+                "fields": [
+                    {"name": "retention_days", "type": "number", "default": 1,
+                     "minimum": 1 / 24, "maximum": 366,
+                     "title": {"en": "Event and text retention (days)", "pt-BR": "Retenção de eventos e texto (dias)"}},
+                    {"name": "notice", "type": "select", "default": "none",
+                     "title": {"en": "Local notice", "pt-BR": "Aviso local"},
+                     "choices": [
+                         {"value": "none", "title": {"en": "Record only", "pt-BR": "Somente registrar"}},
+                         {"value": "simulated", "title": {"en": "Simulated receipt", "pt-BR": "Recibo simulado"}},
+                     ]},
+                ],
             }
         ]
         for identifier in self.services.list_ids("automatic.catalog."):
@@ -287,19 +299,20 @@ class AutomaticController:
             if graph is None:
                 continue
             if original.consequence.capability == "core.record":
+                output = next((item for item in graph.get("meta", {}).get("outputs", [])
+                               if item["key"] == "automatic." + original.id), None)
+                if output is None or "activity_observation" not in output["contract"].get("payload_keys", []):
+                    raise ValueError("Recording requires the observation evidence contract")
                 effect = {
-                    "operator": "core.notify",
+                    "operator": "core.record_occurrence",
                     "config": {
-                        "notification_type": "pipelines.automatic",
+                        **RecordActivityParameters.model_validate(original.consequence.parameters).model_dump(),
+                        "objective_id": original.id,
                         "title": original.name,
-                        "description": "{{subject.category}}",
-                        "dedupe_by_occurrence": True,
-                        "dedupe_key_template": "{{subject.id}}",
-                        "include_payload_paths": next(
-                            (output["contract"]["payload_keys"]
-                             for output in graph.get("meta", {}).get("outputs", [])
-                             if output["key"] == "automatic." + original.id), []
-                        ),
+                        "kind": original.capability,
+                        "scope": {"camera_ids": cameras,
+                                  "area_ids": [original.scope.area_id] if original.scope.area_id else [],
+                                  "association_scope": (effective.condition.get("association") or {}).get("scope")},
                     },
                 }
             else:

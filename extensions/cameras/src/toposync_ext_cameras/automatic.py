@@ -571,6 +571,7 @@ def plan_observation(*, intent, configuration):
             {"kind": intent.capability.split(".")[1]},
             tail,
         )
+    tail = add("activity_evidence", "vision.activity_evidence", {}, tail)
     evidence_keys = [
         field
         for operator, field in (
@@ -594,6 +595,7 @@ def plan_observation(*, intent, configuration):
             "subject",
             "camera_id",
             "frame_ts",
+            "activity_observation",
             *evidence_keys,
             *(["native_observation"] if native else []),
         ],

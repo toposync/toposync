@@ -337,6 +337,7 @@ def test_automatic_result_keeps_observed_duration_through_manual_projection_and_
     from types import SimpleNamespace
     from toposync.runtime.pipelines.demands import DemandRequest, ResourceDemandRegistry
     from test_pipeline_notify_timing import sink
+    from toposync_ext_vision.activity_evidence import ActivityEvidenceRuntime
 
     async def scenario():
         planned = plan_observation(intent=intent("vision.presence"), configuration=configuration())
@@ -356,6 +357,7 @@ def test_automatic_result_keeps_observed_duration_through_manual_projection_and_
                 raw = observed(sequence=timestamp)
                 raw = replace(raw, payload={**raw.payload, "frame_ts": timestamp})
                 for event in await occurrence.process_packet(raw, None):
+                    event = (await ActivityEvidenceRuntime().process_packet(event, None))[0]
                     projected = demands.project(demand.id, event)
                     assert projected is not None
                     assert "frame_occurrence" in projected.payload

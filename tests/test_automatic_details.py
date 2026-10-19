@@ -14,6 +14,7 @@ from toposync.runtime.pipelines.demands import DemandRequest, ResourceDemandRegi
 from toposync_ext_cameras.automatic import plan_observation
 from toposync_ext_cameras.pipelines.frame_occurrence import FrameOccurrenceRuntime
 from toposync_ext_vision.observation_detail import ObservationDetailRuntime
+from toposync_ext_vision.activity_evidence import ActivityEvidenceRuntime
 from toposync_ext_vision.processing.contracts import PoseObject, SegmentationInstance
 from toposync_ext_vision.processing.pose_landmarks import PoseLandmark
 from toposync_ext_vision.processing.tasks.gestures import VisionGestureRecognizeRuntime
@@ -92,6 +93,7 @@ def test_pose_inference_once_for_two_people_then_tracking_occurrence_and_public_
             assert "metadata" not in detail["items"][0]
             assert detail["items"][0]["landmark_score_semantics"] == "simcc_min_axis_maximum"
             assert detail["items"][0]["landmarks"][0]["model_score"] == 3.2
+            [output] = await ActivityEvidenceRuntime().process_packet(output, None)
             projected = demands.project(demand.id, output)
             assert projected is not None and not projected.artifacts
             assert "vision" not in projected.payload
@@ -221,6 +223,7 @@ def test_contextual_plan_preserves_occurrence_and_only_sends_subject_crop_to_sim
             assert annotated.payload["condition_annotation"]["status"] == status
             assert service.calls[-1]["image"].shape[:2] == (80,30)
             assert "Do not substitute another subject" in service.calls[-1]["description"]
+            [annotated] = await ActivityEvidenceRuntime().process_packet(annotated, None)
             projected = demands.project(demand.id, annotated)
             assert projected is not None and not projected.artifacts and "ai" not in projected.payload
             assert "attempts" not in projected.payload["condition_annotation"]

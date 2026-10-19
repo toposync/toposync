@@ -1686,6 +1686,9 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
 
 
 def register_sink_operators(registry: OperatorRegistry) -> None:
+    from .occurrence_sink import register_occurrence_sink
+
+    register_occurrence_sink(registry)
     registry.register_operator(
         operator_id="core.store_images",
         description="Stores selected image artifacts to local /files storage as WebP/PNG/JPG and attaches references.",

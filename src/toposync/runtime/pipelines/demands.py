@@ -448,6 +448,7 @@ class ResourceDemandRegistry:
                 ],
             )
             if demand.consequence is not None:
+                durable = demand.consequence["operator"] == "core.record_occurrence"
                 graph = build_pipeline_graph_v2(
                     graph_uid=f"demand_{demand.id}",
                     nodes=[*graph["nodes"], {"id": "consequence", **demand.consequence}],
@@ -455,6 +456,9 @@ class ResourceDemandRegistry:
                         "from": {"node": "result", "port": "out"},
                         "to": {"node": "consequence", "port": "in"},
                         "maxsize": 16, "drop_policy": "drop_oldest",
+                        **({"queue": {"max_items": 16, "drop_policy": "block"},
+                            "backpressure": {"mode": "block"},
+                            "lifecycle": {"compact_updates": False}} if durable else {}),
                     }],
                 )
             pipelines.append(Pipeline(name=f"demand_{demand.id}", graph=graph))

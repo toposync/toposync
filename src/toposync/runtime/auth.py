@@ -1627,7 +1627,7 @@ class AuthRuntime:
             "is_disabled": False,
         }
 
-    def resolve_request(self, request: Request) -> AuthContext:
+    def resolve_request(self, request: Request, *, refresh: bool = True) -> AuthContext:
         if self.mode == "bypass":
             return AuthContext(
                 principal=self.bypass_principal, mode=self.mode, requires_setup=False
@@ -1689,6 +1689,10 @@ class AuthRuntime:
             return AuthContext(principal=principal, mode=self.mode, requires_setup=requires_setup)
 
         access_cookie = str(request.cookies.get(self.access_cookie_name) or "")
+        if not refresh:
+            previous = getattr(request.state, "auth_context", None)
+            if isinstance(previous, AuthContext) and previous.cookies_to_set:
+                access_cookie = previous.cookies_to_set[0]
         if access_cookie:
             principal = self._principal_from_access(access_cookie)
             if principal is not None:
@@ -1697,7 +1701,7 @@ class AuthRuntime:
                 )
 
         refresh_cookie = str(request.cookies.get(self.refresh_cookie_name) or "")
-        if refresh_cookie:
+        if refresh_cookie and refresh:
             refreshed = self._tokens_from_refresh(refresh_cookie)
             if refreshed is not None:
                 principal, new_tokens = refreshed

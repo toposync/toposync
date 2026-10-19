@@ -8,6 +8,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from toposync.runtime.notifications.access import NotificationAccess
 from toposync.runtime.notifications.store import parse_data_filter
 
 from .assistant import local_profiles, require
@@ -81,7 +82,8 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
             except KeyError as exc:
                 raise HTTPException(503, "Identity history unavailable") from exc
         identity_selection = await selection() if body.identity_id else None
-        parameters = {"query": question, "limit": 10, "data_filter": body.data_filter,
+        access = NotificationAccess(request)
+        parameters = {"read_filter": access, "query": question, "limit": 10, "data_filter": body.data_filter,
                       "priorities": body.priorities, "types": body.types,
                       "created_after": body.created_after, "created_before": body.created_before}
         if identity_selection is not None:
@@ -103,9 +105,10 @@ def install_history_answer_routes(app: FastAPI, services: Any, router: Any) -> N
             items, _ = await app.state.notifications.list(limit=10,
                 notification_ids=[item["id"] for item in result["notifications"]], data_filter=body.data_filter,
                 priorities=body.priorities, types=body.types,
-                created_after=body.created_after, created_before=body.created_before)
+                created_after=body.created_after, created_before=body.created_before, read_filter=access)
             by_id = {item["id"]: item for item in items}
             return [by_id[item["id"]] for item in result["notifications"] if item["id"] in by_id]
+        result["notifications"] = await current_sources()
         result["answer"] = {"status": "no_evidence", "citations": []}
         if not result["notifications"]:
             return result

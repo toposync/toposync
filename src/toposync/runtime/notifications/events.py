@@ -47,7 +47,8 @@ class EventBroadcaster:
                 return event
         # Preserve durable history in storage. Fetch it over HTTP instead of
         # silently dropping an oversized live update or shortening its evidence.
-        return {"op": "resync"}
+        identifier = notification.get("id") if isinstance(notification, dict) else None
+        return {"op": "resync", "notification_id": identifier if isinstance(identifier, str) and len(identifier) <= 128 else None}
 
     def __init__(self, *, max_queue_size: int = 250) -> None:
         self._subscribers: dict[asyncio.Queue[dict[str, Any]], _Subscription] = {}
@@ -75,9 +76,8 @@ class EventBroadcaster:
         subscription = self._subscribers.pop(q, None)
         if subscription:
             _clear_ephemeral(subscription)
-        if subscription and subscription.include_ephemeral_image:
-            while not q.empty():
-                q.get_nowait()
+        while not q.empty():
+            q.get_nowait()
 
     def publish(
         self, event: dict[str, Any], *, ephemeral_image: dict[str, Any] | None = None,

@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 
+from .access import ReadFilter
+
+
 def parse_data_filter(value: str | dict[str, str] | None) -> dict[str, str]:
     """Bounded exact matches on projected notification data; no expressions or wildcards."""
     if value is None:
@@ -263,6 +266,7 @@ class NotificationStore:
         work: Callable[[sqlite3.Connection], Any],
         *,
         cancel_check: _CancelCheck | None = None,
+        read_filter: ReadFilter | None = None,
     ) -> Any:
         if cancel_check is not None:
             cancel_check()
@@ -276,6 +280,15 @@ class NotificationStore:
             return 0
 
         conn = _connect(self.path, read_only=True)
+        def visible(blob):
+            if read_filter is None:
+                return True
+            try:
+                payload = json.loads(blob) if blob else {}
+                return isinstance(payload, dict) and read_filter(payload)
+            except (ValueError, TypeError, RecursionError):
+                return False
+        conn.create_function("notification_visible", 1, visible)
         try:
             if cancel_check is not None:
                 cancel_check()
@@ -313,15 +326,19 @@ class NotificationStore:
         notification_id: str,
         *,
         cancel_check: _CancelCheck | None = None,
+        read_filter: ReadFilter | None = None,
     ) -> NotificationRecord | None:
         nid = notification_id.strip()
         if not nid:
             return None
 
         def read(conn: sqlite3.Connection) -> sqlite3.Row | None:
-            return self._get_row_unlocked(conn, nid)
+            row = self._get_row_unlocked(conn, nid)
+            if row is not None and read_filter is not None and not read_filter(self._row_to_record(row).payload):
+                return None
+            return row
 
-        row = self._run_read(read, cancel_check=cancel_check)
+        row = self._run_read(read, cancel_check=cancel_check, read_filter=read_filter)
         return self._row_to_record(row) if row is not None else None
 
     def list(
@@ -338,10 +355,11 @@ class NotificationStore:
         created_before: float | None = None,
         include_silent: bool = False,
         cancel_check: _CancelCheck | None = None,
+        read_filter: ReadFilter | None = None,
     ) -> tuple[list[NotificationRecord], int | None]:
         limit = max(1, min(250, int(limit)))
         before_n = int(before) if before is not None else None
-        where_sql: list[str] = []
+        where_sql: list[str] = ["notification_visible(payload_json)"]
         params: list[Any] = []
 
         for value in (created_after, created_before):
@@ -423,12 +441,12 @@ class NotificationStore:
             )
             return cur.fetchall()
 
-        rows = self._run_read(read, cancel_check=cancel_check)
+        rows = self._run_read(read, cancel_check=cancel_check, read_filter=read_filter)
         records = [self._row_to_record(r) for r in rows]
         next_cursor = records[-1].seq if records else None
         return records, next_cursor
 
-    def data_options(self, field: str, label_field: str, *, cancel_check: _CancelCheck | None = None) -> list[dict[str, Any]]:
+    def data_options(self, field: str, label_field: str, *, cancel_check: _CancelCheck | None = None, read_filter: ReadFilter | None = None) -> list[dict[str, Any]]:
         parse_data_filter({field: "value", label_field: "label"})
         # ponytail: scan visible history; add a maintained facet index only after measured need.
         def read(conn: sqlite3.Connection):
@@ -439,12 +457,33 @@ class NotificationStore:
                             THEN json_extract(payload_json, ?) END AS value,
                         CASE WHEN json_valid(payload_json) AND json_type(payload_json, ?) = 'text'
                             THEN json_extract(payload_json, ?) END AS label
-                    FROM notification WHERE priority_bucket IN ('low', 'medium', 'high')
+                    FROM notification WHERE priority_bucket IN ('low', 'medium', 'high') AND notification_visible(payload_json)
                 ) WHERE length(value) BETWEEN 1 AND 512
                 GROUP BY value ORDER BY latest DESC
             """, (f"$.data.{field}", f"$.data.{field}", f"$.data.{label_field}", f"$.data.{label_field}")).fetchall()
         return [{"value": row["value"], "label": row["label"] if isinstance(row["label"], str) and 0 < len(row["label"]) <= 512 else None}
-                for row in self._run_read(read, cancel_check=cancel_check)]
+                for row in self._run_read(read, cancel_check=cancel_check, read_filter=read_filter)]
+
+    def file_visible(self, path: str, *, read_filter: ReadFilter) -> bool:
+        # Shared evidence requires access to every referring record.
+        def read(conn):
+            return conn.execute("""
+                SELECT payload_json FROM notification
+                WHERE image_path = ? OR EXISTS (
+                    SELECT 1 FROM json_tree(CASE WHEN json_valid(payload_json) THEN payload_json ELSE '{}' END)
+                    WHERE type = 'text' AND value IN (?, ?)
+                )
+            """, (path, path, "/files/" + path)).fetchall()
+        rows = self._run_read(read)
+        return bool(rows) and all(read_filter(self._row_to_payload(row["payload_json"])) for row in rows)
+
+    @staticmethod
+    def _row_to_payload(blob: str | None) -> dict[str, Any]:
+        try:
+            value = json.loads(blob) if blob else {}
+            return value if isinstance(value, dict) else {}
+        except (ValueError, TypeError, RecursionError):
+            return {}
 
     def upsert(
         self,
@@ -612,21 +651,21 @@ class NotificationStore:
         except Exception:
             return 0
 
-    def last_viewed_seq(self, *, cancel_check: _CancelCheck | None = None) -> int:
+    def last_viewed_seq(self, *, viewer_id: str = "", cancel_check: _CancelCheck | None = None) -> int:
         return int(
             self._run_read(
-                lambda conn: self._get_state_int_unlocked_on(conn, _LAST_VIEWED_SEQ_KEY, 0),
+                lambda conn: self._get_state_int_unlocked_on(conn, _LAST_VIEWED_SEQ_KEY + ":" + viewer_id, 0),
                 cancel_check=cancel_check,
             )
         )
 
-    def mark_all_viewed(self) -> int:
+    def mark_all_viewed(self, *, viewer_id: str = "") -> int:
         with self._lock:
             seq = max(
                 self._max_seq_unlocked(),
-                self._get_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, 0),
+                self._get_state_int_unlocked(_LAST_VIEWED_SEQ_KEY + ":" + viewer_id, 0),
             )
-            self._set_state_int_unlocked(_LAST_VIEWED_SEQ_KEY, seq)
+            self._set_state_int_unlocked(_LAST_VIEWED_SEQ_KEY + ":" + viewer_id, seq)
             return seq
 
     def count_by_priority(
@@ -634,6 +673,7 @@ class NotificationStore:
         *,
         after_seq: int | None = None,
         cancel_check: _CancelCheck | None = None,
+        read_filter: ReadFilter | None = None,
     ) -> dict[str, int]:
         """Aggregate counts per visible priority bucket.
 
@@ -657,7 +697,7 @@ class NotificationStore:
                     f"""
                     SELECT COUNT(*) AS n
                     FROM notification
-                    WHERE {where_sql}
+                    WHERE ({where_sql}) AND notification_visible(payload_json)
                     """,
                     params,
                 )
@@ -665,7 +705,7 @@ class NotificationStore:
                 out[bucket] = int(row["n"] or 0) if row is not None else 0
             return out
 
-        return self._run_read(read, cancel_check=cancel_check)
+        return self._run_read(read, cancel_check=cancel_check, read_filter=read_filter)
 
     def list_open_pipeline_notifications(self, *, limit: int = 5000) -> list[NotificationRecord]:
         limit_n = max(1, min(50_000, int(limit)))

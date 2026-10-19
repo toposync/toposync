@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import json
 
 import pytest
@@ -27,10 +28,13 @@ def setup(tmp_path, raw, *, status="transcribed", mutate=None, denied=False):
         mode = "bypass"
         def requires_setup(self):
             return False
+        def resolve_request(self, request, **kwargs):
+            return None
         def authorize(self, **kwargs):
             assert kwargs["action"] == "core:notifications:read"
             if denied:
                 raise HTTPException(403, "denied")
+            return SimpleNamespace(bypass=False, role="owner")
 
     class Router:
         async def generate_local_json(self, **kwargs):

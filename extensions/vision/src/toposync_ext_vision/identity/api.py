@@ -261,6 +261,7 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
         created_before: float | None = Query(None, ge=0, allow_inf_nan=False),
     ):
         from toposync.runtime.notifications.store import parse_data_filter
+        from toposync.runtime.notifications.access import NotificationAccess
         from toposync.runtime.notifications.time_query import resolve_history_time
         response.headers["Cache-Control"] = "private, no-store"
         selected = await identity_history_selection(request=request, get_store=store,
@@ -283,7 +284,8 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
                 created_after = interpretation["time_range"]["created_after"]
                 created_before = interpretation["time_range"]["created_before"]
         parameters = dict(limit=limit, priorities=priority, types=notification_type, data_filter=filters,
-            notification_ids=identifiers, created_after=created_after, created_before=created_before)
+            notification_ids=identifiers, created_after=created_after, created_before=created_before,
+            read_filter=NotificationAccess(request))
         result = None
         if interpretation and interpretation.get("reason"):
             result = {"notifications": [], "next_cursor": None,

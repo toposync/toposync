@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 import pytest
@@ -15,17 +16,20 @@ def client_for(tmp_path, raw, *, mutate=None, denied=False):
         mode = "required"
         def requires_setup(self):
             return False
+        def resolve_request(self, request, **kwargs):
+            return None
         def authorize(self, **kwargs):
             assert kwargs["action"] == "core:notifications:read"
             if denied:
                 raise HTTPException(403, "denied")
+            return SimpleNamespace(bypass=False, role="owner")
 
     class Services:
         async def call(self, name, **kwargs):
             assert name == "ai.search_notifications"
             calls.append(kwargs)
             items, _ = await runtime.list(priorities=kwargs.get("priorities"), types=kwargs.get("types"),
-                created_after=kwargs.get("created_after"), created_before=kwargs.get("created_before"), data_filter=kwargs.get("data_filter"))
+                created_after=kwargs.get("created_after"), created_before=kwargs.get("created_before"), data_filter=kwargs.get("data_filter"), read_filter=kwargs.get("read_filter"))
             return {"notifications": items, "search": {"results_truncated": True}}
 
     class Router:

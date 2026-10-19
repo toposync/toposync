@@ -62,6 +62,7 @@ from toposync.runtime.extension_management import (
     remove_extension,
 )
 from toposync.runtime.notifications import NotificationsRuntime
+from toposync.runtime.notifications.access import NotificationAccess
 from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 from toposync.runtime.pipelines import (
@@ -1864,6 +1865,8 @@ def create_app() -> FastAPI:
                             break
 
         response = await call_next(request)
+        if path.startswith(("/api/notifications", "/api/ai/history")):
+            response.headers["Cache-Control"] = "private, no-store" + (", no-transform" if "no-transform" in response.headers.get("Cache-Control", "") else "")
         auth.apply_context_cookies(response, context, request=request)
         return response
 
@@ -4923,6 +4926,12 @@ def create_app() -> FastAPI:
         if not candidate.is_file():
             raise HTTPException(status_code=404, detail="File not found")
 
+        principal = _auth_context(request).principal
+        if not principal.bypass and principal.role != "owner":
+            if not await asyncio.to_thread(request.app.state.notifications.store.file_visible,
+                                          candidate.relative_to(base_dir).as_posix(), read_filter=NotificationAccess(request)):
+                raise HTTPException(status_code=404, detail="File not found")
+
         return FileResponse(
             path=candidate,
             media_type=_guess_media_type(candidate.name),
@@ -5009,6 +5018,7 @@ def create_app() -> FastAPI:
                 data_filter=filters,
                 created_after=created_after,
                 created_before=created_before,
+                read_filter=NotificationAccess(request),
                 cancel_check=check_cancelled,
             )
             return {"notifications": items, "next_cursor": next_cursor,
@@ -5029,7 +5039,7 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
-            return {"options": request.app.state.notifications.store.data_options(field, label_field, cancel_check=check_cancelled)}
+            return {"options": request.app.state.notifications.store.data_options(field, label_field, cancel_check=check_cancelled, read_filter=NotificationAccess(request))}
         return await _run_cancelable_request_work(request, build_response,
             limiter=request.app.state.notification_read_limiters["list"])
 
@@ -5039,7 +5049,7 @@ def create_app() -> FastAPI:
         runtime: NotificationsRuntime = request.app.state.notifications
 
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
-            return runtime.count_summary_sync(cancel_check=check_cancelled)
+            return runtime.count_summary_sync(cancel_check=check_cancelled, read_filter=NotificationAccess(request), viewer_id=_auth_context(request).principal.user_id)
 
         return await _run_cancelable_request_work(
             request,
@@ -5051,24 +5061,40 @@ def create_app() -> FastAPI:
     async def mark_notifications_viewed(request: Request) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
-        return await runtime.mark_all_viewed()
+        return await runtime.mark_all_viewed(read_filter=NotificationAccess(request), viewer_id=_auth_context(request).principal.user_id)
 
     @app.get("/api/notifications/stream")
     async def notifications_stream(request: Request) -> StreamingResponse:
         _require(request, action="core:notifications:stream")
         runtime: NotificationsRuntime = request.app.state.notifications
+        access = NotificationAccess(request)
         async def gen():
             q = runtime.broadcaster.subscribe()
             try:
                 yield "retry: 1000\n\n"
                 yield "event: ready\ndata: {}\n\n"
                 while True:
+                    try:
+                        access.principal("core:notifications:stream")
+                    except HTTPException:
+                        break
                     if await request.is_disconnected():
                         break
                     try:
                         event = await asyncio.wait_for(q.get(), timeout=15)
                     except asyncio.TimeoutError:
                         yield ": ping\n\n"
+                        continue
+                    try:
+                        access.principal("core:notifications:stream")
+                    except HTTPException:
+                        break
+                    notification = event.get("notification") if isinstance(event, dict) else None
+                    if notification is None:
+                        if isinstance(event, dict) and event.get("op") == "resync" and await runtime.event_visible(event, read_filter=access):
+                            yield 'data: {"op":"resync"}\n\n'
+                        continue
+                    if not await runtime.event_visible(event, read_filter=access):
                         continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except asyncio.CancelledError:
@@ -5092,9 +5118,13 @@ def create_app() -> FastAPI:
         if not wanted:
             raise HTTPException(status_code=400, detail="notification_id is required")
 
+        if await runtime.get(wanted, read_filter=NotificationAccess(request)) is None:
+            raise HTTPException(status_code=404, detail="Unknown notification")
+
         if include_ephemeral_image and runtime.broadcaster.ephemeral_image_stream_count >= 16:
             raise HTTPException(status_code=429, detail="Too many ephemeral image streams")
 
+        access = NotificationAccess(request)
         async def gen():
             # Allocate only once streaming begins. A cancelled response whose
             # iterator never starts must not reserve live-image capacity.
@@ -5109,6 +5139,10 @@ def create_app() -> FastAPI:
                 yield "retry: 1000\n\n"
                 yield "event: ready\ndata: {}\n\n"
                 while True:
+                    try:
+                        access.principal("core:notifications:stream")
+                    except HTTPException:
+                        break
                     if await request.is_disconnected():
                         break
                     try:
@@ -5117,9 +5151,18 @@ def create_app() -> FastAPI:
                         yield ": ping\n\n"
                         continue
                     notif = event.get("notification") if isinstance(event, dict) else None
-                    if not isinstance(notif, dict):
+                    if isinstance(notif, dict) and str(notif.get("id") or "") != wanted:
                         continue
-                    if str(notif.get("id") or "") != wanted:
+                    try:
+                        access.principal("core:notifications:stream")
+                    except HTTPException:
+                        break
+                    notification = event.get("notification") if isinstance(event, dict) else None
+                    if notification is None:
+                        if isinstance(event, dict) and event.get("op") == "resync" and await runtime.event_visible(event, read_filter=access):
+                            yield 'data: {"op":"resync"}\n\n'
+                        continue
+                    if not await runtime.event_visible(event, read_filter=access):
                         continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except asyncio.CancelledError:
@@ -5139,7 +5182,7 @@ def create_app() -> FastAPI:
         runtime: NotificationsRuntime = request.app.state.notifications
 
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
-            notif = runtime.get_sync(notification_id, cancel_check=check_cancelled)
+            notif = runtime.get_sync(notification_id, cancel_check=check_cancelled, read_filter=NotificationAccess(request))
             if notif is None:
                 raise HTTPException(status_code=404, detail="Unknown notification")
             return notif

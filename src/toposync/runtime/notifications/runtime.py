@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .access import ReadFilter
 from .events import EventBroadcaster
 from .store import NotificationRecord, NotificationStore
 
@@ -53,6 +54,7 @@ class NotificationsRuntime:
         created_after: float | None = None,
         created_before: float | None = None,
         include_silent: bool = False,
+        read_filter: ReadFilter | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
         return await asyncio.to_thread(
             self.list_sync,
@@ -66,6 +68,7 @@ class NotificationsRuntime:
             created_after=created_after,
             created_before=created_before,
             include_silent=include_silent,
+            read_filter=read_filter,
         )
 
     def list_sync(
@@ -81,6 +84,7 @@ class NotificationsRuntime:
         created_after: float | None = None,
         created_before: float | None = None,
         include_silent: bool = False,
+        read_filter: ReadFilter | None = None,
         cancel_check: _CancelCheck | None = None,
     ) -> tuple[list[dict[str, Any]], int | None]:
         records, next_cursor = self.store.list(
@@ -94,6 +98,7 @@ class NotificationsRuntime:
             created_after=created_after,
             created_before=created_before,
             include_silent=include_silent,
+            read_filter=read_filter,
             cancel_check=cancel_check,
         )
         if cancel_check is not None:
@@ -103,14 +108,15 @@ class NotificationsRuntime:
     async def count_by_priority(self) -> dict[str, int]:
         return await asyncio.to_thread(self.store.count_by_priority)
 
-    async def count_summary(self) -> dict[str, Any]:
-        return await asyncio.to_thread(self.count_summary_sync)
+    async def count_summary(self, *, read_filter: ReadFilter | None = None, viewer_id: str = "") -> dict[str, Any]:
+        return await asyncio.to_thread(self.count_summary_sync, read_filter=read_filter, viewer_id=viewer_id)
 
-    def count_summary_sync(self, *, cancel_check: _CancelCheck | None = None) -> dict[str, Any]:
-        total_by_priority = self.store.count_by_priority(cancel_check=cancel_check)
-        last_viewed_seq = self.store.last_viewed_seq(cancel_check=cancel_check)
+    def count_summary_sync(self, *, read_filter: ReadFilter | None = None, viewer_id: str = "", cancel_check: _CancelCheck | None = None) -> dict[str, Any]:
+        total_by_priority = self.store.count_by_priority(cancel_check=cancel_check, read_filter=read_filter)
+        last_viewed_seq = self.store.last_viewed_seq(cancel_check=cancel_check, viewer_id=viewer_id)
         unread_by_priority = self.store.count_by_priority(
             after_seq=last_viewed_seq,
+            read_filter=read_filter,
             cancel_check=cancel_check,
         )
         if cancel_check is not None:
@@ -122,20 +128,38 @@ class NotificationsRuntime:
             "unread_by_priority": unread_by_priority,
         }
 
-    async def mark_all_viewed(self) -> dict[str, Any]:
-        await asyncio.to_thread(self.store.mark_all_viewed)
-        return await self.count_summary()
+    async def mark_all_viewed(self, *, read_filter: ReadFilter | None = None, viewer_id: str = "") -> dict[str, Any]:
+        await asyncio.to_thread(self.store.mark_all_viewed, viewer_id=viewer_id)
+        return await self.count_summary(read_filter=read_filter, viewer_id=viewer_id)
 
-    async def get(self, notification_id: str) -> dict[str, Any] | None:
-        return await asyncio.to_thread(self.get_sync, notification_id)
+    async def get(self, notification_id: str, *, read_filter: ReadFilter | None = None) -> dict[str, Any] | None:
+        return await asyncio.to_thread(self.get_sync, notification_id, read_filter=read_filter)
+
+    async def event_visible(self, event: dict, *, read_filter: ReadFilter) -> bool:
+        if event.get("op") == "resync":
+            identifier = event.get("notification_id")
+            return isinstance(identifier, str) and await self.get(identifier, read_filter=read_filter) is not None
+        queued = event.get("notification")
+        if not isinstance(queued, dict) or not read_filter(queued.get("payload") or {}):
+            return False
+        current = await self.get(queued.get("id", ""), read_filter=read_filter)
+        if current is None:
+            return False
+        # A queued snapshot must not resurrect content edited or erased since publication.
+        for key in ("updatedAt", "title", "description", "imageUrl", "priority"):
+            if current.get(key) != queued.get(key):
+                return False
+        return {key: value for key, value in current["payload"].items() if key != "ephemeral_image_status"} == {
+            key: value for key, value in queued.get("payload", {}).items() if key != "ephemeral_image_status"}
 
     def get_sync(
         self,
         notification_id: str,
         *,
+        read_filter: ReadFilter | None = None,
         cancel_check: _CancelCheck | None = None,
     ) -> dict[str, Any] | None:
-        rec = self.store.get(notification_id, cancel_check=cancel_check)
+        rec = self.store.get(notification_id, cancel_check=cancel_check, read_filter=read_filter)
         if cancel_check is not None:
             cancel_check()
         return _to_public(rec) if rec is not None else None

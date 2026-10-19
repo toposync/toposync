@@ -29,7 +29,7 @@ export type AutomaticCapability = {
   missing_operators: string[]; fields?: AutomaticField[];
   resource_fields?: AutomaticField[]; resource_hint?: Record<string, string>; resource_operator?: string;
   resource_consent_fields?: string[];
-  configuration_panels?: Array<{ operator: string; field: string; minimum_sources: number }>;
+  configuration_panels?: Array<{ operator: string; field: string; minimum_sources: number; title?: Record<string, string> }>;
 };
 export type AutomaticActivity = { state: string; reason: string | null; requested?: boolean; sources: AutomaticSource[]; limitations?: string[]; last_result?: { at: number; received: number } };
 export type AutomaticSnapshot = {

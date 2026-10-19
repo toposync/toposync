@@ -846,6 +846,7 @@ export type CameraOnvifTransport = {
   received_messages: number; transitions: number; queue_overflows: number;
 };
 export type CameraOnvifCapabilities = {
+  source_profiles?: Record<string, string>;
   camera_id: string; queried_at: number; valid_until: number; status: string;
   identification: Record<string, string>;
   sections: Record<string, string>;

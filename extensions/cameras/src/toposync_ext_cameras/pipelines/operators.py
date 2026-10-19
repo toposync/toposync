@@ -715,6 +715,7 @@ class CameraSourceConfig(BaseModel):
     keep_capture_when_gate_closed: bool = False
     observation_window_id: str = Field(default="", max_length=200)
     gate_min_observation_seconds: float = Field(default=0.0, ge=0.0, le=300.0, allow_inf_nan=False)
+    observe_on_start: bool = False
     poll_interval_ms: int = Field(default=20, ge=1, le=250)
 
     @field_validator("camera_id", "source_id", "rtsp_url", "observation_window_id", mode="after")
@@ -1187,6 +1188,7 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
         self._config = OnvifStateGateConfig.model_validate(config)
         self._dependencies = dependencies
         self._last_open: bool | None = None
+        self._last_observation_state = None
         self._last_raw_active: bool | None = None
         self._hold_until_ts = 0.0
         self._last_telemetry_open: bool | None = None
@@ -1210,10 +1212,12 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
                 gate_open = True
                 payload["reason"] = "activation_hint" if hint_open else "activation_hints_unavailable"
         self._observe_gate_telemetry(context, gate_open=gate_open, payload=payload)
-        if self._last_open is not None and self._last_open == gate_open:
+        state = (gate_open, payload.get("known"), payload.get("available"), payload.get("value"), payload.get("reason"))
+        if self._last_observation_state == state:
             return None
+        lifecycle = Lifecycle.UPDATE if self._last_open == gate_open else Lifecycle.OPEN if gate_open else Lifecycle.CLOSE
+        self._last_observation_state = state
         self._last_open = gate_open
-        lifecycle = Lifecycle.OPEN if gate_open else Lifecycle.CLOSE
         return Packet.create(
             stream_id=_onvif_gate_stream_id(self._config, context),
             lifecycle=lifecycle,
@@ -1300,6 +1304,9 @@ class OnvifStateGateRuntime(SourceOperatorRuntime):
         clock = time.monotonic()
         payload: dict[str, Any] = {
             "topic": self._config.topic,
+            "qualified_topic": self._config.qualified_topic,
+            "source": self._config.source,
+            "key": self._config.key,
             "item_name": self._config.item_name,
             "open_when": bool(self._config.open_when),
             "fail_open": bool(self._config.fail_open),
@@ -1640,9 +1647,11 @@ class CameraSourceRuntime(SourceOperatorRuntime):
         self._gate_open = True
         self._gate_known = False
         self._onvif_gate_attached = False
+        self._native_observation = None
         self._gate_waiting_first_frame = False
         self._gate_opened_at_ts = 0.0
         self._gate_observation_until = 0.0
+        self._initial_observation_started = False
         self._waiting_for_source_config = False
         self._last_wait_log_monotonic = 0.0
         self._source_health_id = ""
@@ -1785,6 +1794,12 @@ class CameraSourceRuntime(SourceOperatorRuntime):
             self._gate_known = True
             return
 
+        if self._config.observe_on_start and not self._initial_observation_started:
+            self._initial_observation_started = True
+            self._gate_waiting_first_frame = True
+            self._gate_opened_at_ts = time.time()
+            self._gate_observation_until = time.monotonic() + 30.0
+
         # When a gate input is connected, the safe default is "closed" until we receive the first signal.
         if not self._gate_known:
             self._gate_open = False
@@ -1799,6 +1814,10 @@ class CameraSourceRuntime(SourceOperatorRuntime):
 
             value = packet.payload.get("gate_open")
             self._onvif_gate_attached = isinstance(packet.payload.get("onvif"), dict)
+            if self._onvif_gate_attached:
+                self._native_observation = {key: packet.payload["onvif"][key] for key in (
+                    "known", "available", "value", "reason", "evaluated_at_ts", "topic", "qualified_topic", "item_name", "source", "key",
+                ) if key in packet.payload["onvif"]}
             if isinstance(value, bool):
                 if value and (not self._gate_known or not self._gate_open) and self._config.gate_min_observation_seconds:
                     self._gate_waiting_first_frame = True
@@ -2064,6 +2083,7 @@ class CameraSourceRuntime(SourceOperatorRuntime):
                 "frame_height": height,
                 "capture": capture_metrics,
                 "capture_evidence": dict(capture_frame.capture_evidence),
+                **({"native_observation": dict(self._native_observation)} if self._native_observation is not None else {}),
                 **({"pan_tilt_zoom_state": ptz_state} if ptz_state is not None else {}),
             },
             artifacts=frame_artifacts,
@@ -3705,6 +3725,7 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
             "frame_width",
             "frame_height",
             "capture",
+            "native_observation",
         ],
         produces_artifacts=[MAIN_ARTIFACT_NAME],
         produces_source_fields=[

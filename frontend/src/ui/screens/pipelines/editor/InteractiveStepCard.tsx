@@ -194,7 +194,7 @@ export function InteractiveStepCard({
       return true;
     });
 
-  const hasOperatorPanel = Boolean(operatorPanels[step.operatorId]);
+  const hasOperatorPanel = Boolean(operatorPanels[step.operatorId] && operatorPanels[step.operatorId].placement !== "after");
   const shouldShowScalarGrid = scalarEntries.length > 0 && ((!hasOperatorPanel && !shouldHideScalarGrid(step.operatorId)) || step.showAdvanced);
   const shouldShowConfigJson = step.showAdvanced;
   const issueSeverity = highestAlertSeverity(stepAlerts);

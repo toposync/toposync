@@ -94,6 +94,7 @@ from .panorama_region import COVERAGE_REGION_POLICY as REGION_POLICY
 from .source_health import get_global_source_health_store
 from .view_resolver import resolve_ptz_target_view
 from .settings import (
+    CamerasExtensionSettings,
     camera_settings_authorization_selectors,
     camera_source_has_ptz,
     flatten_camera_device_for_ui,
@@ -2088,6 +2089,18 @@ class CamerasExtension(BaseExtension):
         app.state.camera_onvif_event_manager = onvif_event_manager
         register_extension_shutdown_callback(app, onvif_event_manager.shutdown)
 
+        async def qualify_native_observation(*, configuration, selection):
+            from .onvif.capabilities import qualify_observation_signal
+            settings = CamerasExtensionSettings.model_validate(configuration.settings.extensions.get(EXTENSION_ID, {}))
+            for camera_id, binding in selection.sources.items():
+                camera = next((item for item in settings.devices if item.id == camera_id and item.enabled), None)
+                source = next((item for item in camera.sources if item.id == binding.source_id and item.enabled), None) if camera else None
+                if source is None or source.origin.profile_token != binding.profile_token:
+                    raise ValueError("Native observation source changed")
+                await qualify_observation_signal(camera_id=camera_id, source=source.model_dump(mode="json"),
+                    selection=binding.signal, catalog=onvif_capabilities, events=onvif_event_manager)
+        services.register("automatic.qualify.camera_native", qualify_native_observation)
+
         async def _svc_onvif_events_list(*, camera_id: str) -> dict[str, Any]:
             return await onvif_event_manager.list_descriptors(str(camera_id or "").strip())
 
@@ -3955,7 +3968,11 @@ class CamerasExtension(BaseExtension):
             _require_auth(request, action="core:settings:read")
             try:
                 catalog = await onvif_capabilities.inspect(camera_id, refresh=refresh)
-                return {**catalog, "recipe_optimization": RECIPE_OPTIMIZATION}
+                settings = CamerasExtensionSettings.model_validate(await _read_ext_settings(request))
+                camera = next((item for item in settings.devices if item.id == camera_id), None)
+                source_profiles = {source.id: source.origin.profile_token for source in camera.sources
+                                   if source.enabled and source.origin.profile_token} if camera else {}
+                return {**catalog, "source_profiles": source_profiles, "recipe_optimization": RECIPE_OPTIMIZATION}
             except HTTPException:
                 raise
             except Exception as exc:
@@ -6056,50 +6073,12 @@ class CamerasExtension(BaseExtension):
                     raise HTTPException(409, "Camera event optimization currently requires local processing")
                 if not selection.coverage_confirmed:
                     raise HTTPException(400, "Confirm event coverage and reopening latency for this source")
-                origin = source.get("origin") if isinstance(source.get("origin"), dict) else {}
-                if origin.get("type") not in {"onvif_profile", "rtsp"} or not origin.get("profile_token"):
-                    raise HTTPException(409, "Optimization requires an exactly bound ONVIF video profile")
-                catalog = await onvif_capabilities.inspect(cid)
-                profiles = [item for item in catalog.get("profiles", []) if item.get("token") == origin["profile_token"]]
-                if len(profiles) != 1:
-                    raise HTTPException(409, "The video profile could not be confirmed")
-                profile = profiles[0]
-                if origin.get("type") == "rtsp":
-                    try:
-                        matches = await onvif_capabilities.matches_stream(cid, profile_token=origin["profile_token"],
-                                                                         rtsp_url=str(origin.get("rtsp_url") or ""),
-                                                                         binding=(origin.get("metadata") or {}).get("onvif_profile_binding")
-                                                                         if isinstance(origin.get("metadata"), dict) else None)
-                    except Exception as exc:
-                        raise HTTPException(409, "The RTSP stream and ONVIF profile could not be matched") from exc
-                    if not matches:
-                        raise HTTPException(409, "The RTSP stream does not match the selected ONVIF profile")
-                expected_sources = {"VideoSourceToken": profile.get("video_source_token"),
-                                    "VideoSourceConfigurationToken": profile.get("video_source_configuration_token")}
-                if selection.topic == "VideoSource/MotionAlarm":
-                    expected_sources["Source"] = profile.get("video_source_token")
-                source_matches = [name for name in expected_sources if name in selection.source]
-                if not source_matches or any(not expected_sources[name] or selection.source[name] != expected_sources[name]
-                                             for name in source_matches):
-                    raise HTTPException(409, "Event origin does not match the selected video source")
-                descriptors = [item for item in catalog.get("events", [])
-                               if item.get("topic") == selection.topic and item.get("qualified_topic") == selection.qualified_topic
-                               and item.get("item_name") == selection.item_name and item.get("is_property") and item.get("is_boolean")]
-                # Only explicitly understood topic paths qualify; vendor labels are not evidence of category coverage.
-                if len(descriptors) != 1 or selection.topic not in {
-                    "RuleEngine/CellMotionDetector/Motion", "VideoSource/MotionAlarm",
-                    "RuleEngine/PeopleDetector/People", "RuleEngine/PeopleDetector/Person"}:
-                    raise HTTPException(409, "This event's detection semantics are not integrated")
-                if not selection.qualified_topic.startswith("{http://www.onvif.org/ver10/topics}"):
-                    raise HTTPException(409, "Vendor-specific event semantics have not been qualified")
+                from .onvif.capabilities import qualify_observation_signal
                 try:
-                    observed = await onvif_event_manager.snapshot(camera_id=cid, topic=selection.topic,
-                        item_name=selection.item_name, qualified_topic=selection.qualified_topic,
-                        source=selection.source, key=selection.key)
+                    await qualify_observation_signal(camera_id=cid, source=source, selection=selection,
+                        catalog=onvif_capabilities, events=onvif_event_manager)
                 except Exception as exc:
-                    raise HTTPException(409, "Selected camera event is unavailable; observe it again") from exc
-                if not observed.get("known") or not observed.get("available"):
-                    raise HTTPException(409, "Observe and synchronize the selected camera event first")
+                    raise HTTPException(409, "Selected camera event could not be qualified; observe its exact source again") from exc
 
             if body.audio_peer is not None:
                 peer = body.audio_peer

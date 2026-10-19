@@ -215,6 +215,7 @@ export type PipelineOperatorPanel = {
   id: string;
   operatorId: string;
   placement?: "replace" | "after";
+  renderSummary?: (config: Record<string, unknown>) => import("react").ReactNode;
   render: (args: {
     i18n: HostI18n;
     operatorId: string;
@@ -226,6 +227,9 @@ export type PipelineOperatorPanel = {
     config: Record<string, unknown>;
     showAdvanced: boolean;
     purpose?: "automatic" | "manual";
+    sources?: Array<{ camera_id: string; source_id: string; camera_name: string; source_name: string }>;
+    observationCategories?: string[];
+    onValidityChange?: (valid: boolean) => void;
     updateConfig: (patch: Record<string, unknown>) => void;
     replaceConfig: (next: Record<string, unknown>) => void;
   }) => import("react").ReactNode;

@@ -13,6 +13,7 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
   const [snapshot, setSnapshot] = useState<AutomaticSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [invalidPanels, setInvalidPanels] = useState<string[]>([]);
   const [flowReview, setFlowReview] = useState<{ id: string; revision: string } | null>(null);
   const [errorDuringLoad, setErrorDuringLoad] = useState(false);
   const [reload, setReload] = useState(0);
@@ -22,6 +23,7 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
   const shortcutHandled = useRef(false);
   const shortcutTarget = useRef(new URLSearchParams(window.location.search).get("automatic_target"));
   const dirty = Boolean(editing || review);
+  useEffect(() => { setInvalidPanels([]); }, [editing?.intent.id]);
   useEffect(() => { onDirtyChange(dirty); return () => onDirtyChange(false); }, [dirty, onDirtyChange]);
   useEffect(() => {
     if (!dirty) return;
@@ -109,19 +111,22 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
     if (!panel || !draft) return <p role="status">{t("preparationUnavailable")}</p>;
     return panel.render({ i18n, operatorId: operator, stepUid: draft.id, nodeId: draft.id,
       processingServerId: "local", cameraId: draft.scope.camera_ids[0], purpose: "automatic",
+      sources: target?.sources.filter(source => !draft.scope.excluded_camera_ids.includes(source.camera_id)),
+      observationCategories: draft.condition.categories || capability?.fields?.find(field => field.name === "categories")?.default || ["person"],
+      onValidityChange: valid => setInvalidPanels(previous => previous.includes(operator) === !valid ? previous : valid ? previous.filter(item => item !== operator) : [...previous, operator]),
       config, showAdvanced: true, updateConfig: patch => change({ ...config, ...patch }), replaceConfig: change });
   };
   const observationSummary = (intent: AutomaticIntent) => {
     const observation = observations.find(item => item.id === intent.capability);
     const condition = { ...configuration.defaults[intent.capability], ...intent.condition, ...intent.customizations };
-    return <dl>{[
+    return <><dl>{[
       ...(observation?.fields || []).map(field => ({ field, values: condition })),
       ...(observation?.resource_fields || []).map(field => ({ field, values: condition.resource_parameters || {} })),
     ].map(({ field, values }) => {
       const value = values[field.name] ?? field.default;
       const label = (entry: unknown) => title(field.choices?.find(choice => choice.value === entry)?.title, String(entry ?? "—"));
       return <React.Fragment key={field.name}><dt>{title(field.title, field.name)}</dt><dd>{Array.isArray(value) ? value.map(label).join(", ") : label(value)}</dd></React.Fragment>;
-    })}</dl>;
+    })}</dl>{observation?.configuration_panels?.map(panel => <React.Fragment key={panel.field}>{operatorPanels[panel.operator]?.renderSummary?.(condition[panel.field] || {})}</React.Fragment>)}</>;
   };
   const stateText = (state: string) => automaticText(locale, (['active', 'waiting', 'paused', 'blocked', 'unavailable', 'outside_schedule', 'preparing'].includes(state) ? state : 'unavailable') as AutomaticMessage);
 
@@ -135,7 +140,7 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
       <button className="chipButton" onClick={onOpenFlows}>{t("flows")}</button>
     </div><p>{t("pauseHint")}</p>
     {!configuration.intents.length && !editing && <p>{targets.length ? t("empty") : t("noTargets")}</p>}
-    {editing && draft && !review && <form onSubmit={event => { event.preventDefault(); const next = replaceAutomaticIntent(editing.configuration, draft); void prepare({ ...next, enabled: editing.activate || next.enabled }); }} style={{ display: "grid", gap: 16 }}>
+    {editing && draft && !review && <form onSubmit={event => { event.preventDefault(); if (busy || invalidPanels.length) return; const next = replaceAutomaticIntent(editing.configuration, draft); void prepare({ ...next, enabled: editing.activate || next.enabled }); }} style={{ display: "grid", gap: 16 }}>
       <h3 ref={heading} tabIndex={-1}>{t("edit")}</h3>
       <fieldset disabled={busy} style={{ display: "grid", gap: 12, minWidth: 0 }}><legend>{t("where")}</legend>
         <label className="field"><span>{t("where")}</span><select className="input" required value={target?.id || ""} onChange={event => { const place = targets.find(item => item.id === event.target.value); if (place) choosePlace(place); }}><option value="" disabled>—</option>{targets.map(place => <option key={place.id} value={place.id}>{place.name} · {t(place.scope.kind === "physical_area" ? "area" : place.scope.kind === "image_region" ? "region" : "whole")}</option>)}</select></label>
@@ -143,7 +148,7 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
         {target && <fieldset><legend>{t("sources")}</legend>{target.sources.map(source => <label key={source.camera_id} style={{ display: "block" }}><input type="checkbox" checked={!draft.scope.excluded_camera_ids.includes(source.camera_id)} onChange={event => update({ scope: { ...draft.scope, excluded_camera_ids: event.target.checked ? draft.scope.excluded_camera_ids.filter(id => id !== source.camera_id) : [...draft.scope.excluded_camera_ids, source.camera_id] } })} /> {source.camera_name} · {source.source_name}</label>)}</fieldset>}
         {draft.scope.kind === "physical_area" && <p>{t("coverage")}</p>}
         {target?.scope_operator && renderOperator(target.scope_operator, draft.scope.region || {}, region => update({ scope: { ...draft.scope, region } }))}
-        {capability?.configuration_panels?.filter(panel => (target?.sources.filter(source => !draft.scope.excluded_camera_ids.includes(source.camera_id)).length || 0) >= panel.minimum_sources).map(panel => <details key={panel.operator} open><summary>{t("prepareSources")}</summary>{renderOperator(panel.operator, draft.condition[panel.field] || target?.preparations?.[panel.operator] || {}, value => update({ condition: { ...draft.condition, [panel.field]: value } }))}</details>)}
+        {capability?.configuration_panels?.filter(panel => (target?.sources.filter(source => !draft.scope.excluded_camera_ids.includes(source.camera_id)).length || 0) >= panel.minimum_sources).map(panel => <details key={panel.operator} open><summary>{title(panel.title, t("prepareSources"))}</summary>{renderOperator(panel.operator, draft.condition[panel.field] || target?.preparations?.[panel.operator] || {}, value => update({ condition: { ...draft.condition, [panel.field]: value } }))}</details>)}
       </fieldset>
       <fieldset disabled={busy} style={{ display: "grid", gap: 12, minWidth: 0 }}><legend>{t("what")}</legend>
         <label className="field"><span>{t("what")}</span><select className="input" value={draft.capability} onChange={event => update({ capability: event.target.value, condition: { ...draft.condition, resource_parameters: {} }, customizations: {}, consents: [] })}>{observations.filter(item => item.id === draft.capability || item.scopes?.includes(draft.scope.kind)).map(item => <option key={item.id} value={item.id} disabled={!item.available}>{title(item.title, item.id)}{!item.available ? ` · ${t("unavailable")}` : ""}</option>)}</select></label>
@@ -161,9 +166,9 @@ export function AutomaticScreen({ onOpenFlows, onDirtyChange, operatorPanels }: 
         {[...new Set([...(capability?.required_consents || []), ...(consequence?.required_consents || [])])].map(consent => <label key={consent}><input type="checkbox" required checked={draft.consents.includes(consent)} onChange={event => update({ consents: event.target.checked ? [...draft.consents, consent] : draft.consents.filter(value => value !== consent) })} /> {t(consent as AutomaticMessage)}</label>)}
       </fieldset>
       <label className="field"><span>{t("name")}</span><input className="input" required maxLength={160} value={draft.name} onChange={event => update({ name: event.target.value })} /></label>
-      <div><button className="primaryButton" type="submit" disabled={busy}>{busy ? t("busy") : t("review")}</button> <button className="chipButton" type="button" disabled={busy} onClick={() => setEditing(null)}>{t("cancel")}</button></div>
+      <div><button className="primaryButton" type="submit" disabled={busy || invalidPanels.length > 0}>{busy ? t("busy") : t("review")}</button> <button className="chipButton" type="button" disabled={busy} onClick={() => setEditing(null)}>{t("cancel")}</button></div>
     </form>}
-    {review && <section aria-label={t("review")} className="card"><h3 ref={heading} tabIndex={-1}>{t("review")}</h3>{review.configuration.intents.map(intent => { const activity = review.preview.activities[intent.id]; return <div key={intent.id}><strong>{intent.name}</strong>{observationSummary(intent)}<p>{stateText(activity?.state || "unavailable")}</p><p>{activity?.sources.map(source => `${source.camera_name} · ${source.source_name}`).join(", ")}</p>{activity?.reason && <><p>{t("unavailableHint")}</p><details><summary>{t("details")}</summary><code>{activity.reason}</code></details></>}</div>; })}<button className="primaryButton" disabled={busy} onClick={() => void commit(review.configuration, review.preview.preparations)}>{t("confirm")}</button> <button className="chipButton" disabled={busy} onClick={() => setReview(null)}>{editing ? t("back") : t("cancel")}</button></section>}
+    {review && <section aria-label={t("review")} className="card"><h3 ref={heading} tabIndex={-1}>{t("review")}</h3>{review.configuration.intents.map(intent => { const activity = review.preview.activities[intent.id]; return <div key={intent.id}><strong>{intent.name}</strong>{observationSummary(intent)}<p>{stateText(activity?.state === "preparing" && (!intent.requested || !review.configuration.enabled) ? "paused" : activity?.state || "unavailable")}</p><p>{activity?.sources.map(source => `${source.camera_name} · ${source.source_name}`).join(", ")}</p>{activity?.reason && <><p>{t("unavailableHint")}</p><details><summary>{t("details")}</summary><code>{activity.reason}</code></details></>}</div>; })}<button className="primaryButton" disabled={busy} onClick={() => void commit(review.configuration, review.preview.preparations)}>{t("confirm")}</button> <button className="chipButton" disabled={busy} onClick={() => setReview(null)}>{editing ? t("back") : t("cancel")}</button></section>}
     {!editing && !review && configuration.intents.map(intent => { const activity = snapshot.activities[intent.id]; const flow = snapshot.manual_flows?.["manual_" + intent.id]; const observation = observations.find(item => item.id === intent.capability); return <article className="card" key={intent.id}><h3>{intent.name}</h3>{observationSummary(intent)}<p>{t("requested")}: {intent.requested ? t("enabled") : t("disabled")} · {t("effective")}: {stateText(activity?.state || "unavailable")}</p><p>{activity?.sources.map(source => source.camera_name).join(", ")}</p>{activity?.reason === "source_preparation_changed" && <p role="status">{t("sourcePreparationChanged")}</p>}{activity?.reason && <details><summary>{t("details")}</summary><code>{activity.reason}</code></details>}<button className="chipButton" disabled={busy} onClick={() => setEditing({ intent: structuredClone(intent), configuration, activate: false })}>{t("edit")}</button> <button className="chipButton" disabled={busy} onClick={() => void commit(replaceAutomaticIntent(configuration, { ...intent, requested: !intent.requested }))}>{intent.requested ? t("pauseActivity") : t("resumeActivity")}</button><p>{t("manualFlowHint")}</p>{flow ? <div><p>{t("manualFlow")}: {stateText(flow.state)} <button className="chipButton" onClick={onOpenFlows}>{t("flows")}</button></p>{flow.production_revision && (flowReview?.id === intent.id ? <div role="group" aria-label={t("reviewFlow")}><p>{t("reviewFlowHint")}</p>
       <p>{title(observation?.title, intent.capability)} · {targets.find(item => sameAutomaticTarget(intent.scope, item))?.name}</p>
       {observationSummary(intent)}<button className="chipButton" disabled={busy} onClick={() => void useInFlow(intent.id, flowReview.revision)}>{t("acceptFlow")}</button> <button className="chipButton" disabled={busy} onClick={() => setFlowReview(null)}>{t("cancel")}</button></div> : <button className="chipButton" disabled={busy} onClick={() => setFlowReview({ id: intent.id, revision: flow.production_revision! })}>{t("reviewFlow")}</button>)}{flow.reason && <details><summary>{t("details")}</summary><code>{flow.reason}</code></details>}</div> : <button className="chipButton" disabled={busy || activity?.state === "blocked" || activity?.state === "unavailable"} onClick={() => void useInFlow(intent.id)}>{t("useInFlow")}</button>}</article>; })}

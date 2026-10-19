@@ -17,6 +17,22 @@ from .pipelines.postprocess import (
 )
 from .settings import CamerasExtensionSettings, get_default_camera_source
 from .visual_region_models import VisualRegionConfig
+from .onvif.recipe_optimization import CameraOnvifOptimization
+
+
+class NativeObservationSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_id: str = Field(min_length=1, max_length=128)
+    profile_token: str = Field(min_length=1, max_length=256)
+    signal: CameraOnvifOptimization
+
+
+class NativeObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    sources: dict[str, NativeObservationSource] = Field(default_factory=dict, max_length=64)
+    fallback_to_video: bool = False
+    categories: list[str] = Field(default_factory=list, max_length=32)
 
 
 class ObservationCondition(BaseModel):
@@ -29,6 +45,7 @@ class ObservationCondition(BaseModel):
     association: dict | None = None
     resource_parameters: dict = Field(default_factory=dict)
     schedule: dict | None = None
+    native_observation: NativeObservation | None = None
 
 
 def resolve_sources(scope, configuration):
@@ -130,17 +147,60 @@ def plan_observation(*, intent, configuration):
 
     if reason:
         return unavailable(reason)
+    native = (
+        condition.native_observation
+        if condition.native_observation and condition.native_observation.enabled
+        else None
+    )
+    if native is not None:
+        if set(native.categories) != set(condition.categories):
+            return unavailable("native_categories_qualification_required")
+        if set(native.sources) != {source["camera_id"] for source in sources}:
+            return unavailable("native_sources_mismatch")
+        settings = CamerasExtensionSettings.model_validate(
+            configuration.settings.extensions.get("com.toposync.cameras", {})
+        )
+        for source in sources:
+            selection = native.sources[source["camera_id"]]
+            camera = next(camera for camera in settings.devices if camera.id == source["camera_id"])
+            selected_source = next(
+                item for item in camera.sources if item.id == source["source_id"]
+            )
+            if (
+                selection.source_id != selected_source.id
+                or selection.profile_token != selected_source.origin.profile_token
+                or not selection.signal.coverage_confirmed
+                or camera.control.type != "onvif"
+            ):
+                return unavailable("native_source_qualification_required")
+            if "PeopleDetector" in selection.signal.topic and condition.categories != ["person"]:
+                return unavailable("native_categories_not_covered")
+        limitations = [
+            "native_window_with_initial_observation",
+            "visual_subjects_retain_observation",
+            "fallback_to_video_allowed"
+            if native.fallback_to_video
+            else "no_native_failure_fallback",
+        ]
+        if area:
+            limitations.append("mapping_is_not_a_coverage_certificate")
     eligible_categories = {
-        "vision.pose": {"person"}, "vision.gestures": {"person"},
+        "vision.pose": {"person"},
+        "vision.gestures": {"person"},
         "vision.recognition": {"person", "dog", "cat"},
     }.get(intent.capability)
     if eligible_categories is not None and not set(condition.categories) <= eligible_categories:
         return unavailable("category_not_supported")
     if intent.capability == "ai.context":
-        if not all(str(condition.resource_parameters.get(field) or "").strip() for field in ("profile_id", "condition_description")):
+        if not all(
+            str(condition.resource_parameters.get(field) or "").strip()
+            for field in ("profile_id", "condition_description")
+        ):
             return unavailable("ai_question_and_profile_required")
         if condition.resource_parameters.get("concurrency_policy") == "fallback":
-            raise ValueError("Automatic contextual annotation does not authorize fallback providers")
+            raise ValueError(
+                "Automatic contextual annotation does not authorize fallback providers"
+            )
     if (
         intent.capability in {"vision.entry", "vision.stationary", "vision.route"}
         and intent.scope.kind == "camera"
@@ -224,8 +284,41 @@ def plan_observation(*, intent, configuration):
         tail = add(
             prefix + "source",
             "camera.source",
-            {"camera_id": source["camera_id"], "source_id": source["source_id"], "fps": 4},
+            {
+                "camera_id": source["camera_id"],
+                "source_id": source["source_id"],
+                "fps": 4,
+                **(
+                    {
+                        "observation_window_id": "automatic",
+                        "gate_min_observation_seconds": max(
+                            5, native.sources[source["camera_id"]].signal.hold_seconds
+                        ),
+                        "observe_on_start": True,
+                    }
+                    if native
+                    else {}
+                ),
+            },
         )
+        if native:
+            signal = native.sources[source["camera_id"]].signal
+            gate = add(
+                prefix + "native",
+                "camera.onvif_state_gate",
+                {
+                    **signal.model_dump(exclude={"coverage_confirmed"}),
+                    "camera_id": source["camera_id"],
+                    "fail_open": native.fallback_to_video,
+                    "stream_id": "automatic-native:"
+                    + source["camera_id"]
+                    + ":"
+                    + source["source_id"],
+                },
+            )
+            edges.append(
+                {"from": {"node": gate, "port": "out"}, "to": {"node": tail, "port": "gate"}}
+            )
         # Detection is deliberately independent of rule categories and duration so M2 can share it.
         tail = add(
             prefix + "detect",
@@ -239,7 +332,9 @@ def plan_observation(*, intent, configuration):
             tail,
         )
         if intent.capability in {"vision.pose", "vision.gestures"}:
-            tail = add(prefix + "detail", "vision.pose_estimate", condition.resource_parameters, tail)
+            tail = add(
+                prefix + "detail", "vision.pose_estimate", condition.resource_parameters, tail
+            )
         if area:
             tail = add(
                 prefix + "mapping",
@@ -263,7 +358,9 @@ def plan_observation(*, intent, configuration):
             tail,
         )
         if intent.capability == "vision.gestures":
-            tail = add(prefix + "gesture", "vision.gesture_recognize", {"output_mode": "annotate"}, tail)
+            tail = add(
+                prefix + "gesture", "vision.gesture_recognize", {"output_mode": "annotate"}, tail
+            )
         endpoints.append(tail)
     tail = endpoints[0]
     for index, endpoint in enumerate(endpoints[1:]):
@@ -278,6 +375,16 @@ def plan_observation(*, intent, configuration):
     if len(sources) > 1:
         tail = add("association", "vision.associate_entities", association, tail)
     tail = add("categories", "core.category_gate", {"categories": condition.categories}, tail)
+    if native:
+        tail = add(
+            "retain_observation",
+            "camera.observation_hold",
+            {
+                "window_id": "automatic",
+                "hold_seconds": condition.evidence_timeout_seconds,
+            },
+            tail,
+        )
     occurrence = {
         "minimum_duration_seconds": condition.minimum_duration_seconds,
         "evidence_timeout_seconds": condition.evidence_timeout_seconds,
@@ -389,15 +496,30 @@ def plan_observation(*, intent, configuration):
             tail,
         )
     elif intent.capability == "vision.segmentation":
-        tail = add("detail", "vision.segment_instances", {
-            **condition.resource_parameters, "attach_polygons": True, "attach_mask_artifacts": False,
-        }, tail)
+        tail = add(
+            "detail",
+            "vision.segment_instances",
+            {
+                **condition.resource_parameters,
+                "attach_polygons": True,
+                "attach_mask_artifacts": False,
+            },
+            tail,
+        )
     elif intent.capability == "ai.context":
-        tail = add("subject_image", "vision.crop_objects", {
-            "bbox_field": "subject.bbox01", "fallback_to_detections": False,
-            "missing_policy": "pass_through", "preserve_scene": False, "padding_ratio": 0,
-            "output_artifact_name": "automatic_subject",
-        }, tail)
+        tail = add(
+            "subject_image",
+            "vision.crop_objects",
+            {
+                "bbox_field": "subject.bbox01",
+                "fallback_to_detections": False,
+                "missing_policy": "pass_through",
+                "preserve_scene": False,
+                "padding_ratio": 0,
+                "output_artifact_name": "automatic_subject",
+            },
+            tail,
+        )
         tail = add(
             "condition",
             "ai.condition_filter",
@@ -414,9 +536,15 @@ def plan_observation(*, intent, configuration):
             tail,
         )
     if intent.capability in {"vision.pose", "vision.gestures", "vision.segmentation"}:
-        tail = add("public_detail", "vision.observation_detail", {"kind": intent.capability.split(".")[1]}, tail)
+        tail = add(
+            "public_detail",
+            "vision.observation_detail",
+            {"kind": intent.capability.split(".")[1]},
+            tail,
+        )
     evidence_keys = [
-        field for operator, field in (
+        field
+        for operator, field in (
             ("camera.frame_occurrence", "frame_occurrence"),
             ("camera.region_occurrence", "region_occurrence"),
             ("camera.area_occurrence", "area_occurrence"),
@@ -425,12 +553,19 @@ def plan_observation(*, intent, configuration):
             ("vision.recognize_identity", "recognition"),
             ("vision.observation_detail", "vision_observation"),
             ("ai.condition_filter", "condition_annotation"),
-        ) if any(node["operator"] == operator for node in nodes)
+        )
+        if any(node["operator"] == operator for node in nodes)
     ]
     contract = {
         "type": "packet",
         "version": 1,
-        "payload_keys": ["subject", "camera_id", "frame_ts", *evidence_keys],
+        "payload_keys": [
+            "subject",
+            "camera_id",
+            "frame_ts",
+            *evidence_keys,
+            *(["native_observation"] if native else []),
+        ],
         "artifacts": [],
     }
     operators = {node["id"]: node["operator"] for node in nodes}
@@ -463,8 +598,12 @@ def plan_observation(*, intent, configuration):
             ]
         },
     )
-    return {"sources": sources, "graph": graph, "limitations": limitations,
-            "preparation": preparation}
+    return {
+        "sources": sources,
+        "graph": graph,
+        "limitations": limitations,
+        "preparation": preparation,
+    }
 
 
 def observation_targets(*, configuration):
@@ -544,6 +683,25 @@ def observation_targets(*, configuration):
 
 
 def register_automatic_planner(services):
-    services.register("automatic.plan.camera_observation", plan_observation)
+    async def plan(**kwargs):
+        result = plan_observation(**kwargs)
+        condition = ObservationCondition.model_validate(kwargs["intent"].condition)
+        if (
+            result.get("graph")
+            and condition.native_observation
+            and condition.native_observation.enabled
+        ):
+            try:
+                await services.call(
+                    "automatic.qualify.camera_native",
+                    configuration=kwargs["configuration"],
+                    selection=condition.native_observation,
+                )
+            except Exception:
+                result.pop("graph")
+                result.update(state="unavailable", reason="native_source_qualification_required")
+        return result
+
+    services.register("automatic.plan.camera_observation", plan)
     services.register("automatic.validate.camera_observation", validate_observation_preparation)
     services.register("automatic.targets.cameras", observation_targets)

@@ -79,6 +79,8 @@ def register_automatic_capabilities(services):
                 "required_consents": ["recognition"] if name == "recognition" else [],
                 "advanced": name in {"pose", "gestures", "segmentation"},
                 "configuration_panels": [
+                    {"operator": "camera.onvif_state_gate", "field": "native_observation", "minimum_sources": 1,
+                     "title": {"en": "Observation and camera events", "pt-BR": "Observação e eventos da câmera"}},
                     {
                         "operator": "vision.associate_entities",
                         "field": "association",

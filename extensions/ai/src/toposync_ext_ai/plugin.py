@@ -81,6 +81,11 @@ class AiExtension(BaseExtension):
             "resource_parameters_schema": AiConditionFilterConfig.model_json_schema(),
             "resource_operator": "ai.condition_filter",
             "resource_consent_fields": ["profile_id"],
+            "configuration_panels": [
+                {"operator": "camera.onvif_state_gate", "field": "native_observation", "minimum_sources": 1,
+                 "title": {"en": "Observation and camera events", "pt-BR": "Observação e eventos da câmera"}},
+                {"operator": "vision.associate_entities", "field": "association", "minimum_sources": 2},
+            ],
             "resource_hint": {
                 "en": "Sends only the selected subject's crop to the chosen profile. Unknown evidence does not cancel the activity. No fallback provider is used.",
                 "pt-BR": "Envia somente o recorte do sujeito selecionado ao perfil escolhido. Evidência desconhecida não cancela a atividade. Não usa provedor alternativo.",

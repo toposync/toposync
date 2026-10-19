@@ -6,6 +6,16 @@ import { onvifTranslations } from "./settings/onvifTranslations";
 
 export const camerasTranslations = {
   en: {
+    "ext.cameras.automatic.native.no_fallback": "No continuous video fallback on native signal failure",
+    "ext.cameras.automatic.native.mode": "Observation mode",
+    "ext.cameras.automatic.native.continuous": "Continuous visual observation",
+    "ext.cameras.automatic.native.qualified": "Qualified camera event window",
+    "ext.cameras.automatic.native.fallback": "Allow continuous video observation when the native signal is unavailable or unknown",
+    "ext.cameras.automatic.native.categories_changed": "The selected categories changed. Qualify every source again.",
+    "ext.cameras.automatic.native.profile": "Source profile",
+    "ext.cameras.automatic.native.help": "An initial visual observation discovers subjects already present. Native events open later windows; fresh visual subjects keep observation running, including stationary subjects. A boolean event never identifies or locates a subject.",
+    "ext.cameras.automatic.native.window": "Each window lasts at least five seconds from the first usable frame. Initial frame acquisition is limited to thirty seconds. Check reopening latency and short passages before qualifying this source.",
+    "ext.cameras.automatic.native.qualify": "I verified that this exact source and event cover the selected categories, including short passages and stationary subjects, with acceptable reopening latency.",
     "ext.cameras.automatic.add": "Add activity with this camera",
     "ext.cameras.automatic.scope": "Open Automatic with this saved camera selected. Review the place and observation before saving.",
     "ext.cameras.automatic.save_first": "Save the camera before adding an activity.",
@@ -841,6 +851,16 @@ export const camerasTranslations = {
     "ext.cameras.action.loading": "Loading...",
   },
   "pt-BR": {
+    "ext.cameras.automatic.native.no_fallback": "Sem continuidade por vídeo em caso de falha do sinal nativo",
+    "ext.cameras.automatic.native.mode": "Modo de observação",
+    "ext.cameras.automatic.native.continuous": "Observação visual contínua",
+    "ext.cameras.automatic.native.qualified": "Janela com evento qualificado da câmera",
+    "ext.cameras.automatic.native.fallback": "Permitir observação contínua por vídeo quando o sinal nativo estiver indisponível ou desconhecido",
+    "ext.cameras.automatic.native.categories_changed": "As categorias selecionadas mudaram. Qualifique todas as fontes novamente.",
+    "ext.cameras.automatic.native.profile": "Perfil da fonte",
+    "ext.cameras.automatic.native.help": "Uma observação visual inicial encontra sujeitos já presentes. Eventos nativos abrem as próximas janelas; sujeitos visuais recentes mantêm a observação, inclusive quando parados. Um evento booleano nunca identifica nem localiza um sujeito.",
+    "ext.cameras.automatic.native.window": "Cada janela dura pelo menos cinco segundos a partir do primeiro quadro utilizável. A aquisição inicial é limitada a trinta segundos. Verifique a latência de reabertura e passagens curtas antes de qualificar esta fonte.",
+    "ext.cameras.automatic.native.qualify": "Verifiquei que esta fonte e este evento exatos cobrem as categorias selecionadas, inclusive passagens curtas e sujeitos parados, com latência de reabertura aceitável.",
     "ext.cameras.automatic.add": "Adicionar atividade com esta câmera",
     "ext.cameras.automatic.scope": "Abra Automático com esta câmera salva selecionada. Revise o lugar e a observação antes de salvar.",
     "ext.cameras.automatic.save_first": "Salve a câmera antes de adicionar uma atividade.",

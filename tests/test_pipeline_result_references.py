@@ -16,6 +16,39 @@ from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 CONTRACT = {"type": "packet", "version": 1, "payload_keys": ["subject"], "artifacts": []}
 
 
+def test_optional_media_requires_declared_negotiation_and_does_not_weaken_required_media():
+    from toposync.runtime.pipelines.demands import DemandRequest, ResourceDemandRegistry
+    from toposync.runtime.pipelines.result_references import ResultContract
+    from toposync.runtime.pipelines.runtime import Artifact, Packet
+
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    registry.register_operator(operator_id="test.optional", inputs=[], outputs=[{"name": "out"}],
+        produces_payload_keys=["subject"], produces_artifacts=["main"])
+    for required in (False, True):
+        contract = ResultContract(version=1, payload_keys=["subject"],
+            artifacts=["main"] if required else [], optional_artifacts=[] if required else ["main"])
+        producer = Pipeline(name="optional", graph=build_pipeline_graph_v2(graph_uid="optional",
+            nodes=[{"id": "source", "operator": "test.optional"}], edges=[],
+            meta={"outputs": [{"key": "optional.frames", "node_uid": "source", "contract": contract.model_dump(),
+                              "production_scope": "fixture"}]}))
+        demands = ResourceDemandRegistry(lambda *_: True, compiler=PipelineGraphCompiler(registry))
+        demands.bind([producer])
+        request = DemandRequest(consumer_id="manual", purpose="manual", result_key="optional.frames", contract=contract,
+            production_revision=demands.outputs["optional.frames"][2], payload_keys=["subject"], artifacts=["main"])
+        demand = demands.open("owner", request)
+        missing = Packet.create(stream_id="fixture", payload={"subject": {"id": "one"}})
+        assert (demands.project(demand.id, missing) is None) is required
+        with_image = missing.with_artifact(Artifact("main", b"synthetic"))
+        assert set(demands.project(demand.id, with_image).artifacts) == {"main"}
+        metadata = demands.open("owner", request.model_copy(update={"consumer_id": "metadata", "artifacts": []}))
+        assert demands.project(metadata.id, with_image).artifacts == {}
+        with pytest.raises(ValueError, match="exceeds"):
+            demands.open("owner", request.model_copy(update={"artifacts": ["unregistered-private"]}))
+        demands.release(demand.id)
+        demands.release(metadata.id)
+
+
 def result_fixture(runtime_factory=None):
     registry = OperatorRegistry()
     register_builtin_operators(registry)

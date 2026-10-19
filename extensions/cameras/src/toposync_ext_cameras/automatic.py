@@ -281,6 +281,7 @@ def plan_observation(*, intent, configuration):
         if not cameras <= connected:
             return unavailable("association_transitions_required")
     nodes, edges, endpoints = [], [], []
+    enrichment = None
 
     def add(identifier, operator, config, upstream=None, port="out"):
         nodes.append({"id": identifier, "operator": operator, "config": config})
@@ -536,6 +537,7 @@ def plan_observation(*, intent, configuration):
             tail,
         )
     elif intent.capability == "ai.context":
+        late_context = intent.consequence.capability == "core.record"
         tail = add(
             "subject_image",
             "vision.crop_objects",
@@ -545,25 +547,25 @@ def plan_observation(*, intent, configuration):
                 "missing_policy": "pass_through",
                 "preserve_scene": False,
                 "padding_ratio": 0,
-                "output_artifact_name": "automatic_subject",
+                "output_artifact_name": "main" if late_context else "automatic_subject",
             },
             tail,
         )
-        tail = add(
-            "condition",
-            "ai.condition_filter",
-            {
+        context_config = {
                 **condition.resource_parameters,
                 "emit_mode": "annotate",
-                "input_artifact_name": "automatic_subject",
+                "input_artifact_name": "main" if late_context else "automatic_subject",
                 "failure_policy": "drop",
                 "fallback_profile_ids": [],
                 "fallback_on_low_confidence": False,
                 "reuse_last_decision_seconds": 0,
                 "bind_subject_context": True,
-            },
-            tail,
-        )
+        }
+        if late_context:
+            enrichment = {"nodes": [{"id": "condition", "operator": "ai.condition_filter", "config": context_config}],
+                          "edges": [], "entry": "condition", "exit": "condition"}
+        else:
+            tail = add("condition", "ai.condition_filter", context_config, tail)
     if intent.capability in {"vision.pose", "vision.gestures", "vision.segmentation"}:
         tail = add(
             "public_detail",
@@ -596,10 +598,12 @@ def plan_observation(*, intent, configuration):
             "camera_id",
             "frame_ts",
             "activity_observation",
+            *(["capture_evidence", "source", "media"] if enrichment else []),
             *evidence_keys,
             *(["native_observation"] if native else []),
         ],
         "artifacts": [],
+        "optional_artifacts": ["main"] if enrichment else [],
     }
     operators = {node["id"]: node["operator"] for node in nodes}
     for edge in edges:
@@ -636,6 +640,7 @@ def plan_observation(*, intent, configuration):
         "graph": graph,
         "limitations": limitations,
         "preparation": preparation,
+        "enrichment": enrichment,
     }
 
 

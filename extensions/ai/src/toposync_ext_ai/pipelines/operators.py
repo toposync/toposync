@@ -229,7 +229,7 @@ def register_ai_pipeline_operators(registry: OperatorRegistry) -> None:
             execution_mode="in_event_loop",
             max_concurrency=1,
             requires_artifacts=[MAIN_ARTIFACT_NAME],
-            produces_payload_keys=["ai", "condition_annotation", "condition_occurrence", "subject", "correlation_id"],
+            produces_payload_keys=["ai", "condition_annotation", "condition_occurrence", "occurrence_enrichment", "subject", "correlation_id"],
             input_modalities=["image", "data"],
             output_modalities=["image", "data"],
             expression_hints=_ai_expression_hints(task="condition_filter"),

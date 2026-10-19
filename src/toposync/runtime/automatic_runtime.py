@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from .automatic import AutomaticState
 from .config_store import Pipeline, PipelineAlreadyExistsError
-from .pipelines.demands import DemandRequest
+from .pipelines.demands import DemandRequest, append_consequence
 from .pipelines.runtime import Lifecycle
 from .pipelines.occurrence_sink import RecordActivityParameters
 from .pipelines.operators_gates import (
@@ -310,6 +310,7 @@ class AutomaticController:
                         "objective_id": original.id,
                         "title": original.name,
                         "kind": original.capability,
+                        "enrich": bool(plan.get("enrichment")),
                         "scope": {"camera_ids": cameras,
                                   "area_ids": [original.scope.area_id] if original.scope.area_id else [],
                                   "association_scope": (effective.condition.get("association") or {}).get("scope")},
@@ -330,6 +331,7 @@ class AutomaticController:
                 "revision": original.revision,
                 "sources": sources,
                 "consequence": effect,
+                "enrichment": plan.get("enrichment"),
                 "capability": original.capability,
                 "status": statuses[original.id],
                 "preparation": plan.get("preparation"),
@@ -354,7 +356,14 @@ class AutomaticController:
             if p.graph.get("meta", {}).get("automatic", {}).get("intent_id") not in previous_ids
         ]
         for pipeline in plans:
-            compiled = self.compiler.compile_many([pipeline], catalog=[*manual, *plans]).pipelines[
+            info = pipeline.graph["meta"]["automatic"]
+            validating = pipeline
+            if info.get("enrichment"):
+                output = pipeline.graph["meta"]["outputs"][0]
+                source = next(node["id"] for node in pipeline.graph["nodes"] if node["uid"] == output["node_uid"])
+                validating = pipeline.model_copy(update={"graph": append_consequence(pipeline.graph,
+                    info["consequence"], source=source, enrichment=info["enrichment"])})
+            compiled = self.compiler.compile_many([validating], catalog=[*manual, *plans]).pipelines[
                 0
             ]
             info = pipeline.graph["meta"]["automatic"]
@@ -552,7 +561,7 @@ class AutomaticController:
                                         production_revision=revision,
                                         lease_seconds=30,
                                         payload_keys=output.contract.payload_keys,
-                                        artifacts=output.contract.artifacts,
+                                        artifacts=[*output.contract.artifacts, *output.contract.optional_artifacts],
                                     ),
                                 )
                                 identifier = demand.id
@@ -560,8 +569,9 @@ class AutomaticController:
                             else:
                                 self.demands.renew(identifier)
                             demand = self.demands.demands[identifier]
-                            if demand.consequence != info["consequence"]:
+                            if demand.consequence != info["consequence"] or demand.enrichment != info.get("enrichment"):
                                 demand.consequence = info["consequence"]
+                                demand.enrichment = info.get("enrichment")
                                 self.demands.revision += 1
                                 self.demands.changed()
                             active.add(intent.id)

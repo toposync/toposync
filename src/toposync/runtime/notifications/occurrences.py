@@ -70,16 +70,21 @@ class Contribution(BaseModel):
         return self
 
 
-class Enrichment(BaseModel):
+class OccurrenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, revalidate_instances="always")
-    message_id: Identifier
     occurrence_id: Identifier
     evidence_id: Identifier
     observed_at: Timestamp
     participant_id: Identifier
     privacy_revision: int = Field(ge=1, strict=True)
+
+
+class Enrichment(OccurrenceReference):
+    message_id: Identifier
     kind: Literal["context", "recognition"]
     text: str | None = Field(default=None, min_length=1, max_length=4096, strict=True)
+    status: Literal["observed", "not_observed", "unknown"] = "observed"
+    reason: str | None = Field(default=None, max_length=256, strict=True)
 
     @model_validator(mode="after")
     def private_identity_stays_in_gallery(self):
@@ -295,23 +300,38 @@ class OccurrenceStore:
             self._save(connection, document, now=now, kind=contribution.lifecycle, evidence_id=contribution.evidence_id)
             return OccurrenceChange(document, True, requested_delivery)
 
+    def _enrichment_document(self, connection, reference: OccurrenceReference, now: float):
+        document = self._load(connection, reference.occurrence_id)
+        if document is None or document["status"] in {"deleted", "expired"} or now >= document["expires_at"]:
+            raise OccurrenceConflict("occurrence_unavailable")
+        if not document["enrichment_allowed"] or document["privacy_revision"] != reference.privacy_revision:
+            raise OccurrenceConflict("occurrence_privacy_changed")
+        evidence = document["evidence"].get(reference.evidence_id)
+        if not evidence or evidence["observed_at"] != reference.observed_at or evidence["participant_id"] != reference.participant_id:
+            raise OccurrenceConflict("occurrence_enrichment_evidence_mismatch")
+        return document
+
+    def enrichment_allowed(self, reference: OccurrenceReference, *, now: float | None = None) -> bool:
+        reference = OccurrenceReference.model_validate(reference)
+        now = TypeAdapter(Timestamp).validate_python(time.time() if now is None else now)
+        with self.notifications._lock:
+            try:
+                document = self._enrichment_document(self.notifications._conn, reference, now)
+            except OccurrenceConflict:
+                return False
+            return len(document["enrichments"]) < self.maximum_enrichments
+
     def enrich(self, enrichment: Enrichment, *, now: float | None = None) -> OccurrenceChange:
         enrichment = Enrichment.model_validate(enrichment)
         now = TypeAdapter(Timestamp).validate_python(time.time() if now is None else now)
         with self._transaction() as connection:
-            document = self._load(connection, enrichment.occurrence_id)
-            if document is None or document["status"] in {"deleted", "expired"} or now >= document["expires_at"]:
-                raise OccurrenceConflict("occurrence_unavailable")
-            if not document["enrichment_allowed"] or document["privacy_revision"] != enrichment.privacy_revision:
-                raise OccurrenceConflict("occurrence_privacy_changed")
-            evidence = document["evidence"].get(enrichment.evidence_id)
-            if not evidence or evidence["observed_at"] != enrichment.observed_at or evidence["participant_id"] != enrichment.participant_id:
-                raise OccurrenceConflict("occurrence_enrichment_evidence_mismatch")
+            document = self._enrichment_document(connection, enrichment, now)
             if not self._remember(connection, document["id"], enrichment):
                 return OccurrenceChange(document, False)
             if len(document["enrichments"]) >= self.maximum_enrichments:
                 raise OccurrenceConflict("occurrence_enrichment_capacity")
             document["enrichments"].append({"kind": enrichment.kind, "text": enrichment.text,
+                "status": enrichment.status, "reason": enrichment.reason,
                 "evidence_id": enrichment.evidence_id, "participant_id": enrichment.participant_id,
                 "observed_at": enrichment.observed_at, "recorded_at": now})
             self._save(connection, document, now=now, kind="enrichment", evidence_id=enrichment.evidence_id)

@@ -54,6 +54,7 @@ class ResourceDemand:
     result_timer: asyncio.TimerHandle | None = None
     last_packet_id: str = ""
     consequence: dict | None = None
+    enrichment: dict | None = None
     resources: list[weakref.ReferenceType] = field(default_factory=list)
 
 
@@ -62,6 +63,39 @@ class FlowResultBinding(BaseModel):
     owner: str = Field(min_length=1, max_length=128)
     node_uid: str = Field(min_length=1, max_length=256)
     request: DemandRequest
+
+
+def append_consequence(graph: dict, consequence: dict, *, source: str, enrichment: dict | None = None,
+                       demand_id: str = "") -> dict:
+    durable = consequence["operator"] == "core.record_occurrence"
+    nodes = [*graph["nodes"], {"id": "consequence", **consequence}]
+    edges = [*graph["edges"], {
+        "from": {"node": source, "port": "out"}, "to": {"node": "consequence", "port": "in"},
+        "maxsize": 16, "drop_policy": "drop_oldest",
+        **({"queue": {"max_items": 16, "drop_policy": "block"}, "backpressure": {"mode": "block"},
+            "lifecycle": {"compact_updates": False}} if durable else {}),
+    }]
+    if enrichment:
+        if not durable or not consequence["config"].get("enrich"):
+            raise ValueError("Enrichment requires a durable recording consequence")
+        nodes.extend([
+            {"id": "enrichment_gate", "operator": "core.enrichment_gate", "config": {"demand_id": demand_id}},
+            *enrichment["nodes"],
+            {"id": "enrichment_sink", "operator": "core.enrich_occurrence", "config": {"demand_id": demand_id}},
+        ])
+        edges.extend([
+            {"from": {"node": "consequence", "port": "out"}, "to": {"node": "enrichment_gate", "port": "in"},
+             "queue": {"max_items": 8, "max_artifact_bytes": 8 * 1024 * 1024, "max_age_ms": 5000, "drop_policy": "drop_oldest"},
+             "backpressure": {"mode": "ignore", "propagate_pressure": False},
+             "lifecycle": {"compact_updates": False}},
+            {"from": {"node": "enrichment_gate", "port": "out"}, "to": {"node": enrichment["entry"], "port": "in"},
+             "queue": {"max_items": 1, "drop_policy": "block"}, "backpressure": {"mode": "block"}},
+            *enrichment["edges"],
+            {"from": {"node": enrichment["exit"], "port": "out"}, "to": {"node": "enrichment_sink", "port": "in"},
+             "queue": {"max_items": 8, "drop_policy": "block"}, "backpressure": {"mode": "block"}},
+        ])
+    return build_pipeline_graph_v2(graph_uid=graph["uid"], nodes=nodes, edges=edges,
+        limits=graph.get("limits"), meta=graph.get("meta"))
 
 
 class ResourceDemandRegistry:
@@ -250,7 +284,7 @@ class ResourceDemandRegistry:
             raise ValueError("Incompatible result contract or production revision")
         if not set(request.payload_keys) <= set(request.contract.payload_keys) or not set(
             request.artifacts
-        ) <= set(request.contract.artifacts):
+        ) <= set([*request.contract.artifacts, *request.contract.optional_artifacts]):
             raise ValueError("Consumer projection exceeds result contract")
         if self.is_blocked(owner, request.result_key, request.purpose) or not self.authorized(
             owner, request.result_key, request.purpose
@@ -448,19 +482,8 @@ class ResourceDemandRegistry:
                 ],
             )
             if demand.consequence is not None:
-                durable = demand.consequence["operator"] == "core.record_occurrence"
-                graph = build_pipeline_graph_v2(
-                    graph_uid=f"demand_{demand.id}",
-                    nodes=[*graph["nodes"], {"id": "consequence", **demand.consequence}],
-                    edges=[*graph["edges"], {
-                        "from": {"node": "result", "port": "out"},
-                        "to": {"node": "consequence", "port": "in"},
-                        "maxsize": 16, "drop_policy": "drop_oldest",
-                        **({"queue": {"max_items": 16, "drop_policy": "block"},
-                            "backpressure": {"mode": "block"},
-                            "lifecycle": {"compact_updates": False}} if durable else {}),
-                    }],
-                )
+                graph = append_consequence(graph, demand.consequence, source="result",
+                    enrichment=demand.enrichment, demand_id=demand.id)
             pipelines.append(Pipeline(name=f"demand_{demand.id}", graph=graph))
         return pipelines
 

@@ -799,6 +799,10 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         if packet.lifecycle == Lifecycle.CLOSE:
             self._states.pop(packet.stream_id, None)
             return [self._annotate(packet, result=None, status="closed")]
+        if "occurrence_reference" in packet.payload:
+            from toposync.runtime.pipelines.occurrence_sink import occurrence_enrichment_allowed
+            if not await occurrence_enrichment_allowed(packet, self._deps):
+                return []
         freshness = resolve_frame_freshness(packet)
         if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
             return unknown("stale_evidence")
@@ -843,6 +847,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             ), timeout=30)
         except Exception:
             return unknown("evaluation_failed")
+        if "occurrence_reference" in packet.payload and not await occurrence_enrichment_allowed(packet, self._deps):
+            return []
         unavailable = result.reason in {"ai_service_unavailable", "all_ai_profiles_failed",
             "no_ai_profile_available", "invalid_ai_service_response"}
         status = "unknown" if (result.observable is False or unavailable
@@ -1040,6 +1046,12 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             camera_id=packet.payload.get("camera_id"), frame_ts=packet.payload.get("frame_ts"),
             subject_id=(packet.payload.get("subject") or {}).get("id"),
         )
+        if "occurrence_reference" in payload:
+            payload["occurrence_enrichment"] = {
+                "kind": "context", "text": self._config.condition_description,
+                "status": {"matched": "observed", "not_matched": "not_observed"}.get(status, "unknown"),
+                "reason": reason or (result.reason if result is not None else "") or None,
+            }
         return replace(packet, payload=payload)
 
 

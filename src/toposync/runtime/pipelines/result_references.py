@@ -20,6 +20,7 @@ class ResultContract(BaseModel):
     version: int = Field(ge=1)
     payload_keys: list[ResultFieldName] = Field(default_factory=list, max_length=64)
     artifacts: list[ResultFieldName] = Field(default_factory=list, max_length=64)
+    optional_artifacts: list[ResultFieldName] = Field(default_factory=list, max_length=64)
 
 
 class ResultOutput(BaseModel):
@@ -99,7 +100,7 @@ def _validate_contract(graph: dict, node_id: str, output: ResultOutput, registry
     if (
         actual is None
         or not set(output.contract.payload_keys) <= actual[0]
-        or not set(output.contract.artifacts) <= actual[1]
+        or not set([*output.contract.artifacts, *output.contract.optional_artifacts]) <= actual[1]
     ):
         raise ValueError(f"Result {output.key} contract is not guaranteed by its output")
 

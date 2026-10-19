@@ -175,7 +175,8 @@ def test_ineligible_categories_remain_unavailable_without_inference(capability):
     assert result["reason"] == "category_not_supported" and "graph" not in result
 
 
-def test_contextual_plan_preserves_occurrence_and_only_sends_subject_crop_to_simulated_provider():
+@pytest.mark.parametrize("late", [True, False])
+def test_contextual_plan_preserves_occurrence_and_only_sends_subject_crop_to_simulated_provider(late):
     from toposync_ext_ai.pipelines.operators import register_ai_pipeline_operators
     from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime
     from toposync_ext_vision.processing.tasks.crop_objects import VisionCropObjectsRuntime
@@ -185,12 +186,15 @@ def test_contextual_plan_preserves_occurrence_and_only_sends_subject_crop_to_sim
             "profile_id": "fixture", "condition_description": "A visible object held by this person",
             "evaluation_interval_seconds": 0,
         })
-        graph = plan_observation(intent=value, configuration=configuration())["graph"]
+        if not late:
+            value.consequence.capability = "home_assistant.notify"
+        planned = plan_observation(intent=value, configuration=configuration())
+        graph = planned["graph"]
         operators = registry()
         register_ai_pipeline_operators(operators)
         PipelineGraphCompiler(operators).compile_many([Pipeline(name="context", graph=graph)])
         crop_config = next(n["config"] for n in graph["nodes"] if n["id"] == "subject_image")
-        ai_config = next(n["config"] for n in graph["nodes"] if n["id"] == "condition")
+        ai_config = next(n["config"] for n in (planned["enrichment"]["nodes"] if late else graph["nodes"]) if n["id"] == "condition")
         assert ai_config["emit_mode"] == "annotate" and ai_config["bind_subject_context"]
         assert not ai_config["fallback_profile_ids"] and not ai_config["fallback_on_low_confidence"]
         assert ai_config["reuse_last_decision_seconds"] == 0
@@ -210,9 +214,12 @@ def test_contextual_plan_preserves_occurrence_and_only_sends_subject_crop_to_sim
         key, (_, published, revision) = next(iter(demands.outputs.items()))
         demand = demands.open("fixture", DemandRequest(consumer_id="manual", purpose="manual", result_key=key,
             contract=published.contract, production_revision=revision, payload_keys=published.contract.payload_keys))
-        assert "condition_annotation" in published.contract.payload_keys and "ai" not in published.contract.payload_keys
+        assert ("condition_annotation" in published.contract.payload_keys) is not late
+        assert "ai" not in published.contract.payload_keys
         for sequence, status in enumerate(("matched", "not_matched", "unknown"), 1):
             source = gesture_packet(sequence)
+            source.payload["media"] = {"ts": sequence}
+            source.payload["source"].update(source_id="fixture", clock_domain="fixture")
             source.payload["subject"]["bbox01"] = [.1,.1,.4,.9]
             source = replace(source, artifacts={"main": Artifact("main", np.zeros((100,100,3), dtype=np.uint8))})
             [event] = await occurrence.process_packet(source, None)
@@ -226,7 +233,7 @@ def test_contextual_plan_preserves_occurrence_and_only_sends_subject_crop_to_sim
             [annotated] = await ActivityEvidenceRuntime().process_packet(annotated, None)
             projected = demands.project(demand.id, annotated)
             assert projected is not None and not projected.artifacts and "ai" not in projected.payload
-            assert "attempts" not in projected.payload["condition_annotation"]
+            assert "attempts" not in projected.payload.get("condition_annotation", {})
             service.result = {"observable": status == "matched", "matches": False, "confidence": .9}
         assert len(service.calls) == 3
         missing = replace(event, artifacts={})

@@ -3719,6 +3719,9 @@ def register_camera_pipeline_operators(registry: OperatorRegistry) -> None:
         capabilities=["source", "camera", "realtime"],
         defaults=CameraSourceConfig().model_dump(),
         produces_payload_keys=[
+            "source",
+            "media",
+            "capture_evidence",
             "camera_id",
             "camera_name",
             "frame_ts",

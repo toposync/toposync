@@ -8,7 +8,7 @@ from typing import Any
 
 from .access import ReadFilter
 from .events import EventBroadcaster
-from .occurrences import Contribution, Enrichment, OccurrenceStore
+from .occurrences import Contribution, Enrichment, OccurrenceStore, OccurrenceChange, OccurrenceReference
 from .store import NotificationRecord, NotificationStore
 
 
@@ -51,7 +51,8 @@ class NotificationsRuntime:
                 include_global=record.priority_bucket != "silent")
 
     async def record_occurrence(self, contribution: Contribution, *, retention_seconds: float,
-                                request_notice: bool = False, now: float | None = None) -> dict:
+                                request_notice: bool = False, now: float | None = None,
+                                return_change: bool = False) -> dict | OccurrenceChange:
         change = await asyncio.to_thread(self.occurrences.record, contribution,
             retention_seconds=retention_seconds, request_notice=request_notice, now=now)
         if change.changed:
@@ -60,7 +61,10 @@ class NotificationsRuntime:
             # This sink records a local simulation receipt; it has no external transport.
             await asyncio.to_thread(self.occurrences.finish_delivery, change.requested_delivery,
                 "confirmed", reason="simulated_sink", now=now)
-        return change.document
+        return change if return_change else change.document
+
+    async def enrichment_allowed(self, reference: OccurrenceReference) -> bool:
+        return await asyncio.to_thread(self.occurrences.enrichment_allowed, reference)
 
     async def enrich_occurrence(self, enrichment: Enrichment, *, now: float | None = None) -> dict:
         change = await asyncio.to_thread(self.occurrences.enrich, enrichment, now=now)

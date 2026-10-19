@@ -83,6 +83,49 @@ def test_bounded_reconciliation_advances_past_active_owners(tmp_path):
         gallery.close()
 
 
+@pytest.mark.parametrize('retained_use', ['none', 'shared', 'human_reference'])
+def test_private_reads_close_before_physical_purge_preserving_independent_uses(tmp_path, retained_use):
+    valid = {'owner', 'other'}
+    gallery = IdentityStore(tmp_path, scope='synthetic', activity_authorized=lambda ref: ref['occurrence_id'] in valid)
+    try:
+        sample = evidence('pending-purge')
+        crop = BytesIO()
+        Image.new('RGB', (8, 8), 'blue').save(crop, format='JPEG')
+        observed = gallery.observe(sample, policy(), crop=crop.getvalue(), activity_reference={'occurrence_id': 'owner'})
+        retained_crop = gallery.image(observed.observation_id)
+        identity = curate(gallery, 'create', {'name': 'Synthetic profile', 'species': 'person'})['identity_id']
+        operation = curate(gallery, 'assign', {'observation_ids': [observed.observation_id], 'identity_id': identity,
+            'use_as_reference': retained_use == 'human_reference'})
+        if retained_use == 'shared':
+            gallery.observe(sample, policy(), activity_reference={'occurrence_id': 'other'})
+        valid.remove('owner')
+        # The bytes still exist: visibility cannot depend on a successful purge callback.
+        assert gallery._connection.execute('SELECT crop FROM observation WHERE id=?', (observed.observation_id,)).fetchone()[0]
+        available = retained_use != 'none'
+        assert len(gallery.observations()) == int(available)
+        assert len(gallery.observation_page(principal='synthetic', can_read_camera=lambda _: True)['observations']) == int(available)
+        assert (gallery.decision(sample.occurrence_id) is not None) is available
+        assert (gallery.occurrence_details(sample.occurrence_id) is not None) is available
+        assert len(gallery.history_scope(identity, authorize_cameras=lambda _: None)['occurrences']) == int(available)
+        profile = gallery.list_identities()[0]
+        assert profile['id'] == identity and profile['occurrences'] == int(available)
+        assert (profile['representative_id'] is not None) is available
+        if available:
+            assert gallery.image(observed.observation_id) == retained_crop
+        else:
+            for read in (gallery.image, gallery.observation_context):
+                with pytest.raises(KeyError):
+                    read(observed.observation_id)
+            with pytest.raises(IdentityConflict, match='no longer available'):
+                curate(gallery, 'reference', {'observation_ids': [observed.observation_id], 'enabled': True})
+            with pytest.raises(IdentityConflict, match='no longer available'):
+                gallery.undo(operation['operation_id'], expected_revision=gallery.revision)
+        gallery.reconcile_activity_references()
+        assert len(gallery.observations()) == int(available)
+    finally:
+        gallery.close()
+
+
 def test_ownership_is_per_capture_not_the_entire_source_episode(tmp_path):
     history = NotificationsRuntime(data_dir=tmp_path)
     first, reference_one = activity(history)

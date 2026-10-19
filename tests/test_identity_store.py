@@ -249,6 +249,7 @@ def test_delete_clears_references_decisions_history_and_invalidates_inflight_res
     assert store.list_identities() == []
     assert store.observations() == []
     assert store.decision("recognized-visit").status == "unknown"
+    assert store.decision("recognized-visit").observation_id is None
     with pytest.raises(IdentityConflict, match="inference"):
         store.observe(evidence("late-result"), policy(), expected_gallery_revision=gallery_revision)
     assert store.observe(evidence("fresh"), policy()).status == "unknown"

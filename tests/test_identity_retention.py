@@ -87,6 +87,44 @@ def test_reference_expiry_removes_derived_vectors_and_blocks_undo_and_rebuild(tm
         store.close()
 
 
+def test_expiry_blocks_reads_counts_matching_and_rebuild_before_sweep(tmp_path, monkeypatch):
+    store = IdentityStore(tmp_path, scope='test')
+    try:
+        identity, observation = enroll_photo(store, 'reference')
+        enable(store)
+        store._connection.execute('UPDATE observation SET created_at=?', (time.time() - 366 * 86400,))
+        assert store._connection.execute('SELECT crop FROM observation').fetchone()[0]
+        assert store.observations() == []
+        assert store.list_identities()[0]['references'] == 0
+        assert store.list_identities()[0]['representative_id'] is None
+        with pytest.raises(KeyError):
+            store.image(observation)
+        assert store.history_scope(identity, authorize_cameras=lambda _: None)['occurrences'] == []
+        assert rebuild_reference_batch(store, ReplacementExtractor(), species='cat', expected_revision=store.revision)['processed'] == 0
+        assert store.observe(evidence('new-cat', species='cat'), policy('cat')).identity_id is None
+    finally:
+        store.close()
+
+
+def test_reference_expiring_during_rebuild_discards_derivative(tmp_path, monkeypatch):
+    store = IdentityStore(tmp_path, scope='test')
+    try:
+        enroll_photo(store, 'reference')
+        enable(store)
+        extractor = ReplacementExtractor()
+        extract = extractor.extract
+        def expire(*args, **kwargs):
+            result = extract(*args, **kwargs)
+            store._connection.execute('UPDATE observation SET created_at=?', (time.time() - 366 * 86400,))
+            return result
+        monkeypatch.setattr(extractor, 'extract', expire)
+        with pytest.raises(IdentityConflict, match='expired during reconstruction'):
+            rebuild_reference_batch(store, extractor, species='cat', expected_revision=store.revision)
+        assert store._connection.execute('SELECT count(*) FROM reference_representation').fetchone()[0] == 0
+    finally:
+        store.close()
+
+
 def test_maintenance_batches_history_and_lifecycle_survive_replay(tmp_path):
     store = IdentityStore(tmp_path, scope="test")
     try:
@@ -216,11 +254,11 @@ def test_retention_during_reconstruction_cannot_restore_expired_vectors(tmp_path
     store = IdentityStore(tmp_path, scope="test")
     try:
         enroll_photo(store, "reference")
-        store._connection.execute(
-            "UPDATE observation SET created_at=?", (time.time() - 366 * 86400,)
-        )
         enable(store)
-        replacement = ReplacementExtractor(before=store.apply_retention)
+        def expire_during_inference():
+            store._connection.execute('UPDATE observation SET created_at=?', (time.time() - 366 * 86400,))
+            store.apply_retention()
+        replacement = ReplacementExtractor(before=expire_during_inference)
         with pytest.raises(IdentityConflict):
             rebuild_reference_batch(
                 store, replacement, species="cat", expected_revision=store.revision

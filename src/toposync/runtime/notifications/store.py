@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 
-from .access import ReadFilter
+from .access import ReadFilter, retained
 
 
 def parse_data_filter(value: str | dict[str, str] | None) -> dict[str, str]:
@@ -281,11 +281,9 @@ class NotificationStore:
 
         conn = _connect(self.path, read_only=True)
         def visible(blob):
-            if read_filter is None:
-                return True
             try:
                 payload = json.loads(blob) if blob else {}
-                return isinstance(payload, dict) and read_filter(payload)
+                return isinstance(payload, dict) and retained(payload) and (read_filter is None or read_filter(payload))
             except (ValueError, TypeError, RecursionError):
                 return False
         conn.create_function("notification_visible", 1, visible)
@@ -334,8 +332,10 @@ class NotificationStore:
 
         def read(conn: sqlite3.Connection) -> sqlite3.Row | None:
             row = self._get_row_unlocked(conn, nid)
-            if row is not None and read_filter is not None and not read_filter(self._row_to_record(row).payload):
-                return None
+            if row is not None:
+                payload = self._row_to_record(row).payload
+                if not retained(payload) or (read_filter is not None and not read_filter(payload)):
+                    return None
             return row
 
         row = self._run_read(read, cancel_check=cancel_check, read_filter=read_filter)

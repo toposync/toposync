@@ -2,11 +2,24 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
+import time
 from typing import Any
 
 from fastapi import HTTPException, Request
 
 ReadFilter = Callable[[dict[str, Any]], bool]
+
+
+def retained(payload: dict[str, Any]) -> bool:
+    if payload.get("source") != "occurrences":
+        return True
+    data = payload.get("data")
+    document = data.get("occurrence") if isinstance(data, dict) else None
+    if not isinstance(document, dict):
+        return False
+    expiry = document.get("expires_at")
+    return type(expiry) in (int, float) and math.isfinite(expiry) and expiry > time.time() and document.get("status") in ("OPEN", "UPDATE", "CLOSE")
 
 
 class NotificationAccess:
@@ -20,6 +33,8 @@ class NotificationAccess:
         return auth.authorize(context=context, action=action), context
 
     def __call__(self, payload: dict[str, Any]) -> bool:
+        if not retained(payload):
+            return False
         try:
             principal, context = self.principal()
             if principal.bypass or principal.role == "owner":

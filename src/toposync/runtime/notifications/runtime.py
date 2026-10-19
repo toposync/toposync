@@ -8,6 +8,7 @@ from typing import Any
 
 from .access import ReadFilter
 from .events import EventBroadcaster
+from .occurrences import Contribution, Enrichment, OccurrenceStore
 from .store import NotificationRecord, NotificationStore
 
 
@@ -39,7 +40,50 @@ def _to_public(rec: NotificationRecord) -> dict[str, Any]:
 class NotificationsRuntime:
     def __init__(self, *, data_dir: Path) -> None:
         self.store = NotificationStore(data_dir / "notifications" / "notifications.sqlite3")
+        self.occurrences = OccurrenceStore(self.store)
         self.broadcaster = EventBroadcaster()
+
+    async def _publish_occurrence(self, identifier: str, *, now: float | None = None) -> None:
+        published = await asyncio.to_thread(self.occurrences.publish, identifier, now=now)
+        if published is not None:
+            record, created = published
+            self.broadcaster.publish({"op": "insert" if created else "update", "notification": _to_public(record)},
+                include_global=record.priority_bucket != "silent")
+
+    async def record_occurrence(self, contribution: Contribution, *, retention_seconds: float,
+                                request_notice: bool = False, now: float | None = None) -> dict:
+        change = await asyncio.to_thread(self.occurrences.record, contribution,
+            retention_seconds=retention_seconds, request_notice=request_notice, now=now)
+        if change.changed:
+            await self._publish_occurrence(change.document["id"], now=now)
+        if change.requested_delivery is not None:
+            # This sink records a local simulation receipt; it has no external transport.
+            await asyncio.to_thread(self.occurrences.finish_delivery, change.requested_delivery,
+                "confirmed", reason="simulated_sink", now=now)
+        return change.document
+
+    async def enrich_occurrence(self, enrichment: Enrichment, *, now: float | None = None) -> dict:
+        change = await asyncio.to_thread(self.occurrences.enrich, enrichment, now=now)
+        if change.changed:
+            await self._publish_occurrence(change.document["id"], now=now)
+        return change.document
+
+    async def erase_occurrence(self, identifier: str, *, expected_revision: int) -> dict:
+        change = await asyncio.to_thread(self.occurrences.erase, identifier, expected_revision=expected_revision)
+        self.broadcaster.discard(change.invalidated_notifications)
+        return change.document
+
+    async def revoke_occurrence_enrichment(self, identifier: str, *, expected_revision: int) -> dict:
+        change = await asyncio.to_thread(self.occurrences.revoke_enrichment, identifier, expected_revision=expected_revision)
+        self.broadcaster.discard(change.invalidated_notifications)
+        await self._publish_occurrence(identifier)
+        return change.document
+
+    async def expire_occurrences(self, *, now: float | None = None) -> int:
+        changes = await asyncio.to_thread(self.occurrences.expire, now=now)
+        for change in changes:
+            self.broadcaster.discard(change.invalidated_notifications)
+        return len(changes)
 
     async def list(
         self,

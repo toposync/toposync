@@ -79,6 +79,23 @@ class EventBroadcaster:
         while not q.empty():
             q.get_nowait()
 
+    def discard(self, notification_ids: tuple[str, ...]) -> None:
+        identifiers = set(notification_ids)
+        if not identifiers:
+            return
+        for queue, subscription in self._subscribers.items():
+            if subscription.notification_id in identifiers:
+                _clear_ephemeral(subscription)
+            retained = []
+            while not queue.empty():
+                event = queue.get_nowait()
+                notification = event.get("notification")
+                identifier = notification.get("id") if isinstance(notification, dict) else event.get("notification_id")
+                if identifier not in identifiers:
+                    retained.append(event)
+            for event in retained:
+                queue.put_nowait(event)
+
     def publish(
         self, event: dict[str, Any], *, ephemeral_image: dict[str, Any] | None = None,
         include_global: bool = True,

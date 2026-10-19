@@ -1317,6 +1317,7 @@ class AuthRuntime:
             "core:notifications:read",
             "core:notifications:stream",
             "core:pipelines:read",
+            "core:occurrences:write",
             "core:pipelines:runtime:read",
             "core:processing_servers:read",
             "core:embed:start",

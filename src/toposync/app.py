@@ -63,6 +63,7 @@ from toposync.runtime.extension_management import (
 )
 from toposync.runtime.notifications import NotificationsRuntime
 from toposync.runtime.notifications.access import NotificationAccess
+from toposync.runtime.notifications.activity_api import install_activity_routes
 from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 from toposync.runtime.pipelines import (
@@ -1339,7 +1340,11 @@ async def _lifespan(app: FastAPI):
     )
 
     notifications = NotificationsRuntime(data_dir=config_store.paths.data_dir)
+    await notifications.expire_occurrences()
+    await asyncio.to_thread(notifications.occurrences.recover)
     services.register("notifications.upsert", notifications.upsert)
+    services.register("occurrences.record", notifications.record_occurrence)
+    services.register("occurrences.enrich", notifications.enrich_occurrence)
 
     async def _notifications_list_service(
         *,
@@ -1865,7 +1870,7 @@ def create_app() -> FastAPI:
                             break
 
         response = await call_next(request)
-        if path.startswith(("/api/notifications", "/api/ai/history")):
+        if path.startswith(("/api/notifications", "/api/ai/history", "/api/activity")):
             response.headers["Cache-Control"] = "private, no-store" + (", no-transform" if "no-transform" in response.headers.get("Cache-Control", "") else "")
         auth.apply_context_cookies(response, context, request=request)
         return response
@@ -5192,6 +5197,8 @@ def create_app() -> FastAPI:
             build_response,
             limiter=request.app.state.notification_read_limiters["detail"],
         )
+
+    install_activity_routes(app)
 
     frontend_dir = _resolve_frontend_dir()
     if frontend_dir:

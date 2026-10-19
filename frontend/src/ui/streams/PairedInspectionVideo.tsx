@@ -1,29 +1,76 @@
 import React, { useEffect, useRef, useState } from "react";
 import { resolveToposyncUrl, type InspectionSnapshot } from "@toposync/plugin-api";
 import { i18n } from "../../util/i18n";
-import { decodePairedFrame, projectInspectionBoxes, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
+import { decodePairedFrame, projectInspectionBoxes, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata } from "./pairedInspection";
 
-export function PairedInspectionVideo({ session, nodeId, frozen, boxes, onSnapshot, onClosed }: {
-  session: string; nodeId: string; frozen: boolean; boxes: boolean;
+export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, selectedNodes, onSnapshot, onClosed }: {
+  session: string; nodeId: string; frozen: boolean; boxes: boolean; layers: ReadonlySet<string>; selectedNodes?: ReadonlySet<string>;
   onSnapshot: (snapshot: InspectionSnapshot) => void; onClosed: () => void;
 }) {
   const { t } = i18n.useI18n();
   const canvas = useRef<HTMLCanvasElement>(null);
-  const options = useRef({ frozen, boxes, onSnapshot, onClosed });
-  options.current = { frozen, boxes, onSnapshot, onClosed };
+  const options = useRef({ frozen, boxes, layers, selectedNodes, onSnapshot, onClosed });
+  options.current = { frozen, boxes, layers, selectedNodes, onSnapshot, onClosed };
+  const repaint = useRef<() => void>(() => {});
   const [state, setState] = useState("waiting");
   const [stamp, setStamp] = useState<number | null>(null);
   useEffect(() => {
     let disposed = false, timer = 0, expiry = 0, emptyReads = 0;
     let presented: PairedInspectionMetadata | null = null;
+    let retained: ImageBitmap | null = null, presentedAt = 0;
     const controller = new AbortController();
     const clear = () => {
       presented = null; setStamp(null);
+      retained?.close(); retained = null;
       if (canvas.current) {
         canvas.current.width = 1; canvas.current.height = 1;
-        for (const key of ["capture", "boxes", "paintMilliseconds", "snapshotSequence"]) delete canvas.current.dataset[key];
+        for (const key of ["capture", "boxes", "visuals", "paintMilliseconds", "snapshotSequence"]) delete canvas.current.dataset[key];
       }
     };
+    function paint() {
+      const element = canvas.current;
+      if (!presented || !retained || !element) return;
+      if (!options.current.frozen && Date.now() / 1000 >= presented.expires_at) { clear(); setState("waiting"); return; }
+      const context = element.getContext("2d");
+      if (!context) throw new Error("inspection_canvas_unavailable");
+      const started = performance.now();
+      context.clearRect(0, 0, element.width, element.height);
+      context.drawImage(retained, 0, 0);
+      // A frozen view reuses its exact authorized pixels and geometry, never the next snapshot.
+      const drawings = options.current.boxes ? projectInspectionBoxes(presented, presentedAt, options.current.selectedNodes) : [];
+      const visuals = projectInspectionVisuals(presented, presentedAt, options.current.layers, options.current.selectedNodes);
+      context.lineWidth = 2; context.strokeStyle = "#00ff9d"; context.fillStyle = "#00ff9d";
+      context.font = "12px sans-serif";
+      for (const box of drawings) {
+        context.beginPath();
+        box.points.forEach(([x,y], index) => index ? context.lineTo(x,y) : context.moveTo(x,y));
+        context.closePath(); context.stroke();
+        context.fillText(`${box.label} · ${box.score.toFixed(3)}`, box.points[0][0], Math.max(12, box.points[0][1] - 4));
+      }
+      context.strokeStyle = "#ffd166"; context.fillStyle = "#ffd166";
+      for (const visual of visuals) {
+        if (visual.kind === "points") {
+          for (const [a,b] of visual.connections) {
+            const start = visual.points[a]!, end = visual.points[b]!;
+            context.beginPath(); context.moveTo(start[0], start[1]); context.lineTo(end[0], end[1]); context.stroke();
+          }
+          for (const point of visual.points) if (point) {
+            context.beginPath(); context.arc(point[0], point[1], 3, 0, Math.PI * 2); context.fill();
+          }
+        } else if (visual.points.length) {
+          context.beginPath();
+          visual.points.forEach((point, index) => index ? context.lineTo(point![0], point![1]) : context.moveTo(point![0], point![1]));
+          if (visual.kind === "polygon") context.closePath();
+          context.stroke();
+        }
+      }
+      const reference = presented.presentation.frame;
+      element.dataset.capture = `${reference.device_id}/${reference.source_id}/${reference.capture_instance}/${reference.generation}/${reference.sequence}`;
+      element.dataset.boxes = String(drawings.length); element.dataset.visuals = String(visuals.length);
+      element.dataset.paintMilliseconds = String(performance.now() - started);
+      element.dataset.snapshotSequence = String(presented.snapshot.sequence);
+    }
+    repaint.current = paint;
     function changedCapture(next: PairedInspectionMetadata): boolean {
       if (!presented) return false;
       const a = presented.presentation.frame, b = next.presentation.frame;
@@ -51,7 +98,7 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, onSnapsh
         options.current.onSnapshot(metadata.snapshot);
         if (changedCapture(metadata)) clear();
         if (options.current.frozen && presented) return;
-        const bitmap = await createImageBitmap(new Blob([new Uint8Array(jpeg).buffer], { type: "image/jpeg" }));
+        let bitmap: ImageBitmap | null = await createImageBitmap(new Blob([new Uint8Array(jpeg).buffer], { type: "image/jpeg" }));
         try {
           if (disposed || controller.signal.aborted || !canvas.current) return;
           if (Date.now() / 1000 >= metadata.expires_at) { clear(); setState("waiting"); return; }
@@ -60,28 +107,11 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, onSnapsh
           if (options.current.frozen && presented) return;
           const element = canvas.current;
           element.width = bitmap.width; element.height = bitmap.height;
-          const context = element.getContext("2d");
-          if (!context) throw new Error("inspection_canvas_unavailable");
-          const started = performance.now();
-          context.drawImage(bitmap, 0, 0);
-          const drawings = options.current.boxes ? projectInspectionBoxes(metadata, Date.now() / 1000) : [];
-          context.lineWidth = 2; context.strokeStyle = "#00ff9d"; context.fillStyle = "#00ff9d";
-          context.font = "12px sans-serif";
-          for (const box of drawings) {
-            context.beginPath();
-            box.points.forEach(([x,y], index) => index ? context.lineTo(x,y) : context.moveTo(x,y));
-            context.closePath(); context.stroke();
-            context.fillText(`${box.label} · ${box.score.toFixed(3)}`, box.points[0][0], Math.max(12, box.points[0][1] - 4));
-          }
+          retained?.close(); retained = bitmap; bitmap = null;
           presented = metadata;
-          const reference = metadata.presentation.frame;
-          // A bounded sample exposes the actual paint result for diagnostics, not a synthetic player clock.
-          element.dataset.capture = `${reference.device_id}/${reference.source_id}/${reference.capture_instance}/${reference.generation}/${reference.sequence}`;
-          element.dataset.boxes = String(drawings.length);
-          element.dataset.paintMilliseconds = String(performance.now() - started);
-          element.dataset.snapshotSequence = String(metadata.snapshot.sequence);
-          setStamp(Date.now() / 1000); setState("paired");
-        } finally { bitmap.close(); }
+          presentedAt = Date.now() / 1000;
+          paint(); setStamp(presentedAt); setState("paired");
+        } finally { bitmap?.close(); }
       } catch {
         if (!disposed) { clear(); setState("failed"); options.current.onClosed(); }
         disposed = true; controller.abort();
@@ -94,8 +124,9 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, onSnapsh
       if (presented && !options.current.frozen && Date.now() / 1000 >= presented.expires_at) { clear(); setState("waiting"); }
     }, 100);
     void poll();
-    return () => { disposed = true; controller.abort(); window.clearTimeout(timer); window.clearInterval(expiry); clear(); };
+    return () => { disposed = true; controller.abort(); window.clearTimeout(timer); window.clearInterval(expiry); repaint.current = () => {}; clear(); };
   }, [session, nodeId]);
+  useEffect(() => { repaint.current(); }, [boxes, layers, selectedNodes, frozen]);
   return <div className="pairedInspectionVideo">
     <canvas ref={canvas} aria-label={t("inspection.paired_video")} />
     <div className="pairedInspectionStatus" role="status">

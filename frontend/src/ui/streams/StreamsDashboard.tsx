@@ -3718,7 +3718,7 @@ export function StreamTilePlayer({
   const posterVisible = playbackActive && Boolean(posterObjectUrl) && !firstFrameReady;
 
   return (
-    <div className="streamsPlayerFrame" ref={frameRef}>
+    <div className={`streamsPlayerFrame${inspectionPaired ? " isInspecting" : ""}`} ref={frameRef}>
       <canvas
         ref={jsmpegCanvasRef}
         className={["streamsJsmpegCanvas", transport === "jsmpeg" ? "isVisible" : "isHidden"].join(" ")}
@@ -3741,10 +3741,10 @@ export function StreamTilePlayer({
 
 	      <div className={["streamsTileOverlay", overlayVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsTileOverlayLeft" title={label}>
-          <span className={["streamsPlaybackDot", `is-${playbackDotStatus}`].join(" ")} />
+          {!inspectionPaired && <span className={["streamsPlaybackDot", `is-${playbackDotStatus}`].join(" ")} />}
           <span className="streamsTileOverlayTitle">{label}</span>
-          <span className="streamsTileOverlayMeta">{playbackStatusLabel}</span>
-          {webRtcFallbackActive ? (
+          {!inspectionPaired && <span className="streamsTileOverlayMeta">{playbackStatusLabel}</span>}
+          {!inspectionPaired && webRtcFallbackActive ? (
             <span className="streamsTileOverlayMeta" title={t("core.ui.streams.transport.hls_fallback_hint", {}, "Low latency unavailable; using HLS fallback.")}>
               {t("core.ui.streams.transport.hls_fallback", {}, "HLS fallback")}
             </span>

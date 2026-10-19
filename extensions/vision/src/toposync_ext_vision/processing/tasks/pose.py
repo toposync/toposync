@@ -20,6 +20,7 @@ from ..artifact_helpers import (
 )
 from ..contracts import DetectionObject, PoseBackend, PoseObject, normalize_bbox01
 from ..pose_landmarks import project_pose_landmarks, selected_image_to_stream_matrix
+from ..inspection import copy_inspection_frame, pose_visuals
 from ..runtime_backends import build_pose_backend
 
 
@@ -409,6 +410,7 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
             packet, selected_artifact_name=artifact_name
         )
         track_hints = self._collect_track_hints(packet)
+        inspection_frame = await copy_inspection_frame(context, frame)
         concurrency_key = f"vision.pose_estimate:{manifest.runtime}:{manifest.model_id}"
         raw_poses = await context.run_blocking(
             backend.estimate_pose,
@@ -423,4 +425,11 @@ class VisionPoseEstimateRuntime(TransformOperatorRuntime):
             track_hints=track_hints,
             selected_artifact_name=artifact_name,
         )
+        if inspection_frame is not None:
+            try:
+                context.inspect("analyzed", packet, frame=inspection_frame, model_id=manifest.model_id,
+                                geometry=packet.artifacts[artifact_name].metadata.get("image_geometry"),
+                                visuals=pose_visuals(packet, artifact_name, poses))
+            except Exception:
+                pass  # Diagnostic projection must not change the functional pose output.
         return [self._annotate_packet(packet, manifest=manifest, backend=backend, poses=poses)]

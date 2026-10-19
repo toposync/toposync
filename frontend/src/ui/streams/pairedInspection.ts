@@ -1,4 +1,4 @@
-import type { InspectionNode, InspectionSnapshot } from "@toposync/plugin-api";
+import type { InspectionNode, InspectionSnapshot, InspectionVisual } from "@toposync/plugin-api";
 
 export type FrameReference = {
   source_id: string; device_id: string | null; capture_instance: string; generation: number; sequence: number;
@@ -13,6 +13,7 @@ export type PairedInspectionMetadata = {
   snapshot: InspectionSnapshot;
 };
 export type InspectionBox = { points: number[][]; label: string; score: number; node: InspectionNode };
+export type ProjectedInspectionVisual = Omit<InspectionVisual, "points"> & { points: Array<number[] | null>; node: InspectionNode };
 export const maximumPairedBytes = 400_000;
 
 function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
@@ -97,34 +98,61 @@ function supported(point: number[], g: PixelGeometry): boolean {
     });
 }
 
-export function projectInspectionBoxes(metadata: PairedInspectionMetadata, now: number): InspectionBox[] {
+function* inspectionProjections(metadata: PairedInspectionMetadata, now: number, selectedNodes?: ReadonlySet<string>) {
   const target = metadata.presentation.geometry;
   if (now >= metadata.expires_at || !geometry(target)
-      || target.image_size.some((n, index) => n !== metadata.presentation.image_size[index])) return [];
+      || target.image_size.some((n, index) => n !== metadata.presentation.image_size[index])) return;
   const backwards = inverse(target.to_source);
-  if (!backwards) return [];
-  const seen = new Set<string>(), result: InspectionBox[] = [];
+  if (!backwards) return;
+  const seen = new Set<string>();
   for (const node of metadata.snapshot.nodes) {
+    if (selectedNodes && !selectedNodes.has(node.node_id)) continue;
     const origin = node.geometry;
     if (!sameCaptureFrame(node.frame, metadata.presentation.frame) || node.expires_at === null || now >= node.expires_at
         || !geometry(origin) || origin.source_size.some((n, index) => n !== target.source_size[index])) continue;
     const key = JSON.stringify([node.physical_node_id, node.producer_epoch, node.model_id, node.frame]);
     if (seen.has(key)) continue;
     seen.add(key);
+    yield { node, project: (point: number[]): number[] | null => {
+      if (point.length !== 2 || !point.every(n => finite(n) && n >= 0 && n <= 1)) return null;
+      const local = [point[0] * origin.image_size[0], point[1] * origin.image_size[1]];
+      if (!supported(local, origin)) return null;
+      const source = transform(local, origin.to_source);
+      const presented = source && transform(source, backwards);
+      return presented && supported(presented, target) ? presented : null;
+    } };
+  }
+}
+
+export function projectInspectionBoxes(metadata: PairedInspectionMetadata, now: number, selectedNodes?: ReadonlySet<string>): InspectionBox[] {
+  const result: InspectionBox[] = [];
+  for (const { node, project } of inspectionProjections(metadata, now, selectedNodes)) {
     for (const detection of node.detections.slice(0, 32)) {
       const box = detection.box;
       if (!Array.isArray(box) || box.length !== 4 || !box.every(n => finite(n) && n >= 0 && n <= 1)
           || box[0] > box[2] || box[1] > box[3] || !finite(detection.score)) continue;
       const corners = [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]];
-      const points = corners.map(([x,y]) => {
-        const local = [x * origin.image_size[0], y * origin.image_size[1]];
-        if (!supported(local, origin)) return null;
-        const source = transform(local, origin.to_source);
-        const presented = source && transform(source, backwards);
-        return presented && supported(presented, target) ? presented : null;
-      });
+      const points = corners.map(project);
       if (points.every((point): point is number[] => point !== null))
         result.push({ points, label: detection.label, score: detection.score, node });
+    }
+  }
+  return result;
+}
+
+export function projectInspectionVisuals(metadata: PairedInspectionMetadata, now: number, layers: ReadonlySet<string>, selectedNodes?: ReadonlySet<string>): ProjectedInspectionVisual[] {
+  const result: ProjectedInspectionVisual[] = [];
+  for (const { node, project } of inspectionProjections(metadata, now, selectedNodes)) {
+    for (const visual of (node.visuals || []).slice(0, 32)) {
+      if (!layers.has(visual.layer) || !["points", "polygon", "polyline"].includes(visual.kind)
+          || !Array.isArray(visual.points) || visual.points.length > 128
+          || !Array.isArray(visual.connections) || visual.connections.length > 128) continue;
+      const points = visual.points.map(point => Array.isArray(point) ? project(point) : null);
+      // Missing joints retain their slots; never connect different joints across an absent one.
+      if (visual.kind !== "points" && points.some(point => point === null)) continue;
+      const connections = visual.connections.filter(edge => Array.isArray(edge) && edge.length === 2
+        && edge.every(index => Number.isSafeInteger(index) && index >= 0 && index < points.length && points[index] !== null));
+      result.push({ ...visual, points, connections, node });
     }
   }
   return result;

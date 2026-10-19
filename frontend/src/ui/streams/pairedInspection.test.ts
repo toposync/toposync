@@ -1,5 +1,5 @@
 declare const require: any;
-import { decodePairedFrame, projectInspectionBoxes, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
+import { decodePairedFrame, projectInspectionBoxes, projectInspectionVisuals, readPairedResponse, type PairedInspectionMetadata, type PixelGeometry } from "./pairedInspection";
 const test: (name: string, fn: () => void | Promise<void>) => void = require("node:test").test;
 const assert: any = require("node:assert/strict");
 
@@ -14,7 +14,7 @@ function fixture(): PairedInspectionMetadata {
       operator: "vision.detect", state: "analyzed", reason: null, sequence: 1, motion: null, image_available: true,
       image_sequence: 1, received_count: 1, produced_count: 1, filtered_count: 0,
       frame: { ...frame }, geometry: structuredClone(geometry), model_id: "detector", expires_at: 101,
-      detections: [{ box: [0.2,0.2,0.6,0.6], score: 0.9, label: "square", score_kind: "detector_score" }] }] } };
+      visuals: [], detections: [{ box: [0.2,0.2,0.6,0.6], score: 0.9, label: "square", score_kind: "detector_score" }] }] } };
 }
 
 test("paired frame identity rejects older results, source switches and reconnections", () => {
@@ -80,4 +80,39 @@ test("reader cancels an oversized stream even without Content-Length", async () 
   assert.equal(canceled, true);
   const bytes = encode(fixture());
   assert.deepEqual(await readPairedResponse(new Response(new Uint8Array(bytes).buffer)), bytes);
+});
+
+test("pose joints preserve missing slots and require the exact capture and selected operator", () => {
+  const value = fixture();
+  value.snapshot.nodes[0].visuals = [{ layer: "pose", kind: "points", points: [[0.2,0.3], null, [0.8,0.9]],
+    connections: [[0,1],[1,2],[0,2]], subject_id: "track:1", label: "person", score: 0.7, score_kind: "pose_model_score" }];
+  const layers = new Set(["pose"]);
+  const [visual] = projectInspectionVisuals(value, 100, layers);
+  assert.deepEqual(visual.points, [[20,30], null, [80,90]]);
+  assert.deepEqual(visual.connections, [[0,2]]);
+  assert.equal(visual.subject_id, "track:1");
+  assert.deepEqual(projectInspectionVisuals(value, 100, layers, new Set()), []);
+  assert.deepEqual(projectInspectionVisuals(value, 100, new Set()), []);
+  assert.deepEqual(projectInspectionBoxes(value, 100, new Set()), []);
+  value.snapshot.nodes[0].frame!.sequence = 6;
+  assert.deepEqual(projectInspectionVisuals(value, 100, layers), []);
+});
+
+test("pose crop and rotation, unsupported joints and shared execution stay bounded", () => {
+  const value = fixture();
+  const node = value.snapshot.nodes[0];
+  node.visuals = [{ layer: "pose", kind: "points", points: [[0.2,0.3], [0.8,0.9]],
+    connections: [[0,1]], subject_id: "track:1", label: null, score: null, score_kind: null }];
+  node.geometry!.to_source = [[0, -0.5, 80], [0.5, 0, 10], [0, 0, 1]];
+  value.snapshot.nodes.push({ ...node, node_id: "logical-consumer" });
+  const layers = new Set(["pose"]);
+  assert.equal(projectInspectionVisuals(value, 100, layers).length, 1);
+  assert.deepEqual(projectInspectionVisuals(value, 100, layers)[0].points, [[65,20],[35,50]]);
+  assert.equal(projectInspectionVisuals(value, 100, layers, new Set(["logical-consumer"])).length, 1);
+  value.presentation.geometry!.valid_domains = [{ size: [40,60], matrix: [[1,0,0],[0,1,0],[0,0,1]] }];
+  const result = projectInspectionVisuals(value, 100, layers)[0];
+  assert.deepEqual(result.points, [null,[35,50]]);
+  assert.deepEqual(result.connections, []);
+  value.presentation.geometry = null;
+  assert.deepEqual(projectInspectionVisuals(value, 100, layers), []);
 });

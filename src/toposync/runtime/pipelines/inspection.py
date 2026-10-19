@@ -12,9 +12,9 @@ import re
 import secrets
 import time
 from itertools import islice
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .runtime import Packet, packet_occurrence_id
 from .image_geometry import inspection_geometry
@@ -24,6 +24,34 @@ def pipeline_inspection_revision(pipeline: Any) -> str:
     return hashlib.sha256(
         json.dumps(pipeline.model_dump(mode="json"), sort_keys=True).encode()
     ).hexdigest()
+
+
+class InspectionVisual(BaseModel):
+    """Bounded drawing primitives supplied explicitly by an operator, never payload dumps."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    layer: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    kind: Literal["points", "polyline", "polygon"]
+    points: list[Annotated[list[float], Field(min_length=2, max_length=2)] | None] = Field(max_length=128)
+    connections: list[Annotated[list[int], Field(min_length=2, max_length=2)]] = Field(default_factory=list, max_length=128)
+    label: str | None = Field(default=None, max_length=64)
+    subject_id: str | None = Field(default=None, max_length=128)
+    score: float | None = None
+    score_kind: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def drawing_contract(self) -> InspectionVisual:
+        if any(point is not None and any(v < 0 or v > 1 for v in point)
+               for point in self.points):
+            raise ValueError("invalid_inspection_point")
+        if any(any(index < 0 or index >= len(self.points) for index in edge)
+               for edge in self.connections):
+            raise ValueError("invalid_inspection_connection")
+        if self.kind != "points" and (self.connections or any(point is None for point in self.points)):
+            raise ValueError("invalid_inspection_path")
+        if self.score is not None and not self.score_kind:
+            raise ValueError("inspection_score_kind_required")
+        return self
 
 
 class InspectionNode(BaseModel):
@@ -51,6 +79,7 @@ class InspectionNode(BaseModel):
     producer_epoch: str
     frame: dict[str, Any] | None = None
     detections: list[dict[str, Any]] = Field(default_factory=list)
+    visuals: list[InspectionVisual] = Field(default_factory=list, max_length=32)
     geometry: dict[str, Any] | None = None
     motion: dict[str, float] | None = None
     expires_at: float | None = None
@@ -246,6 +275,7 @@ class PipelineInspectionStore:
                             "reason": "sample_expired",
                             "frame": None,
                             "detections": [],
+                            "visuals": [],
                             "geometry": None,
                             "motion": None,
                             "image_available": False,
@@ -278,6 +308,7 @@ class PipelineInspectionStore:
         model_id: str | None = None,
         revision: str | None = None,
         geometry: Any = None,
+        visuals: Any = None,
     ) -> None:
         # The producer never awaits a subscriber, serializes pixels or reads disk.
         self.expire()
@@ -345,6 +376,7 @@ class PipelineInspectionStore:
                                 "expires_at": None,
                                 "frame": None,
                                 "detections": [],
+                                "visuals": [],
                                 "geometry": None,
                                 "image_available": False,
                                 "image_sequence": None,
@@ -440,6 +472,15 @@ class PipelineInspectionStore:
                                     }
                                 )
                         values["detections"] = safe
+                        drawings = []
+                        if isinstance(visuals, (list, tuple)):
+                            session.dropped += max(0, len(visuals) - 32)
+                            for visual in visuals[:32]:
+                                try:
+                                    drawings.append(InspectionVisual.model_validate(visual))
+                                except ValidationError:
+                                    session.dropped += 1
+                        values["visuals"] = drawings
             previous = session.nodes[node]
             same_producer = previous.producer_epoch == producer_epoch
             values.update(
@@ -454,6 +495,7 @@ class PipelineInspectionStore:
                 values["reason"] = previous.reason
             if (
                 state in {"passed", "emitted", "delivered", "completed"}
+                and same_producer
                 and previous.frame == reference
                 and previous.state == "analyzed"
             ):
@@ -463,6 +505,7 @@ class PipelineInspectionStore:
                     model_id=previous.model_id,
                     geometry=previous.geometry,
                     detections=previous.detections,
+                    visuals=previous.visuals,
                     image_available=previous.image_available,
                     image_sequence=previous.image_sequence,
                     expires_at=previous.expires_at,
@@ -487,6 +530,7 @@ class PipelineInspectionStore:
                         "frame": None,
                         "geometry": None,
                         "detections": [],
+                        "visuals": [],
                         "image_available": False,
                         "motion": None,
                     }

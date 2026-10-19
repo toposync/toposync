@@ -494,6 +494,17 @@ export type LiveViewPlayerProps = {
 };
 
 /** Allowlisted passive inspection. A complete snapshot replaces previous state. */
+export type InspectionVisual = {
+  layer: string;
+  kind: "points" | "polyline" | "polygon";
+  points: Array<number[] | null>;
+  connections: number[][];
+  label: string | null;
+  subject_id: string | null;
+  score: number | null;
+  score_kind: string | null;
+};
+
 export type InspectionNode = {
   node_id: string;
   physical_node_id: string;
@@ -504,6 +515,7 @@ export type InspectionNode = {
   producer_epoch: string;
   frame: Record<string, unknown> | null;
   detections: Array<{ box: number[]; label: string; score: number; score_kind: string }>;
+  visuals: InspectionVisual[];
   geometry: Record<string, unknown> | null;
   motion: Record<string, number> | null;
   expires_at: number | null;

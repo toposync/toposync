@@ -158,24 +158,32 @@ async def identity_history_selection(*, request: Request, get_store: Callable[[]
     return {"scope": scope, "notification_ids": identifiers}
 
 
-async def activity_participants(*, request: Request, document: dict, get_store: Callable) -> dict:
+async def activity_projection(*, request: Request, document: dict, get_store: Callable) -> dict:
     from toposync.runtime.extension_management import disabled_extension_ids_from_settings
 
     async def disabled():
         return "com.toposync.vision" in disabled_extension_ids_from_settings(await request.app.state.config_store.get_settings())
 
+    def unavailable(status):
+        return {"participants": {key: {"status": status} for key in document["participants"]},
+                "private_evidence": {"state": status, "artifacts": []}}
+
+    def authorize():
+        request.state.auth_context = request.app.state.auth.resolve_request(request, refresh=False)
+        request.app.state.auth.authorize(context=request.state.auth_context, action="core:extension:use",
+            resource_type="core:extension", resource_selector="com.toposync.vision")
+        _authorize(request, cameras=set(document["scope"]["camera_ids"]))
+
     if await disabled():
-        return {key: {"status": "unavailable"} for key in document["participants"]}
+        return unavailable("unavailable")
 
     def project():
         try:
-            request.state.auth_context = request.app.state.auth.resolve_request(request, refresh=False)
-            request.app.state.auth.authorize(context=request.state.auth_context, action="core:extension:use",
-                resource_type="core:extension", resource_selector="com.toposync.vision")
-            _authorize(request, cameras=set(document["scope"]["camera_ids"]))
+            authorize()
             gallery = get_store(create=False)
             if gallery is None:
-                return {key: {"status": "unknown"} for key in document["participants"]}
+                return {"participants": {key: {"status": "unknown"} for key in document["participants"]},
+                        "private_evidence": {"state": "not_retained", "artifacts": []}}
             def allowed(cameras):
                 try:
                     _authorize(request, cameras=cameras)
@@ -184,14 +192,30 @@ async def activity_participants(*, request: Request, document: dict, get_store: 
                     if exc.status_code not in (401, 403):
                         raise
                     return False
-            return gallery.activity_participants(document, authorize_cameras=allowed)
+            with gallery._lock:
+                return {"participants": gallery.activity_participants(document, authorize_cameras=allowed),
+                        "private_evidence": gallery.activity_artifacts(document)}
         except HTTPException as exc:
             if exc.status_code not in (401, 403):
                 raise
-            return {key: {"status": "restricted"} for key in document["participants"]}
+            return unavailable("restricted")
     result = await asyncio.to_thread(project)
     if await disabled():
-        return {key: {"status": "unavailable"} for key in document["participants"]}
+        return unavailable("unavailable")
+    try:
+        authorize()
+    except HTTPException as exc:
+        if exc.status_code not in (401, 403):
+            raise
+        return unavailable("restricted")
+    from urllib.parse import quote
+    from toposync.app import _public_base_path_for_request
+    prefix = _public_base_path_for_request(request)
+    for item in result["private_evidence"]["artifacts"]:
+        sample = document["evidence"][item["evidence_id"]]
+        item.update(kind="private_identity_evidence", uses=[document["id"]],
+            name=f"{sample.get('camera_name') or sample['camera_id']} · {sample.get('source_name') or sample['source_id']} · {sample['observed_at']}",
+            image_href=f"{prefix}/api/vision/identities/observations/{quote(item['id'], safe='')}/image?activity_id={quote(document['id'], safe='')}" if item['has_image'] else None)
     return result
 
 
@@ -436,21 +460,46 @@ def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
             raise HTTPException(status_code=404, detail="Observation not available") from exc
 
     @router.get("/observations/{observation_id}/image")
-    def image(request: Request, observation_id: str):
-        _authorize(request)
-        gallery = store()
-        _authorize(request, cameras=gallery.camera_ids(observation_id=observation_id))
-        try:
-            blob = gallery.image(observation_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Image not available") from exc
-        if blob is None:
-            raise HTTPException(status_code=404, detail="Image not retained")
-        return Response(
-            blob,
-            media_type="image/jpeg",
-            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
-        )
+    async def image(request: Request, observation_id: str, activity_id: Identifier | None = None):
+        from toposync.runtime.extension_management import disabled_extension_ids_from_settings
+        from toposync.runtime.notifications.access import NotificationAccess
+
+        if "com.toposync.vision" in disabled_extension_ids_from_settings(await request.app.state.config_store.get_settings()):
+            raise HTTPException(404, "Image unavailable")
+
+        def authorized_gallery():
+            request.state.auth_context = request.app.state.auth.resolve_request(request, refresh=False)
+            _authorize(request)
+            gallery = store()
+            _authorize(request, cameras=gallery.camera_ids(observation_id=observation_id))
+            with gallery._lock:
+                if not gallery._connection.execute('SELECT 1 FROM available_observation WHERE id=? AND crop IS NOT NULL', (observation_id,)).fetchone():
+                    raise HTTPException(404, 'Image unavailable')
+            if activity_id is not None:
+                access = NotificationAccess(request)
+                access.principal()
+                document = request.app.state.notifications.occurrences.get(activity_id, read_filter=access)
+                if document is None or document['status'] in {'deleted', 'expired'}:
+                    raise HTTPException(404, "Image unavailable")
+                if not any(item['id'] == observation_id and item['has_image'] for item in gallery.activity_artifacts(document)['artifacts']):
+                    raise HTTPException(404, "Image unavailable")
+            return gallery
+
+        def read():
+            gallery = authorized_gallery()
+            try:
+                blob = gallery.image(observation_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="Image not available") from exc
+            if blob is None:
+                raise HTTPException(status_code=404, detail="Image not retained")
+            return blob
+        blob = await asyncio.to_thread(read)
+        if "com.toposync.vision" in disabled_extension_ids_from_settings(await request.app.state.config_store.get_settings()):
+            raise HTTPException(404, "Image unavailable")
+        authorized_gallery()
+        return Response(blob, media_type="image/jpeg",
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
     @router.post("/curation")
     def curate(request: Request, body: CurationRequest):

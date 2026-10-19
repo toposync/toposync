@@ -34,16 +34,27 @@ def install_activity_routes(app: FastAPI) -> None:
 
     async def project(request, document):
         services = request.app.state.services
-        names = {}
-        if "occurrences.participants" in services.list_ids():
-            names = await services.call("occurrences.participants", request=request, document=document)
+        private = {"participants": {}, "private_evidence": {"state": "unavailable", "artifacts": []}}
+        if "occurrences.private_projection" in services.list_ids():
+            private = await services.call("occurrences.private_projection", request=request, document=document)
         # A permission or privacy change during private projection invalidates the response.
         _, current = await visible(request, document["id"])
         if current["revision"] != document["revision"]:
             raise HTTPException(409, "Occurrence changed; refresh the selection")
+        inspection = request.app.state.pipeline_inspection
+        artifacts = private["private_evidence"]["artifacts"]
         return {**document, "participants": {key: {**value,
-            "identification": names.get(key, {"status": "unavailable"})}
-            for key, value in document["participants"].items()}}
+            "identification": private["participants"].get(key, {"status": "unavailable"})}
+            for key, value in document["participants"].items()}, "artifacts": artifacts,
+            "retention": {
+                "event_text": {"state": "retained", "expires_at": document["expires_at"]},
+                "images": {"state": "retained" if any(item["has_image"] for item in artifacts) else
+                    "not_retained" if private["private_evidence"]["state"] in ("retained", "not_retained") else private["private_evidence"]["state"],
+                    "storage": "private_gallery_only", "continuous_recording": False},
+                "private_identity": {key: value for key, value in private["private_evidence"].items() if key != "artifacts"},
+                "diagnostics": {"state": "ephemeral", "sample_maximum_age_seconds": inspection.maximum_age,
+                    "session_lease_seconds": inspection.lease_seconds, "exported": False},
+                "video": {"state": "not_recorded", "exported": False}}}
 
     @router.get("")
     async def activity(request: Request, response: Response, limit: int = Query(50, ge=1, le=250),
@@ -110,6 +121,7 @@ def install_activity_routes(app: FastAPI) -> None:
             "maintenance_error": request.app.state.notifications.retention_error,
             "revision": document["revision"], "objective_id": document["objective_id"],
             "scope": document["scope"], "participants": list(document["participants"].values()),
+            "retention": document["retention"], "artifacts": document["artifacts"],
             "coverage": document["coverage"], "evidence": [
                 {"id": key, "kind": "observation_metadata", "name": f"{value.get('camera_name') or value['camera_id']} · {value.get('source_name') or value['source_id']} · {value['observed_at']}",
                  "camera_id": value["camera_id"], "source_id": value["source_id"],

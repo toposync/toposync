@@ -58,6 +58,105 @@ def test_closed_trio_resolves_two_names_and_one_anonymous_in_detail_and_manifest
     assert response.headers['cache-control'] == 'private, no-store'
 
 
+def test_manifest_reports_retention_classes_and_private_artifacts_without_exporting_vectors(client):
+    history, gallery, document, _ = trio(client)
+    path = '/api/activity/' + document['id'] + '/manifest'
+    response = client.get(path)
+    manifest = response.json()
+    assert set(manifest['retention']) == {'event_text', 'images', 'private_identity', 'diagnostics', 'video'}
+    assert manifest['retention']['event_text']['expires_at'] == document['expires_at']
+    assert manifest['retention']['video']['state'] == 'not_recorded'
+    assert manifest['retention']['images']['state'] == 'not_retained'
+    assert manifest['retention']['diagnostics']['sample_maximum_age_seconds'] == client.app.state.pipeline_inspection.maximum_age
+    assert len(manifest['artifacts']) == 2
+    assert all(item['uses'] == [document['id']] and item['image_href'] is None for item in manifest['artifacts'])
+    assert 'vector' not in response.text and 'embedding_space' not in response.text
+
+
+def test_manifest_artifact_cannot_borrow_an_authorized_camera_from_its_owner(client):
+    _, gallery, document, _ = trio(client)
+    observation = gallery.decision('private-visit-0').observation_id
+    gallery._connection.execute("UPDATE occurrence SET camera_id='another-camera' WHERE id='private-visit-0'")
+    manifest = client.get('/api/activity/' + document['id'] + '/manifest').json()
+    assert all(item['id'] != observation for item in manifest['artifacts'])
+
+
+def test_manifest_image_link_requires_live_activity_owner_and_preserves_independent_photo(client):
+    from io import BytesIO
+    from PIL import Image
+    history, gallery, document, _ = trio(client)
+    sample = evidence('private-visit-0', observed_at=10.0)
+    image = BytesIO()
+    Image.new('RGB', (8, 8), 'blue').save(image, format='JPEG')
+    observation = gallery.decision(sample.occurrence_id).observation_id
+    gallery._connection.execute('UPDATE observation SET crop=? WHERE id=?', (gallery._cipher.encrypt(image.getvalue()), observation))
+    # Explicit independent use shares the exact capture, not the entire episode.
+    gallery.observe(sample, policy())
+    response = client.get('/api/activity/' + document['id'] + '/manifest', headers={'x-ingress-path': '/fixture-ingress'})
+    artifact = next(item for item in response.json()['artifacts'] if item['id'] == observation)
+    assert response.json()['retention']['images']['state'] == 'retained'
+    assert artifact['image_href'].startswith('/fixture-ingress/api/vision/identities/observations/')
+    link = artifact['image_href'].removeprefix('/fixture-ingress')
+    loaded = client.get(link)
+    assert loaded.status_code == 200 and loaded.content == image.getvalue()
+    assert loaded.headers['cache-control'] == 'private, no-store'
+    assert client.get(link.replace(observation, '..%2F..%2Fsecret')).status_code == 404
+    assert client.request('DELETE', '/api/activity/' + document['id'], json={'expected_revision': document['revision']}).status_code == 200
+    assert client.get(link).status_code == 404
+    assert gallery.image(observation) == image.getvalue()
+
+
+def test_manifest_image_discarded_when_activity_revoked_during_image_read(client, monkeypatch):
+    history, gallery, document, _ = trio(client)
+    observation = gallery.decision('private-visit-0').observation_id
+    gallery._connection.execute('UPDATE observation SET crop=? WHERE id=?', (gallery._cipher.encrypt(b'synthetic-bytes'), observation))
+    artifact = next(item for item in client.get('/api/activity/' + document['id'] + '/manifest').json()['artifacts'] if item['id'] == observation)
+    def revoked(_):
+        history.occurrences.revoke_enrichment(document['id'], expected_revision=document['revision'])
+        return b'must-not-escape'
+    monkeypatch.setattr(gallery, 'image', revoked)
+    response = client.get(artifact['image_href'])
+    assert response.status_code == 404 and b'must-not-escape' not in response.content
+
+
+def test_manifest_private_expiry_can_precede_event_expiry_without_claiming_continuous_video(client, monkeypatch):
+    import time
+    history, gallery, document, _ = trio(client)
+    gallery.configure_retention(enabled=True, expected_revision=gallery.revision)
+    observation = gallery._stored_decision('private-visit-0').observation_id
+    now = time.time()
+    gallery._connection.execute('UPDATE observation SET created_at=? WHERE id=?', (now - 7 * 86400 + 30, observation))
+    path = '/api/activity/' + document['id'] + '/manifest'
+    before = client.get(path).json()
+    item = next(item for item in before['artifacts'] if item['id'] == observation)
+    assert item['expires_at'] == now + 30 < before['retention']['event_text']['expires_at']
+    monkeypatch.setattr(time, 'time', lambda: now + 31)
+    after = client.get(path).json()
+    assert len(after['artifacts']) == 1 and all(item['id'] != observation for item in after['artifacts'])
+    assert after['retention']['event_text']['state'] == 'retained'
+    assert after['retention']['private_identity']['gallery_retention']['enabled'] is True
+    assert after['retention']['video'] == {'state': 'not_recorded', 'exported': False}
+    assert after['coverage']['continuous_video'] is False
+
+
+def test_physical_purge_of_one_participant_preserves_other_retained_recognition(client):
+    import time
+    gallery = client.portal.call(partial(client.app.state.services.call, 'vision.identity.store'))
+    gallery.configure_retention(enabled=True, expected_revision=gallery.revision)
+    history, gallery, document, identities = trio(client)
+    survivor = gallery.decision('private-visit-1')
+    removed = gallery.decision('private-visit-0').observation_id
+    gallery._connection.execute('UPDATE observation SET created_at=? WHERE id=?', (time.time() - 7 * 86400 - 1, removed))
+    assert gallery.apply_retention()['observations'] == 1
+    current = gallery.validated_decision('private-visit-1', decision_revision=survivor.revision, observed_at=10, max_age_seconds=0)
+    assert current is not None and current.identity_id == identities[1]
+    assert current.evidence_at == survivor.evidence_at and current.revision == survivor.revision
+    response = client.get('/api/activity/' + document['id']).json()['occurrence']
+    assert response['participants']['person-0']['identification']['status'] == 'unknown'
+    assert response['participants']['person-1']['identification']['name'] == 'Synthetic person 1'
+    assert response['status'] == 'CLOSE' and response['revision'] == document['revision']
+
+
 def test_human_rename_and_unassign_are_current_without_changing_observed_time(client):
     history, gallery, document, identities = trio(client)
     observation = gallery.decision('private-visit-0').observation_id
@@ -86,6 +185,10 @@ def test_current_identity_permission_and_profile_camera_scope_are_required(clien
     for suffix in ('', '/manifest'):
         response = client.get(path + suffix)
         assert 'Synthetic person' not in response.text and identities[0] not in response.text
+        projection = response.json().get('occurrence', response.json())
+        assert projection['artifacts'] == []
+        assert projection['retention']['private_identity'] == {'state': 'restricted'}
+        assert projection['retention']['images']['state'] == 'restricted'
     auth.upsert_grant(user_id=user['id'], action='vision:identities:read', resource_type='core:extension', include=['com.toposync.vision'], exclude=[])
     assert client.get(path).json()['occurrence']['participants']['person-0']['identification']['name'] == 'Synthetic person 0'
     # A profile can also contain a source outside this occurrence's authorized scope.
@@ -110,8 +213,8 @@ def test_private_projection_rechecks_occurrence_after_await(client):
     history, gallery, document, identities = trio(client)
     async def race(**kwargs):
         history.occurrences.revoke_enrichment(document['id'], expected_revision=document['revision'])
-        return {'person-0': {'status': 'recognized', 'name': 'must not escape'}}
-    client.app.state.services.register('occurrences.participants', race)
+        return {'participants': {'person-0': {'status': 'recognized', 'name': 'must not escape'}}, 'private_evidence': {'state': 'retained', 'artifacts': []}}
+    client.app.state.services.register('occurrences.private_projection', race)
     response = client.get('/api/activity/' + document['id'] + '/manifest')
     assert response.status_code == 409 and 'must not escape' not in response.text
 

@@ -1,5 +1,12 @@
 export const activityTranslations = {
   en: {
+    "activity.retained_image": "Retained photo: {{name}}", "activity.retention": "Retention by evidence class",
+    "activity.class_event_text": "Events and text", "activity.class_images": "Images", "activity.class_private_identity": "Private identity evidence", "activity.class_diagnostics": "Diagnostics", "activity.class_video": "Video",
+    "activity.retention_retained": "Retained", "activity.retention_not_retained": "Not retained", "activity.retention_unavailable": "Availability unknown: service unavailable", "activity.retention_restricted": "Access restricted", "activity.retention_ephemeral": "Temporary memory only", "activity.retention_not_recorded": "Not recorded by this activity",
+    "activity.diagnostic_retention": "Diagnostic samples: up to {{sample}} seconds; inspection session lease: {{session}} seconds.",
+    "activity.gallery_retention": "Gallery policy: observations {{transient}} days, explicit references {{references}} days, curation history {{history}} days. Activity links may expire sooner.",
+    "activity.gallery_retention_disabled": "Timed gallery cleanup is disabled. This activity’s ownership links still expire with the activity.",
+    "activity.shared_retention": "Deleting this activity removes its ownership links. Other authorized uses and explicit gallery references follow their own retention policy.",
     "activity.maintenance_error": "Retention cleanup is unavailable. Expired evidence remains hidden; physical deletion is pending.",
     "activity.title": "Activity", "activity.loading": "Loading activity…", "activity.refresh": "Refresh",
     "activity.failed": "Activity could not be loaded. Try again.", "activity.unavailable": "Activity is unavailable or access has changed.",
@@ -33,6 +40,13 @@ export const activityTranslations = {
     "activity.card": "{{count}} participants · {{status}}", "activity.read_only": "Read-only access",
   },
   "pt-BR": {
+    "activity.retained_image": "Foto retida: {{name}}", "activity.retention": "Retenção por classe de evidência",
+    "activity.class_event_text": "Eventos e texto", "activity.class_images": "Imagens", "activity.class_private_identity": "Evidência privada de identidade", "activity.class_diagnostics": "Diagnóstico", "activity.class_video": "Vídeo",
+    "activity.retention_retained": "Retido", "activity.retention_not_retained": "Não retido", "activity.retention_unavailable": "Disponibilidade desconhecida: serviço indisponível", "activity.retention_restricted": "Acesso restrito", "activity.retention_ephemeral": "Somente memória temporária", "activity.retention_not_recorded": "Não gravado por esta atividade",
+    "activity.diagnostic_retention": "Amostras de diagnóstico: até {{sample}} segundos; concessão da sessão de inspeção: {{session}} segundos.",
+    "activity.gallery_retention": "Política da galeria: observações {{transient}} dias, referências explícitas {{references}} dias, histórico de curadoria {{history}} dias. Vínculos da atividade podem expirar antes.",
+    "activity.gallery_retention_disabled": "A limpeza por tempo da galeria está desabilitada. Os vínculos desta atividade continuam expirando com a atividade.",
+    "activity.shared_retention": "Excluir esta atividade remove seus vínculos. Outros usos autorizados e referências explícitas da galeria seguem sua própria política de retenção.",
     "activity.maintenance_error": "A limpeza de retenção está indisponível. Evidências expiradas permanecem ocultas; a exclusão física está pendente.",
     "activity.title": "Atividade", "activity.loading": "Carregando atividade…", "activity.refresh": "Atualizar",
     "activity.failed": "Não foi possível carregar a atividade. Tente novamente.", "activity.unavailable": "Atividade indisponível ou acesso alterado.",

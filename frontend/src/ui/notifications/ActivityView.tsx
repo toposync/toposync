@@ -47,12 +47,15 @@ export function ActivityView({ notification }: { notification: Notification }) {
     if (identifier && document.visibilityState !== "hidden") {
       void getActivity(identifier, controller.signal).then(value => {
         if (controller.signal.aborted) return;
-        const remaining = value.occurrence.expires_at * 1000 - Date.now();
-        if (remaining <= 0) { setView({ key, data: null, error: "expired" }); return; }
+        const eventExpiry = value.occurrence.expires_at * 1000;
+        const nextExpiry = Math.min(eventExpiry, ...value.occurrence.artifacts.map(item => item.expires_at * 1000));
+        const remaining = nextExpiry - Date.now();
+        if (remaining <= 0) { setView({ key, data: null, error: eventExpiry <= Date.now() ? "expired" : "changed" }); return; }
         setView({ key, data: value, error: null });
         expiry = setTimeout(() => {
-          setView({ key, data: null, error: remaining <= 2147483647 ? "expired" : null });
-          if (remaining > 2147483647) setRefresh(value => value + 1);
+          const ended = eventExpiry <= Date.now();
+          setView({ key, data: null, error: ended ? "expired" : null });
+          if (!ended) setRefresh(value => value + 1);
         }, Math.min(remaining, 2147483647));
       }).catch(error => {
         if (!controller.signal.aborted && !isAbortError(error)) setView({ key, data: null, error: activityError(error) });
@@ -124,10 +127,20 @@ export function ActivityView({ notification }: { notification: Notification }) {
         {sample.gap && <span>{t("activity.gap")}</span>}
         <span>{sample.position ? t("activity.position", { x: number(sample.position[0]), z: number(sample.position[1]) }) : t("activity.no_position")}</span>
         {sample.position && <span>{sample.position_error_metres === null ? t("activity.unknown_uncertainty") : t("activity.uncertainty", { metres: number(sample.position_error_metres) })}</span>}
+        {occurrence.artifacts.filter(item => item.evidence_id === identifier && item.image_href).map(item => <a key={item.id} href={item.image_href!} download>{t("activity.retained_image", { name: item.name })} · {t("activity.expires", { date: date(item.expires_at) })}</a>)}
         <details><summary>{t("activity.details")}</summary><small>{identifier}<br />{sample.camera_id} · {sample.source_id}<br />{t("activity.coordinates", { reference: sample.coordinate_reference || "—", revision: sample.mapping_revision || "—" })}</small></details>
       </li>)}</ol>
       <div className="activityActions"><button className="chipButton" type="button" disabled={!start} onClick={() => setPage(value => value - 1)}>{t("activity.previous")}</button><span role="status">{t("activity.page", { start: start + 1, end: Math.min(start + pageSize, samples.length), total: samples.length })}</span><button className="chipButton" type="button" disabled={start + pageSize >= samples.length} onClick={() => setPage(value => value + 1)}>{t("activity.next")}</button></div>
     </>}
+    <details><summary>{t("activity.retention")}</summary>
+      <ul>{(["event_text", "images", "private_identity", "diagnostics", "video"] as const).map(kind => <li key={kind}>{t(`activity.class_${kind}`)}: {t(`activity.retention_${occurrence.retention[kind].state}`)}</li>)}</ul>
+      <p>{t("activity.diagnostic_retention", { sample: occurrence.retention.diagnostics.sample_maximum_age_seconds, session: occurrence.retention.diagnostics.session_lease_seconds })}</p>
+      {occurrence.retention.private_identity.gallery_retention && <p>{occurrence.retention.private_identity.gallery_retention.enabled
+        ? t("activity.gallery_retention", { transient: occurrence.retention.private_identity.gallery_retention.transient_days, references: occurrence.retention.private_identity.gallery_retention.reference_days, history: occurrence.retention.private_identity.gallery_retention.curation_history_days })
+        : t("activity.gallery_retention_disabled")}</p>}
+      <p>{t("activity.shared_retention")}</p>
+      {occurrence.retention.private_identity.maintenance_error && <p role="alert">{t("activity.maintenance_error")}</p>}
+    </details>
     <details><summary>{t("activity.context")}</summary>{occurrence.enrichments.filter(item => item.kind === "context" && item.participant_id === participant?.id).map((item, index) => <p key={index}><strong>{t(`activity.context_${item.status}`)}</strong><br />{item.text}<br /><small>{t("activity.observed", { seconds: number(item.observed_at) })} · {t("activity.recorded", { date: date(item.recorded_at) })}</small></p>)}{!occurrence.enrichments.some(item => item.kind === "context" && item.participant_id === participant?.id) && <p>{t("activity.no_context")}</p>}</details>
     <details><summary>{t("activity.revisions")}</summary><ol>{data.revisions.map(item => <li key={item.revision}>{t("activity.revision", { number: item.revision })} · {t(`activity.${item.kind}`)} · {t("activity.recorded", { date: date(item.recorded_at) })}</li>)}</ol>{occurrence.close_reason && <p>{t("activity.reason")}: {t(`activity.reason_${occurrence.close_reason}`, {}, t("activity.reason_other"))}</p>}</details>
     <details><summary>{t("activity.receipts")}</summary>{!data.deliveries.length && <p>{t("activity.no_receipts")}</p>}<ul>{data.deliveries.map(item => <li key={item.id}>{t(`activity.${item.status === "failed" ? "failed_receipt" : item.status === "unknown" ? "unknown_receipt" : item.status}`)} · {t("activity.simulated")}</li>)}</ul></details>

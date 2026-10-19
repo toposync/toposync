@@ -39,11 +39,27 @@ def test_retention_is_opt_in_persistent_and_revision_checked(tmp_path):
         store.configure_retention(enabled=False, expected_revision=store.revision)
     finally:
         store.close()
+
     store = IdentityStore(tmp_path, scope="test")
     try:
         assert store.retention_preview()["enabled"] is False
         store.observe(sample, policy())
         assert store.observations() == []
+    finally:
+        store.close()
+
+
+def test_reference_expiration_still_invalidates_prior_automatic_decisions(tmp_path):
+    store = IdentityStore(tmp_path, scope='test')
+    try:
+        enable(store)
+        identity, _, _ = enroll(store)
+        result = store.observe(evidence('retained-visit', observed_at=10), policy())
+        assert result.identity_id == identity
+        store._connection.execute('UPDATE observation SET created_at=? WHERE reference=1', (time.time() - 366 * 86400,))
+        assert store.validated_decision('retained-visit', decision_revision=result.revision, observed_at=10, max_age_seconds=0) is None
+        assert store.apply_retention()['observations'] == 1
+        assert store.validated_decision('retained-visit', decision_revision=result.revision, observed_at=10, max_age_seconds=0) is None
     finally:
         store.close()
 

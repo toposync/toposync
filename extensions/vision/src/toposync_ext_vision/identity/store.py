@@ -436,6 +436,9 @@ class IdentityStore:
             ):
                 return None
             if current.identity_id and current.provenance != "human":
+                if self._connection.execute('SELECT enabled FROM retention_policy').fetchone()[0] and self._connection.execute(
+                    'SELECT 1 FROM observation WHERE reference=1 AND created_at<=? LIMIT 1', (time.time() - 365 * 86400,)).fetchone():
+                    return None
                 row = self._connection.execute(
                     "SELECT species FROM occurrence WHERE id=?", (occurrence_id,)
                 ).fetchone()
@@ -498,6 +501,30 @@ class IdentityStore:
             if not all(self.activity_authorized(saved) for _, saved in references):
                 return {key: {"status": "unknown"} for key in document["participants"]}
             return result
+
+    def activity_artifacts(self, document: dict) -> dict:
+        with self._lock:
+            enabled = bool(self._connection.execute('SELECT enabled FROM retention_policy').fetchone()[0])
+            artifacts = []
+            if document['enrichment_allowed'] and self.activity_authorized is not None:
+                rows = self._connection.execute('SELECT r.reference,o.id,o.reference AS human_reference,o.created_at,c.camera_id,'
+                    'o.crop IS NOT NULL AS has_image FROM activity_reference r '
+                    'JOIN available_observation o ON o.id=r.observation_id JOIN occurrence c ON c.id=o.occurrence_id '
+                    'WHERE r.owner_id=? ORDER BY o.id', (document['id'],)).fetchall()
+                for row in rows:
+                    reference = self._open(row['reference'])
+                    sample = document['evidence'].get(reference.get('evidence_id'))
+                    if not sample or sample['camera_id'] != row['camera_id'] or sample['participant_id'] != reference.get('participant_id') or not self.activity_authorized(reference):
+                        continue
+                    expires_at = document['expires_at']
+                    if enabled:
+                        expires_at = min(expires_at, row['created_at'] + (365 if row['human_reference'] else 7) * 86400)
+                    artifacts.append({'id': row['id'], 'evidence_id': reference['evidence_id'],
+                        'participant_id': reference['participant_id'], 'has_image': bool(row['has_image']),
+                        'expires_at': expires_at})
+            return {'state': 'retained' if artifacts else 'not_retained', 'artifacts': artifacts,
+                'gallery_retention': {'enabled': enabled, 'transient_days': 7, 'reference_days': 365, 'curation_history_days': 90},
+                'independent_uses': 'retained_by_their_own_policy', 'maintenance_error': self.maintenance_error}
 
     def observation_context(self, observation_id: str) -> dict | None:
         with self._lock:
@@ -911,6 +938,17 @@ class IdentityStore:
         clustering = self.cluster_pending()
         return {"retention": retention, "clustering": clustering}
 
+    def _advance_retention_revision(self, connection, *, references_removed: bool) -> None:
+        previous = self.revision
+        connection.execute('UPDATE gallery SET revision=revision+1')
+        if not references_removed:
+            # Removing another visit must not invalidate recognition against unchanged references.
+            for row in connection.execute('SELECT id,decision FROM occurrence').fetchall():
+                current = RecognitionDecision.model_validate(self._open(row['decision']))
+                if current.gallery_revision == previous:
+                    connection.execute('UPDATE occurrence SET decision=? WHERE id=?',
+                        (self._seal(current.model_copy(update={'gallery_revision': previous + 1}).model_dump()), row['id']))
+
     def apply_retention(self, *, now: float | None = None) -> dict:
         """Bound each category to 128 records per maintenance cycle (once a minute)."""
         now = time.time() if now is None else now
@@ -919,7 +957,7 @@ class IdentityStore:
             if not connection.execute("SELECT enabled FROM retention_policy").fetchone()[0]:
                 return {"enabled": False, **counts, "revision": self.revision}
             rows = connection.execute(
-                "SELECT id,occurrence_id FROM observation "
+                "SELECT id,occurrence_id,reference FROM observation "
                 "WHERE (reference=0 AND created_at<?) OR (reference=1 AND created_at<?) "
                 "ORDER BY created_at,id LIMIT 128", (now - 7 * 86400, now - 365 * 86400),
             ).fetchall()
@@ -959,7 +997,7 @@ class IdentityStore:
                 connection.execute("DELETE FROM occurrence WHERE id=?", (row["id"],))
             counts["occurrences"] = len(occurrences)
             if any(counts.values()):
-                connection.execute("UPDATE gallery SET revision=revision+1")
+                self._advance_retention_revision(connection, references_removed=any(row['reference'] for row in rows))
             revision = self.revision
         if any(counts.values()):
             with self._lock:
@@ -1332,7 +1370,7 @@ class IdentityStore:
                     if affected:
                         connection.execute("DELETE FROM feedback WHERE id=?", (row["id"],))
             if targets:
-                connection.execute("UPDATE gallery SET revision=revision+1")
+                self._advance_retention_revision(connection, references_removed=False)
         if targets:
             with self._lock:
                 self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")

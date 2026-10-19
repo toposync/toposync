@@ -60,3 +60,38 @@ test('activity text is complete in Portuguese and English', () => {
   assert.ok(Object.values(activityTranslations.en).every(value => value.trim()));
   assert.ok(Object.values(activityTranslations['pt-BR']).every(value => value.trim()));
 });
+
+test('private evidence expiry clears the real activity view before event expiry without a retry loop', async () => {
+  const source = ts.createSourceFile('ActivityView.tsx', fs.readFileSync(path.resolve(__dirname, '../src/ui/notifications/ActivityView.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let effect;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === 'useEffect'
+      && node.arguments[0].getText(source).includes('getActivity(')) effect = node.arguments[0].getText(source);
+    ts.forEachChild(node, visit);
+  }
+  visit(source); assert.ok(effect);
+  let now = 1000000, view, refreshes = 0, calls = 0, sequence = 0;
+  const timers = new Map();
+  const response = { occurrence: { expires_at: 1060, artifacts: [{ expires_at: 1010 }], participants: { private: { name: 'Synthetic private name' } } } };
+  const context = {
+    key: 'selected', identifier: 'a'.repeat(64), AbortController, Date: { now: () => now },
+    setView: value => { view = value; }, setConfirmation() {}, setMutationError() {},
+    setRefresh: update => { refreshes = update(refreshes); },
+    getActivity: async () => { calls++; return response; },
+    document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
+    window: { addEventListener() {}, removeEventListener() {} },
+    setTimeout: (callback, delay) => { const id = ++sequence; timers.set(id, { callback, delay }); return id; },
+    clearTimeout: id => timers.delete(id), isAbortError: () => false, activityError: () => 'failed',
+  };
+  vm.runInNewContext(ts.transpileModule('this.execute = ' + effect, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  const cleanup = context.execute(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(view.data, response); assert.equal(timers.size, 1);
+  const timer = [...timers.values()][0]; assert.equal(timer.delay, 10000);
+  now = 1010000; timer.callback();
+  assert.equal(view.data, null); assert.equal(view.error, null); assert.equal(refreshes, 1);
+  cleanup();
+  const nextCleanup = context.execute(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(view.data, null); assert.equal(view.error, 'changed');
+  assert.equal(timers.size, 0); assert.equal(refreshes, 1); assert.equal(calls, 2);
+  nextCleanup();
+});

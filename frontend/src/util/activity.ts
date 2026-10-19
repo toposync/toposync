@@ -19,6 +19,14 @@ export type ActivityDetail = {
     close_reason: string | null; expires_at: number; enrichment_allowed: boolean;
     participants: Record<string, ActivityParticipant>; evidence: Record<string, ActivityEvidence>;
     coverage: { gaps: boolean; continuous_video: boolean };
+    artifacts: Array<{ id: string; evidence_id: string; participant_id: string; name: string; expires_at: number; image_href: string | null }>;
+    retention: {
+      event_text: { state: string; expires_at: number };
+      images: { state: string };
+      private_identity: { state: string; gallery_retention?: { enabled: boolean; transient_days: number; reference_days: number; curation_history_days: number }; maintenance_error?: string | null };
+      diagnostics: { state: string; sample_maximum_age_seconds: number; session_lease_seconds: number };
+      video: { state: string };
+    };
     enrichments: Array<{ kind: string; text: string | null; status: string; participant_id: string; observed_at: number; recorded_at: number }>;
   };
   permissions: { manage: boolean };

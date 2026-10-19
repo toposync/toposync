@@ -35,7 +35,8 @@ def activity():
 def test_recognition_policy_survives_removing_a_participant(excluded):
     value = activity()
     value.scope.excluded_camera_ids = excluded
-    graph = plan_observation(intent=value, configuration=configuration())["graph"]
+    plan = plan_observation(intent=value, configuration=configuration())
+    graph = plan["graph"]
     producer = Pipeline(name="recognition", graph=graph)
     output = graph["meta"]["outputs"][0]
     consumer = Pipeline(name="consumer", graph=build_pipeline_graph_v2(
@@ -44,12 +45,12 @@ def test_recognition_policy_survives_removing_a_participant(excluded):
     expanded = expand_result_references([consumer], [producer], registry())
     PipelineGraphCompiler(registry()).compile_many(expanded)
     nodes = {node["id"]: node for node in graph["nodes"]}
-    recognize = [node for node in nodes.values() if node["operator"] == "vision.recognize_identity"]
-    assert len(recognize) == (0 if "a" in excluded else 1)
-    for node in recognize:
-        assert node["config"]["policies"] == value.condition["resource_parameters"]["policies"]
+    assert not any(node["operator"] in {"vision.identity_evidence", "vision.recognize_identity"} for node in nodes.values())
+    recognize = next(node for node in plan["enrichment"]["nodes"] if node["operator"] == "vision.recognize_identity")
+    assert recognize["config"]["policies"] == value.condition["resource_parameters"]["policies"]
+    for node in [node for node in nodes.values() if node["operator"] == "vision.identity_context"]:
         index = node["id"].split("_")[1]
-        assert nodes[f"camera_{index}_source"]["config"]["camera_id"] == "a"
+        assert node["config"]["enabled"] == (nodes[f"camera_{index}_source"]["config"]["camera_id"] == "a")
         occurrence = nodes[f"camera_{index}_occurrence"]
         assert occurrence["config"]["minimum_duration_seconds"] == 1
         assert occurrence["config"]["area"]["id"] == "garage"

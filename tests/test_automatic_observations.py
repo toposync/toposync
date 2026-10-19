@@ -196,9 +196,10 @@ def test_recognition_refinement_reuses_policy_contract_without_changing_duration
     assert entry["resource_consent_fields"] == ["policies"]
     policies = [policy().model_dump()]
     value = intent("vision.recognition", minimum_duration_seconds=17, resource_parameters={"policies": policies})
-    graph = plan_observation(intent=value, configuration=configuration())["graph"]
-    recognize = next(node for node in graph["nodes"] if node["operator"] == "vision.recognize_identity")
-    assert recognize["config"] == {"enabled": True, "policies": policies}
+    plan = plan_observation(intent=value, configuration=configuration())
+    graph = plan["graph"]
+    recognize = next(node for node in plan["enrichment"]["nodes"] if node["operator"] == "vision.recognize_identity")
+    assert recognize["config"] == {"enabled": True, "policies": policies, "late_enrichment": True}
     occurrence = next(node for node in graph["nodes"] if node["operator"] == "camera.frame_occurrence")
     assert occurrence["config"]["minimum_duration_seconds"] == 17
 

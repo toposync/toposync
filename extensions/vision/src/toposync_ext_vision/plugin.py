@@ -86,6 +86,7 @@ class VisionExtension(BaseExtension):
                     self._identity_store = IdentityStore(
                         Path(configured_data_dir) / "identities",
                         scope="installation",
+                        activity_authorized=app.state.notifications.occurrences.reference_allowed,
                     )
                 return self._identity_store
 
@@ -110,11 +111,21 @@ class VisionExtension(BaseExtension):
         services.register("vision.identity.store", identity_store)
         services.register("vision.identity.history_selection", partial(identity_history_selection, get_store=identity_store))
 
+        async def invalidate_activity(identifier):
+            def invalidate():
+                store = identity_store(create=False)
+                if store is not None:
+                    store.revoke_activity(identifier)
+            await asyncio.to_thread(invalidate)
+
+        app.state.notifications.invalidate_occurrence_derivatives = invalidate_activity
+
         def maintain_existing_gallery():
             association_repository().maintain()
             # Reopen existing galleries after restart without creating one for unused installations.
             store = identity_store(create=False)
             if store is not None:
+                store.reconcile_activity_references()
                 store.maintain()
 
         async def maintain_identities():

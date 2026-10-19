@@ -32,7 +32,7 @@ def test_public_contract_contains_details_but_no_image_or_shared_frame_payload(k
     value = intent("vision." + kind)
     graph = plan_observation(intent=value, configuration=configuration())["graph"]
     contract = graph["meta"]["outputs"][0]["contract"]
-    assert ("recognition" if kind == "recognition" else "vision_observation") in contract["payload_keys"]
+    assert ("identity_binding" if kind == "recognition" else "vision_observation") in contract["payload_keys"]
     assert "vision" not in contract["payload_keys"] and contract["artifacts"] == []
     if kind in {"pose", "gestures"}:
         order = [node["id"] for node in graph["nodes"]]

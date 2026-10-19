@@ -221,6 +221,7 @@ def plan_observation(*, intent, configuration):
     association = condition.association
     # Keep per-source identity choices when the user removes another participating camera.
     scoped_recognition = intent.capability == "vision.recognition" and area is not None and association is not None
+    late_recognition = intent.capability == "vision.recognition" and intent.consequence.capability == "core.record"
     associate = len(sources) > 1 or scoped_recognition
     if associate:
         if not association:
@@ -387,8 +388,10 @@ def plan_observation(*, intent, configuration):
             }, tail)
             profile = next(profile for profile in association["sources"]
                            if (profile["camera_id"], profile["source_id"]) == (source["camera_id"], source["source_id"]))
-            if profile["identity_policy"] == "recognize_here":
-                tail = add(prefix + "identity_context", "vision.identity_context", {"enabled": True}, tail)
+            if profile["identity_policy"] == "recognize_here" or late_recognition:
+                tail = add(prefix + "identity_context", "vision.identity_context", {
+                    "enabled": profile["identity_policy"] == "recognize_here", "late_enrichment": late_recognition}, tail)
+            if profile["identity_policy"] == "recognize_here" and not late_recognition:
                 tail = add(prefix + "identity_evidence", "vision.identity_evidence", {"enabled": True}, tail)
                 tail = add(prefix + "recognize", "vision.recognize_identity", {**condition.resource_parameters, "enabled": True}, tail)
         endpoints.append(tail)
@@ -517,14 +520,10 @@ def plan_observation(*, intent, configuration):
             tail,
         )
     if intent.capability == "vision.recognition" and not scoped_recognition:
-        tail = add("identity_context", "vision.identity_context", {"enabled": True}, tail)
-        tail = add("identity_evidence", "vision.identity_evidence", {"enabled": True}, tail)
-        tail = add(
-            "recognize",
-            "vision.recognize_identity",
-            {**condition.resource_parameters, "enabled": True},
-            tail,
-        )
+        tail = add("identity_context", "vision.identity_context", {"enabled": True, "late_enrichment": late_recognition}, tail)
+        if not late_recognition:
+            tail = add("identity_evidence", "vision.identity_evidence", {"enabled": True}, tail)
+            tail = add("recognize", "vision.recognize_identity", {**condition.resource_parameters, "enabled": True}, tail)
     elif intent.capability == "vision.segmentation":
         tail = add(
             "detail",
@@ -566,6 +565,13 @@ def plan_observation(*, intent, configuration):
                           "edges": [], "entry": "condition", "exit": "condition"}
         else:
             tail = add("condition", "ai.condition_filter", context_config, tail)
+    if late_recognition:
+        enrichment = {"nodes": [
+            {"id": "identity_evidence", "operator": "vision.identity_evidence", "config": {"enabled": True, "late_enrichment": True}},
+            {"id": "recognize", "operator": "vision.recognize_identity", "config": {**condition.resource_parameters, "enabled": True, "late_enrichment": True}}],
+            "edges": [{"from": {"node": "identity_evidence", "port": "out"}, "to": {"node": "recognize", "port": "in"},
+                       "queue": {"max_items": 1, "drop_policy": "block"}}],
+            "entry": "identity_evidence", "exit": "recognize"}
     if intent.capability in {"vision.pose", "vision.gestures", "vision.segmentation"}:
         tail = add(
             "public_detail",
@@ -599,6 +605,7 @@ def plan_observation(*, intent, configuration):
             "frame_ts",
             "activity_observation",
             *(["capture_evidence", "source", "media"] if enrichment else []),
+            *(["identity_binding"] if late_recognition else []),
             *evidence_keys,
             *(["native_observation"] if native else []),
         ],

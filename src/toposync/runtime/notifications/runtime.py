@@ -43,11 +43,15 @@ class NotificationsRuntime:
         self.occurrences = OccurrenceStore(self.store)
         self.broadcaster = EventBroadcaster()
         self.invalidate_occurrence_runtime: Callable[[str], Awaitable[None]] | None = None
+        self.invalidate_occurrence_derivatives: Callable[[str], Awaitable[None]] | None = None
 
     async def _invalidate_occurrence(self, change: OccurrenceChange) -> None:
         self.broadcaster.discard(change.invalidated_notifications)
-        if self.invalidate_occurrence_runtime is not None:
-            await self.invalidate_occurrence_runtime(change.document["id"])
+        results = await asyncio.gather(*(callback(change.document["id"]) for callback in (
+            self.invalidate_occurrence_runtime, self.invalidate_occurrence_derivatives) if callback is not None), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
     async def _publish_occurrence(self, identifier: str, *, now: float | None = None) -> None:
         published = await asyncio.to_thread(self.occurrences.publish, identifier, now=now)
@@ -69,8 +73,8 @@ class NotificationsRuntime:
                 "confirmed", reason="simulated_sink", now=now)
         return change if return_change else change.document
 
-    async def enrichment_allowed(self, reference: OccurrenceReference) -> bool:
-        return await asyncio.to_thread(self.occurrences.enrichment_allowed, reference)
+    async def enrichment_allowed(self, reference: OccurrenceReference, *, evidence: dict | None = None) -> bool:
+        return await asyncio.to_thread(self.occurrences.enrichment_allowed, reference, evidence=evidence)
 
     async def enrich_occurrence(self, enrichment: Enrichment, *, now: float | None = None) -> dict:
         change = await asyncio.to_thread(self.occurrences.enrich, enrichment, now=now)

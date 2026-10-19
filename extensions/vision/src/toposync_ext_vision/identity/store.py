@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS occurrence (
  decision BLOB NOT NULL, latest_at REAL NOT NULL, closed INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS closed_occurrence (id TEXT PRIMARY KEY, closed_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS activity_reference (
+ owner_id TEXT NOT NULL, occurrence_id TEXT NOT NULL, observation_id TEXT NOT NULL, reference BLOB NOT NULL,
+ PRIMARY KEY(owner_id,observation_id)
+);
+CREATE INDEX IF NOT EXISTS activity_reference_target ON activity_reference(occurrence_id);
+CREATE INDEX IF NOT EXISTS activity_reference_observation ON activity_reference(observation_id);
 CREATE TABLE IF NOT EXISTS observation (
  id TEXT PRIMARY KEY, occurrence_id TEXT NOT NULL REFERENCES occurrence(id),
  species TEXT NOT NULL, space TEXT NOT NULL, quality REAL NOT NULL,
@@ -119,11 +125,14 @@ def _json(value: Any) -> bytes:
 class IdentityStore:
     """Uma galeria por escopo autorizado; criação ocorre somente após ativação."""
 
-    def __init__(self, directory: Path, *, scope: str, max_observations: int = 10000):
+    def __init__(self, directory: Path, *, scope: str, max_observations: int = 10000,
+                 activity_authorized: Callable[[dict], bool] | None = None):
         if not scope or len(scope) > 512:
             raise ValueError("an explicit authorization scope is required")
         self.scope = scope
         self.max_observations = max_observations
+        self.activity_authorized = activity_authorized
+        self._activity_cursor = ""
         self._policies: dict[tuple[str, str], RecognitionPolicy] = {}
         self.maintenance_error: str | None = None
         self.directory = directory / hashlib.sha256(scope.encode()).hexdigest()[:32]
@@ -913,6 +922,16 @@ class IdentityStore:
             scores[identity_id] = max(scores.get(identity_id, -1.0), score)
         return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
 
+    def _retain_activity_reference(self, connection, reference, occurrence_id, observation_id):
+        if reference is None:
+            return
+        owner = reference["occurrence_id"]
+        if connection.execute("SELECT count(*) FROM activity_reference WHERE owner_id=?", (owner,)).fetchone()[0] >= 512 and not connection.execute(
+            "SELECT 1 FROM activity_reference WHERE owner_id=? AND observation_id=?", (owner, observation_id)).fetchone():
+            raise IdentityCapacityError("activity reference capacity reached")
+        connection.execute("INSERT INTO activity_reference VALUES(?,?,?,?) ON CONFLICT(owner_id,observation_id) DO UPDATE SET reference=excluded.reference",
+                           (owner, occurrence_id, observation_id, self._seal(reference)))
+
     def observe(
         self,
         evidence: IdentityEvidence,
@@ -920,6 +939,7 @@ class IdentityStore:
         *,
         crop: bytes | None = None,
         expected_gallery_revision: int | None = None,
+        activity_reference: dict | None = None,
     ) -> RecognitionDecision:
         if policy is not None and (
             policy.species != evidence.species or policy.embedding_space != evidence.embedding_space
@@ -948,6 +968,9 @@ class IdentityStore:
         observation_id = evidence.observation_id(self.scope)
         with self._transaction() as connection:
             gallery_revision = self.revision
+            if activity_reference is not None:
+                if self.activity_authorized is None or not self.activity_authorized(activity_reference):
+                    raise IdentityConflict("activity evidence is no longer authorized")
             if (
                 expected_gallery_revision is not None
                 and expected_gallery_revision != gallery_revision
@@ -983,6 +1006,10 @@ class IdentityStore:
             if connection.execute(
                 "SELECT 1 FROM observation WHERE id=?", (observation_id,)
             ).fetchone():
+                self._retain_activity_reference(connection, activity_reference, evidence.occurrence_id, observation_id)
+                if current and policy and current.policy_fingerprint != policy.fingerprint():
+                    return current.model_copy(update={"identity_id": None, "status": "unobservable", "provenance": "none",
+                        "candidate_ids": (), "reason": "recognition_policy_changed"})
                 return current
             if previous and (previous["closed"] or evidence.observed_at < previous["latest_at"]):
                 return current
@@ -1109,6 +1136,7 @@ class IdentityStore:
                     time.time(),
                 ),
             )
+            self._retain_activity_reference(connection, activity_reference, evidence.occurrence_id, observation_id)
             return decision
 
     def no_evidence(
@@ -1177,6 +1205,62 @@ class IdentityStore:
                 (self._seal(updated.model_dump()), observed_at, occurrence_id),
             )
             return updated
+
+    def revoke_activity(self, owner_id: str) -> dict:
+        removed = 0
+        erased_observations, erased_occurrences = set(), set()
+        with self._transaction() as connection:
+            references = connection.execute("SELECT occurrence_id,observation_id FROM activity_reference WHERE owner_id=?", (owner_id,)).fetchall()
+            targets = {row["occurrence_id"] for row in references}
+            connection.execute("DELETE FROM activity_reference WHERE owner_id=?", (owner_id,))
+            for target in targets:
+                owned = [row["observation_id"] for row in references if row["occurrence_id"] == target]
+                placeholders = ",".join("?" for _ in owned)
+                rows = connection.execute("SELECT id FROM observation o WHERE reference=0 AND id IN (" + placeholders + ") "
+                    "AND NOT EXISTS(SELECT 1 FROM activity_reference r WHERE r.observation_id=o.id)", owned).fetchall()
+                erased = {row["id"] for row in rows}
+                for identifier in erased:
+                    connection.execute("INSERT OR IGNORE INTO erased_observation VALUES(?)", (identifier,))
+                    connection.execute("DELETE FROM observation WHERE id=?", (identifier,))
+                removed += len(erased)
+                erased_observations.update(erased)
+                retained = connection.execute("SELECT 1 FROM observation WHERE occurrence_id=?", (target,)).fetchone()
+                current = self.decision(target)
+                if retained and current and current.observation_id in erased:
+                    updated = current.model_copy(update={"observation_id": None, "candidate_ids": (),
+                        "identity_id": None, "status": "unobservable", "provenance": "none",
+                        "reason": "evidence_erased", "revision": current.revision + 1, "gallery_revision": self.revision + 1})
+                    connection.execute("UPDATE occurrence SET decision=? WHERE id=?", (self._seal(updated.model_dump()), target))
+                if not retained:
+                    erased_occurrences.add(target)
+                    connection.execute("INSERT OR IGNORE INTO closed_occurrence VALUES(?,?)", (target, time.time()))
+                    connection.execute("DELETE FROM rejection WHERE occurrence_id=?", (target,))
+                    connection.execute("DELETE FROM occurrence WHERE id=?", (target,))
+            if erased_observations or erased_occurrences:
+                for row in connection.execute("SELECT id,changes FROM feedback").fetchall():
+                    changes = self._open(row["changes"])
+                    affected = any(value and value.get("id") in erased_observations for pair in changes.get("observation", []) for value in pair)
+                    affected |= any(value and value.get("id") in erased_occurrences for pair in changes.get("occurrence", []) for value in pair)
+                    if affected:
+                        connection.execute("DELETE FROM feedback WHERE id=?", (row["id"],))
+            if targets:
+                connection.execute("UPDATE gallery SET revision=revision+1")
+        if targets:
+            with self._lock:
+                self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return {"observations_removed": removed, "references_removed": len(references)}
+
+    def reconcile_activity_references(self) -> None:
+        with self._lock:
+            rows = self._connection.execute("SELECT DISTINCT owner_id FROM activity_reference WHERE owner_id>? ORDER BY owner_id LIMIT 128", (self._activity_cursor,)).fetchall()
+            if not rows:
+                self._activity_cursor = ""
+                rows = self._connection.execute("SELECT DISTINCT owner_id FROM activity_reference ORDER BY owner_id LIMIT 128").fetchall()
+            for row in rows:
+                self._activity_cursor = row[0]
+                references = self._connection.execute("SELECT reference FROM activity_reference WHERE owner_id=?", (row[0],)).fetchall()
+                if self.activity_authorized is None or not all(self.activity_authorized(self._open(reference[0])) for reference in references):
+                    self.revoke_activity(row[0])
 
     def close_occurrence(self, occurrence_id: str) -> None:
         with self._transaction() as connection:

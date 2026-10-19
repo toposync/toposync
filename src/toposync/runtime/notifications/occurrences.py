@@ -85,6 +85,7 @@ class Enrichment(OccurrenceReference):
     text: str | None = Field(default=None, min_length=1, max_length=4096, strict=True)
     status: Literal["observed", "not_observed", "unknown"] = "observed"
     reason: str | None = Field(default=None, max_length=256, strict=True)
+    identity_occurrence_id: Identifier | None = None
 
     @model_validator(mode="after")
     def private_identity_stays_in_gallery(self):
@@ -92,6 +93,8 @@ class Enrichment(OccurrenceReference):
             raise ValueError("Recognition revisions reference private gallery review; names are not copied into history")
         if self.kind == "context" and (self.text is None or not self.text.strip()):
             raise ValueError("Context enrichment requires text")
+        if self.kind != "recognition" and self.identity_occurrence_id is not None:
+            raise ValueError("Only recognition can reference the private gallery")
         return self
 
 
@@ -311,7 +314,17 @@ class OccurrenceStore:
             raise OccurrenceConflict("occurrence_enrichment_evidence_mismatch")
         return document
 
-    def enrichment_allowed(self, reference: OccurrenceReference, *, now: float | None = None) -> bool:
+    def reference_allowed(self, reference: OccurrenceReference, *, now: float | None = None) -> bool:
+        reference = OccurrenceReference.model_validate(reference)
+        now = TypeAdapter(Timestamp).validate_python(time.time() if now is None else now)
+        with self.notifications._lock:
+            try:
+                self._enrichment_document(self.notifications._conn, reference, now)
+            except OccurrenceConflict:
+                return False
+            return True
+
+    def enrichment_allowed(self, reference: OccurrenceReference, *, evidence: dict | None = None, now: float | None = None) -> bool:
         reference = OccurrenceReference.model_validate(reference)
         now = TypeAdapter(Timestamp).validate_python(time.time() if now is None else now)
         with self.notifications._lock:
@@ -319,6 +332,11 @@ class OccurrenceStore:
                 document = self._enrichment_document(self.notifications._conn, reference, now)
             except OccurrenceConflict:
                 return False
+            if evidence is not None:
+                saved = document["evidence"][reference.evidence_id]
+                if any(evidence.get(key) != saved.get(key) for key in (
+                    "camera_id", "source_id", "capture_instance", "capture_generation", "frame_sequence")):
+                    return False
             return len(document["enrichments"]) < self.maximum_enrichments
 
     def enrich(self, enrichment: Enrichment, *, now: float | None = None) -> OccurrenceChange:
@@ -332,6 +350,7 @@ class OccurrenceStore:
                 raise OccurrenceConflict("occurrence_enrichment_capacity")
             document["enrichments"].append({"kind": enrichment.kind, "text": enrichment.text,
                 "status": enrichment.status, "reason": enrichment.reason,
+                **({"identity_occurrence_id": enrichment.identity_occurrence_id} if enrichment.kind == "recognition" else {}),
                 "evidence_id": enrichment.evidence_id, "participant_id": enrichment.participant_id,
                 "observed_at": enrichment.observed_at, "recorded_at": now})
             self._save(connection, document, now=now, kind="enrichment", evidence_id=enrichment.evidence_id)

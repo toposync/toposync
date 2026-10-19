@@ -178,6 +178,8 @@ def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monk
 
     async def scenario():
         app = FastAPI()
+        from toposync.runtime.notifications import NotificationsRuntime
+        app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
         app.state.config_store = SimpleNamespace(paths=SimpleNamespace(data_dir=tmp_path))
         extension = VisionExtension()
         original_sleep = asyncio.sleep

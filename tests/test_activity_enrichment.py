@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -19,6 +20,10 @@ from toposync.runtime.services import ServiceRegistry
 from toposync_ext_ai.pipelines.operators import register_ai_pipeline_operators
 from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime
 from toposync_ext_cameras.automatic import plan_observation
+from toposync_ext_vision.identity.extraction import ExtractionResult
+from toposync_ext_vision.identity.pipelines import IdentityEvidenceRuntime
+from toposync_ext_vision.identity.store import IdentityStore
+from test_identity_store import enroll, evidence, policy
 
 
 def test_missing_enrichment_services_fail_during_preparation_without_repeated_effects():
@@ -34,7 +39,8 @@ def test_missing_enrichment_services_fail_during_preparation_without_repeated_ef
 
 
 @pytest.mark.parametrize("interruption", [None, "revoke", "delete", "expire", "demand", "missing_image"])
-def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path, interruption):
+@pytest.mark.parametrize("capability", ["ai.context", "vision.recognition"])
+def test_record_and_close_precede_slow_enrichment_and_privacy_is_rechecked(tmp_path, interruption, capability):
     async def scenario():
         history = NotificationsRuntime(data_dir=tmp_path)
         operators = registry()
@@ -43,6 +49,11 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
         calls = []
         requests = []
         first_recorded = asyncio.Event()
+        gallery = IdentityStore(tmp_path / "private", scope="synthetic", activity_authorized=history.occurrences.reference_allowed)
+        identity, _, _ = enroll(gallery, name="Synthetic participant")
+        async def invalidate_private(identifier):
+            await asyncio.to_thread(gallery.revoke_activity, identifier)
+        history.invalidate_occurrence_derivatives = invalidate_private
 
         def sample(sequence, lifecycle=Lifecycle.UPDATE):
             value = observed(sequence=sequence, lifecycle=lifecycle)
@@ -71,15 +82,36 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
                 finally:
                     processed.set()
 
+        class AuditedIdentity(IdentityEvidenceRuntime):
+            def _extractor(self, species):
+                return SimpleNamespace(process_specification=lambda: {})
+
+            async def process_packet(self, packet, context):
+                requests.append(packet)
+                async def extract(function, specification, image, **kwargs):
+                    assert image.shape == (100, 100, 3)
+                    calls.append(kwargs["occurrence_id"])
+                    slow_started.set()
+                    await release_inference.wait()
+                    sample = evidence(kwargs["occurrence_id"], capture=kwargs["capture_id"], observed_at=kwargs["observed_at"])
+                    sample = sample.model_copy(update={"source_id": kwargs["source_id"], "camera_id": kwargs["camera_id"]})
+                    return ExtractionResult("observed", "synthetic", evidence=sample)
+                try:
+                    return await super().process_packet(packet, SimpleNamespace(run_blocking=extract, is_cancelled=context.is_cancelled))
+                finally:
+                    processed.set()
+
         for name in ("camera.source", "vision.detect", "vision.track"):
             factory = (lambda *_: Source()) if name == "camera.source" else (lambda *_: Pass())
             operators._items[name] = replace(operators.get(name), runtime_factory=factory, diagnostics_factory=None)
         operators._items["ai.condition_filter"] = replace(operators.get("ai.condition_filter"),
             runtime_factory=AuditedCondition, diagnostics_factory=None)
-        value = intent("ai.context", minimum_duration_seconds=0, resource_parameters={
+        operators._items["vision.identity_evidence"] = replace(operators.get("vision.identity_evidence"),
+            runtime_factory=AuditedIdentity, diagnostics_factory=None)
+        value = intent(capability, minimum_duration_seconds=0, resource_parameters={
             "profile_id": "fixture", "condition_description": "The subject holds a parcel",
             "evaluation_interval_seconds": 0, "concurrency_policy": "queue", "max_concurrency": 1,
-        })
+        } if capability == "ai.context" else {"policies": [policy().model_dump()]})
         plan = plan_observation(intent=value, configuration=configuration())
         assert not any(node["operator"] == "ai.condition_filter" for node in plan["graph"]["nodes"])
         producer = Pipeline(name="fixture", enabled=False, graph=plan["graph"])
@@ -117,6 +149,7 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
         services.register("occurrences.enrichment_allowed", history.enrichment_allowed)
         services.register("occurrences.enrich", enrich)
         services.register("ai.infer.evaluate_condition", infer)
+        services.register("vision.identity.store", lambda: gallery)
         compiled = compiler.compile_many(demands.pipelines(), catalog=[producer])
         runtime = PipelineBundleRuntime(compiled, operators, PipelineRuntimeDependencies(services=services, demand_registry=demands))
         history.invalidate_occurrence_runtime = runtime.invalidate_occurrence
@@ -134,6 +167,7 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
             assert history.occurrences.deliveries(identifier)[0]["status"] == "confirmed"
             assert len(calls) == (0 if interruption == "missing_image" else 1)
             assert not release_inference.is_set()
+            assert len(gallery.observations()) == 1, "No private observation may be written before inference completes"
             if interruption == "missing_image":
                 await asyncio.wait_for(processed.wait(), 2)
             pending = requests[0]
@@ -143,6 +177,9 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
             wrong_capture = replace(pending, payload={**pending.payload,
                 "capture_evidence": {**pending.payload["capture_evidence"], "sequence": 999}})
             assert not await occurrence_enrichment_allowed(wrong_capture, runtime.dependencies)
+            false_source = replace(pending, payload={**pending.payload, "camera_id": "another-camera",
+                "activity_observation": {**pending.payload["activity_observation"], "camera_id": "another-camera"}})
+            assert not await occurrence_enrichment_allowed(false_source, runtime.dependencies)
             if interruption == "revoke":
                 await history.revoke_occurrence_enrichment(identifier, expected_revision=before["revision"])
             elif interruption == "delete":
@@ -154,11 +191,15 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
             if interruption in ("revoke", "delete", "expire"):
                 assert processed.is_set(), "Removal must cancel inference before returning, without releasing the model"
                 assert not release_inference.is_set()
-                conditions = [node for node in runtime._runtime._runtimes if isinstance(node, AiConditionFilterRuntime)]
-                assert len(conditions) == 1
-                assert not conditions[0]._annotation_tasks
-                assert conditions[0]._waiting_packet is None
-                assert not conditions[0]._states
+                if capability == "ai.context":
+                    conditions = [node for node in runtime._runtime._runtimes if isinstance(node, AiConditionFilterRuntime)]
+                    assert len(conditions) == 1
+                    assert not conditions[0]._annotation_tasks
+                    assert conditions[0]._waiting_packet is None
+                    assert not conditions[0]._states
+                else:
+                    extraction = next(node for node in runtime._runtime._runtimes if isinstance(node, IdentityEvidenceRuntime))
+                    assert extraction._pending is None and not extraction._sampled and not extraction._keyframes
                 assert demand.latest is None
             release_inference.set()
             await asyncio.wait_for(processed.wait(), 2)
@@ -170,15 +211,21 @@ def test_record_and_close_precede_slow_context_and_privacy_is_rechecked(tmp_path
                     assert after[field] == before[field]
                 assert [item["observed_at"] for item in after["enrichments"]] == [1, 2]
                 expected = "unknown" if interruption == "missing_image" else "observed"
-                assert all(item["status"] == expected for item in after["enrichments"])
+                if capability == "ai.context" or interruption == "missing_image":
+                    assert all(item["status"] == expected for item in after["enrichments"])
+                else:
+                    assert [item["status"] for item in after["enrichments"]] == ["observed", "unknown"]
+                    assert gallery.decision(after["enrichments"][0]["identity_occurrence_id"]).identity_id == identity
+                    assert "Synthetic participant" not in str(after) and identity not in str(after)
                 if interruption == "missing_image":
-                    assert all(item["reason"] == "missing_image_or_condition" for item in after["enrichments"])
+                    assert all(item["reason"] == ("missing_image_or_condition" if capability == "ai.context" else "subject_image_missing") for item in after["enrichments"])
                 assert len(history.occurrences.deliveries(identifier)) == 1
         finally:
             release_inference.set()
             demands.release(demand.id)
             await runtime.stop()
             await runtime.dependencies.execution_scheduler.shutdown()
+            gallery.close()
         if interruption in ("revoke", "delete", "expire", "demand"):
             after = history.occurrences.get(identifier, read_filter=lambda _: True)
             assert len(calls) == 1

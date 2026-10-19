@@ -99,7 +99,7 @@ async def occurrence_enrichment_allowed(packet, dependencies):
             or any(observation.get(saved) != capture.get(current) for saved, current in (
                 ("capture_instance", "capture_instance"), ("capture_generation", "generation"), ("frame_sequence", "sequence")))):
         return False
-    allowed = await dependencies.services.call("occurrences.enrichment_allowed", reference=reference)
+    allowed = await dependencies.services.call("occurrences.enrichment_allowed", reference=reference, evidence=observation)
     return allowed and demands.allowed(identifier)
 
 

@@ -102,6 +102,7 @@ export function ActivityView({ notification }: { notification: Notification }) {
     ? item.identification.name : t("activity.anonymous", { number: index + 1 });
   return <section className="activityView" aria-label={t("activity.title")}>
     <h3>{t("activity.title")} · {t(`activity.${occurrence.status}`)}</h3>
+    {data.maintenance_error && <p role="alert">{t("activity.maintenance_error")}</p>}
     <p className="muted">{t("activity.coverage")}</p>
     <div className="notificationDetailsGrid">
       <div className="notificationDetailField">{occurrence.duration_seconds === null ? t("activity.incomparable") : t("activity.duration", { seconds: number(occurrence.duration_seconds) })}</div>

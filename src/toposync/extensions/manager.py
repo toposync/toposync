@@ -376,6 +376,18 @@ class ExtensionManager:
                 message=f"Extension '{extension_id}' is disabled by local configuration.",
             )
             logger.info("Skipping extension '%s': disabled by local configuration", extension_id)
+            ext = discovered[extension_id]
+            retention = getattr(ext.plugin, "setup_retention", None)
+            if callable(retention) and self._compatibility_error(manifest=ext.manifest,
+                    loaded_extensions=discovered, core_version=_current_core_version()) is None:
+                try:
+                    maybe = retention(app)
+                    if inspect.isawaitable(maybe):
+                        await maybe
+                except Exception:
+                    self._add_diagnostic(extension_id=extension_id, level="error", code="retention_setup_failed",
+                        message=f"Extension '{extension_id}' retained-data maintenance failed.")
+                    logger.error("Extension '%s' retained-data maintenance failed.", extension_id, exc_info=True)
 
         self._extensions = self._filter_compatible_extensions(enabled_discovered)
         for ext in self._extensions.values():

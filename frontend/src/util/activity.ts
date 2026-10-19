@@ -22,6 +22,7 @@ export type ActivityDetail = {
     enrichments: Array<{ kind: string; text: string | null; status: string; participant_id: string; observed_at: number; recorded_at: number }>;
   };
   permissions: { manage: boolean };
+  maintenance_error: string | null;
   revisions: Array<{ revision: number; kind: string; recorded_at: number }>;
   deliveries: Array<{ id: string; status: string; simulated: boolean; reason: string | null }>;
 };

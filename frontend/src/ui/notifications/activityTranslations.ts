@@ -1,5 +1,6 @@
 export const activityTranslations = {
   en: {
+    "activity.maintenance_error": "Retention cleanup is unavailable. Expired evidence remains hidden; physical deletion is pending.",
     "activity.title": "Activity", "activity.loading": "Loading activity…", "activity.refresh": "Refresh",
     "activity.failed": "Activity could not be loaded. Try again.", "activity.unavailable": "Activity is unavailable or access has changed.",
     "activity.expired": "Activity was deleted or its retention period ended.", "activity.changed": "Activity changed. Refresh before trying again.",
@@ -32,6 +33,7 @@ export const activityTranslations = {
     "activity.card": "{{count}} participants · {{status}}", "activity.read_only": "Read-only access",
   },
   "pt-BR": {
+    "activity.maintenance_error": "A limpeza de retenção está indisponível. Evidências expiradas permanecem ocultas; a exclusão física está pendente.",
     "activity.title": "Atividade", "activity.loading": "Carregando atividade…", "activity.refresh": "Atualizar",
     "activity.failed": "Não foi possível carregar a atividade. Tente novamente.", "activity.unavailable": "Atividade indisponível ou acesso alterado.",
     "activity.expired": "A atividade foi excluída ou seu prazo de retenção terminou.", "activity.changed": "A atividade mudou. Atualize antes de tentar novamente.",

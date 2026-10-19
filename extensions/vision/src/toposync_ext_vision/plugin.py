@@ -72,25 +72,8 @@ class VisionExtension(BaseExtension):
 
         services.register("vision.history_setup", history_setup)
 
-        def identity_store(*, create: bool = True):
-            from .identity.store import IdentityStore
-
-            if configured_data_dir is None:
-                raise RuntimeError("identity gallery requires an explicit data directory")
-            with self._identity_lock:
-                if self._identity_store is None:
-                    if not create:
-                        scope_directory = hashlib.sha256(b"installation").hexdigest()[:32]
-                        if not (Path(configured_data_dir) / "identities" / scope_directory / "gallery.sqlite3").is_file():
-                            return None
-                    self._identity_store = IdentityStore(
-                        Path(configured_data_dir) / "identities",
-                        scope="installation",
-                        activity_authorized=app.state.notifications.occurrences.reference_allowed,
-                    )
-                return self._identity_store
-
         from functools import partial
+        identity_store = partial(self._identity_gallery, app)
         from .identity.api import create_identity_router, identity_history_selection, activity_participants
         from .history import create_history_router
 
@@ -112,15 +95,6 @@ class VisionExtension(BaseExtension):
         services.register("vision.identity.history_selection", partial(identity_history_selection, get_store=identity_store))
         services.register("occurrences.participants", partial(activity_participants, get_store=identity_store))
 
-        async def invalidate_activity(identifier):
-            def invalidate():
-                store = identity_store(create=False)
-                if store is not None:
-                    store.revoke_activity(identifier)
-            await asyncio.to_thread(invalidate)
-
-        app.state.notifications.invalidate_occurrence_derivatives = invalidate_activity
-
         def maintain_existing_gallery():
             association_repository().maintain()
             # Reopen existing galleries after restart without creating one for unused installations.
@@ -129,26 +103,7 @@ class VisionExtension(BaseExtension):
                 store.reconcile_activity_references()
                 store.maintain()
 
-        async def maintain_identities():
-            while True:
-                await asyncio.sleep(60)
-                worker = asyncio.create_task(asyncio.to_thread(maintain_existing_gallery))
-                try:
-                    await asyncio.shield(worker)
-                except asyncio.CancelledError:
-                    # A thread continua mesmo após cancelar a coroutine: aguardar antes de fechar SQLite.
-                    with contextlib.suppress(Exception):
-                        await worker
-                    raise
-                except Exception:
-                    if self._identity_store is not None:
-                        self._identity_store.maintenance_error = "identity_maintenance_unavailable"
-                    logging.getLogger(__name__).warning("Identity gallery maintenance unavailable")
-
-        self._identity_maintenance_task = asyncio.create_task(
-            maintain_identities(), name="vision-identity-maintenance"
-        )
-        register_extension_shutdown_callback(app, self.shutdown)
+        self._start_identity_maintenance(app, maintain_existing_gallery)
 
         async def _start_model_install(
             *,
@@ -204,6 +159,60 @@ class VisionExtension(BaseExtension):
         services.register("vision.model_install.list_jobs", _list_model_install_jobs)
         services.register("vision.model_install.cancel", _cancel_model_install)
         services.register("vision.model_install.retry", _retry_model_install)
+
+    def _identity_gallery(self, app: FastAPI, *, create: bool = True):
+        from .identity.store import IdentityStore
+
+        directory = getattr(getattr(getattr(app.state, "config_store", None), "paths", None), "data_dir", None)
+        if directory is None:
+            raise RuntimeError("identity gallery requires an explicit data directory")
+        with self._identity_lock:
+            if self._identity_store is None:
+                scope_directory = hashlib.sha256(b"installation").hexdigest()[:32]
+                if not create and not (Path(directory) / "identities" / scope_directory / "gallery.sqlite3").is_file():
+                    return None
+                self._identity_store = IdentityStore(Path(directory) / "identities", scope="installation",
+                    activity_authorized=app.state.notifications.occurrences.reference_allowed)
+            return self._identity_store
+
+    async def setup_retention(self, app: FastAPI) -> None:
+        def maintain_retained_gallery():
+            store = self._identity_gallery(app, create=False)
+            if store is not None:
+                store.reconcile_activity_references()
+                store.apply_retention()
+        self._start_identity_maintenance(app, maintain_retained_gallery)
+
+    def _start_identity_maintenance(self, app: FastAPI, maintain_existing_gallery) -> None:
+        async def invalidate_activity(identifier):
+            def invalidate():
+                store = self._identity_gallery(app, create=False)
+                if store is not None:
+                    store.revoke_activity(identifier)
+            await asyncio.to_thread(invalidate)
+
+        app.state.notifications.invalidate_occurrence_derivatives = invalidate_activity
+
+        async def maintain_identities():
+            while True:
+                await asyncio.sleep(60)
+                worker = asyncio.create_task(asyncio.to_thread(maintain_existing_gallery))
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    # A thread continua mesmo após cancelar a coroutine: aguardar antes de fechar SQLite.
+                    with contextlib.suppress(Exception):
+                        await worker
+                    raise
+                except Exception:
+                    if self._identity_store is not None:
+                        self._identity_store.maintenance_error = "identity_maintenance_unavailable"
+                    logging.getLogger(__name__).warning("Identity gallery maintenance unavailable")
+
+        self._identity_maintenance_task = asyncio.create_task(
+            maintain_identities(), name="vision-identity-maintenance"
+        )
+        register_extension_shutdown_callback(app, self.shutdown)
 
     async def shutdown(self) -> None:
         task, self._identity_maintenance_task = self._identity_maintenance_task, None

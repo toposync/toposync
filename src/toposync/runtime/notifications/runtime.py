@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,22 @@ class NotificationsRuntime:
         self.broadcaster = EventBroadcaster()
         self.invalidate_occurrence_runtime: Callable[[str], Awaitable[None]] | None = None
         self.invalidate_occurrence_derivatives: Callable[[str], Awaitable[None]] | None = None
+        self.retention_error: str | None = None
+
+    async def maintain_occurrences(self) -> None:
+        while True:
+            await asyncio.sleep(60)
+            worker = asyncio.create_task(self.expire_occurrences())
+            try:
+                await asyncio.shield(worker)
+                self.retention_error = None
+            except asyncio.CancelledError:
+                # Finish the pending purge before storage and extension callbacks close.
+                await asyncio.gather(worker, return_exceptions=True)
+                raise
+            except Exception:
+                self.retention_error = "occurrence_retention_unavailable"
+                logging.getLogger(__name__).exception("Occurrence retention maintenance unavailable")
 
     async def _invalidate_occurrence(self, change: OccurrenceChange) -> None:
         self.broadcaster.discard(change.invalidated_notifications)

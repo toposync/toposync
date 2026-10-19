@@ -38,6 +38,15 @@ def test_activity_api_exposes_persisted_history_and_controlled_relative_manifest
     assert client.get('/api/activity/' + result['id'] + '/evidence', params={'evidence_id': '../../secret'}).status_code == 404
 
 
+def test_retention_maintenance_failure_is_visible_without_exposing_internal_exception(activity):
+    client, result = activity
+    client.app.state.notifications.retention_error = 'occurrence_retention_unavailable'
+    for path in ('/api/activity', '/api/activity/' + result['id'], '/api/activity/' + result['id'] + '/manifest'):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.json()['maintenance_error'] == 'occurrence_retention_unavailable'
+
+
 def test_api_rechecks_all_cameras_for_counts_metadata_export_and_mutation(activity):
     client, result = activity
     user = client.post('/api/access/users', json={'username': 'limited', 'display_name': 'Limited',

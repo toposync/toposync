@@ -78,6 +78,24 @@ def test_extension_manager_skips_incompatible_core_version(
     assert "requires Toposync core version" in caplog.text
 
 
+@pytest.mark.parametrize('compatible', [False, True])
+@pytest.mark.parametrize('fail', [False, True])
+def test_disabled_extension_runs_only_compatible_retention_hook(monkeypatch, compatible, fail):
+    setup_calls, retention_calls = [], []
+    plugin = _make_plugin({'id': 'com.test.retained', 'name': 'Retained', 'version': '0.1.0',
+        'requires_core_version': '>=0.1' if compatible else '>=999'}, setup_calls)
+    async def maintain(self, app):
+        retention_calls.append('retention')
+        if fail:
+            raise RuntimeError('synthetic retention failure')
+    plugin.setup_retention = maintain
+    manager = _load_manager(entry_points=[_FakeEntryPoint('retained', plugin)], monkeypatch=monkeypatch,
+        disabled_extension_ids={'com.test.retained'})
+    assert setup_calls == [] and manager.public_extensions() == [] and manager.auth_routes() == []
+    assert retention_calls == (['retention'] if compatible else [])
+    assert any(item['code'] == 'retention_setup_failed' for item in manager.public_diagnostics()) is (compatible and fail)
+
+
 def test_extension_manager_skips_when_required_extension_is_missing(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

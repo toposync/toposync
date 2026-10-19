@@ -69,7 +69,8 @@ def install_activity_routes(app: FastAPI) -> None:
             raise HTTPException(409, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return {"occurrences": items, "next_cursor": cursor, "coverage": {
+        return {"occurrences": items, "next_cursor": cursor,
+            "maintenance_error": request.app.state.notifications.retention_error, "coverage": {
             "basis": "recorded_occurrences", "time_filter": ("recorded_and_observed_at"
                 if clock_domain and (created_after is not None or created_before is not None)
                 else "observed_at" if clock_domain else "recorded_at"),
@@ -89,6 +90,7 @@ def install_activity_routes(app: FastAPI) -> None:
             if exc.status_code not in (401, 403):
                 raise
         return {"occurrence": document, "permissions": {"manage": manage},
+            "maintenance_error": request.app.state.notifications.retention_error,
             "revisions": await asyncio.to_thread(store.revisions, identifier), "deliveries": await asyncio.to_thread(store.deliveries, identifier)}
 
     @router.get("/{identifier}/evidence")
@@ -105,6 +107,7 @@ def install_activity_routes(app: FastAPI) -> None:
         store, document = await visible(request, identifier)
         document = await project(request, document)
         manifest = {"schema_version": 1, "id": identifier, "name": document["title"],
+            "maintenance_error": request.app.state.notifications.retention_error,
             "revision": document["revision"], "objective_id": document["objective_id"],
             "scope": document["scope"], "participants": list(document["participants"].values()),
             "coverage": document["coverage"], "evidence": [

@@ -1627,9 +1627,12 @@ async def _lifespan(app: FastAPI):
     if frontend_dir:
         app.mount("/", StaticFiles(directory=str(frontend_dir), html=False), name="frontend")
 
+    retention_task = asyncio.create_task(notifications.maintain_occurrences(), name="occurrence-retention")
     try:
         yield
     finally:
+        retention_task.cancel()
+        await asyncio.gather(retention_task, return_exceptions=True)
         for token in list(app.state.pipeline_inspection.sessions):
             app.state.pipeline_inspection.close(token)
         for identifier in list(app.state.pipeline_demands.demands):

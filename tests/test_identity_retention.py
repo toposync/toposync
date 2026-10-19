@@ -199,7 +199,8 @@ def test_expired_transient_does_not_drop_authorization_for_retained_visit(tmp_pa
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monkeypatch, existing):
+@pytest.mark.parametrize("disabled", [False, True])
+def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monkeypatch, existing, disabled):
     import asyncio
     from types import SimpleNamespace
     from fastapi import FastAPI
@@ -231,13 +232,21 @@ def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monk
             await original_sleep(0)
 
         monkeypatch.setattr("toposync_ext_vision.plugin.asyncio.sleep", advance_cycle)
-        await extension.setup(app, bus=EventBus(), services=ServiceRegistry())
+        services = ServiceRegistry()
+        if disabled:
+            await extension.setup_retention(app)
+            assert services.list_ids() == []
+            assert not any('/api/vision' in getattr(route, 'path', '') for route in app.routes)
+        else:
+            await extension.setup(app, bus=EventBus(), services=services)
         try:
             for _ in range(200):
                 if cycles > 1:
                     break
                 await original_sleep(0.01)
             assert cycles > 1
+            if disabled:
+                assert extension._association_repository is None
             if existing:
                 assert extension._identity_store is not None
                 assert extension._identity_store.observations() == []
@@ -270,3 +279,35 @@ def test_retention_during_reconstruction_cannot_restore_expired_vectors(tmp_path
         )
     finally:
         store.close()
+
+
+def test_disabled_extension_purges_activity_derivatives_through_real_application(tmp_path, monkeypatch):
+    from test_auth_local import _create_client, _setup_owner
+    from test_identity_api import VisionEntryPoint
+    from test_activity_identity import activity
+    from toposync_ext_vision.plugin import VisionExtension
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Disabled vision must not initialize its runtime or models')
+    monkeypatch.setattr('toposync.app.disabled_extension_ids_from_settings', lambda _: {'com.toposync.vision'})
+    monkeypatch.setattr(VisionExtension, 'setup', forbidden)
+    with _create_client(tmp_path, monkeypatch, entry_points=[VisionEntryPoint()]) as client:
+        _setup_owner(client)
+        history = client.app.state.notifications
+        document, reference = activity(history)
+        gallery = IdentityStore(tmp_path / 'data/identities', scope='installation',
+            activity_authorized=history.occurrences.reference_allowed)
+        try:
+            observed = gallery.observe(evidence(), policy(), activity_reference=reference)
+        finally:
+            gallery.close()
+        assert client.get('/api/vision/identities').status_code == 404
+        assert 'vision.identity.store' not in client.app.state.services.list_ids()
+        response = client.request('DELETE', '/api/activity/' + document['id'], json={'expected_revision': document['revision']})
+        assert response.status_code == 200, response.text
+        reopened = IdentityStore(tmp_path / 'data/identities', scope='installation',
+            activity_authorized=history.occurrences.reference_allowed)
+        try:
+            assert reopened._connection.execute('SELECT count(*) FROM observation WHERE id=?', (observed.observation_id,)).fetchone()[0] == 0
+        finally:
+            reopened.close()

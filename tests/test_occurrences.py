@@ -236,6 +236,66 @@ def test_record_only_is_activity_without_notification_or_delivery(tmp_path):
     asyncio.run(scenario())
 
 
+def test_periodic_retention_expires_without_read_and_awaits_pending_purge_on_stop(tmp_path, monkeypatch):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    async def scenario():
+        first = await runtime.record_occurrence(contribution(), retention_seconds=60, request_notice=True, now=1000)
+        started, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def purge(identifier):
+            calls.append(identifier)
+            started.set()
+            await release.wait()
+        runtime.invalidate_occurrence_derivatives = purge
+        original_sleep = asyncio.sleep
+        delays = []
+        async def advance(seconds):
+            delays.append(seconds)
+            assert seconds == 60
+            await original_sleep(0)
+        monkeypatch.setattr(asyncio, 'sleep', advance)
+        monkeypatch.setattr('time.time', lambda: 1061)
+        task = asyncio.create_task(runtime.maintain_occurrences())
+        await asyncio.wait_for(started.wait(), 1)
+        task.cancel()
+        await original_sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        assert calls == [first['id']] and delays == [60]
+        assert runtime.store.list()[0] == []
+        assert runtime.occurrences.get(first['id'], read_filter=lambda _: True)['status'] == 'expired'
+    asyncio.run(scenario())
+
+
+def test_retention_failure_waits_for_next_interval_instead_of_retrying_in_a_loop(tmp_path, monkeypatch):
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    async def scenario():
+        waiting = asyncio.Event()
+        delays, calls = [], []
+        original_sleep = asyncio.sleep
+        async def advance(seconds):
+            delays.append(seconds)
+            if len(delays) == 2:
+                waiting.set()
+                await asyncio.Event().wait()
+            await original_sleep(0)
+        async def fail():
+            calls.append(1)
+            raise OSError('synthetic storage failure')
+        monkeypatch.setattr(asyncio, 'sleep', advance)
+        monkeypatch.setattr(runtime, 'expire_occurrences', fail)
+        task = asyncio.create_task(runtime.maintain_occurrences())
+        await asyncio.wait_for(waiting.wait(), 1)
+        assert delays == [60, 60] and calls == [1]
+        assert runtime.retention_error == 'occurrence_retention_unavailable'
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(scenario())
+
+
 def test_revocation_scrubs_projection_without_new_notification_time_unread_or_notice(tmp_path, monkeypatch):
     from toposync_ext_ai.text_embeddings import TextHistorySearch
     runtime = NotificationsRuntime(data_dir=tmp_path)

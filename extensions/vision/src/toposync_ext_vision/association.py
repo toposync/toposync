@@ -279,9 +279,13 @@ class AssociationStore:
         with self.lock:
             unique = {}
             for observation in observations:
-                if observation.id in unique and unique[observation.id] != observation:
-                    raise AssociationConflict("observation_identifier_conflict")
+                previous = unique.get(observation.id)
+                if previous is not None:
+                    if previous.model_copy(update={"closed": observation.closed}) != observation:
+                        raise AssociationConflict("observation_identifier_conflict")
+                    observation = observation.model_copy(update={"closed": previous.closed or observation.closed})
                 unique[observation.id] = observation
+            observations = list(unique.values())
             self._expire()
             for observation in observations:
                 existing = self.observations.get(observation.id)
@@ -439,11 +443,23 @@ class AssociationStore:
         }
         self._resumed_keys.add(observation.local_key)
 
+    def group_for(self, observation: Observation, entity: str) -> dict | None:
+        with self.lock:
+            matches = [group for group in self.groups if entity in group["members"]
+                and group["clock"] == observation.clock and group["start"] <= observation.observed_at
+                and (group["end"] is None or observation.observed_at < group["end"])]
+            if len(matches) != 1:
+                return None
+            return {key: matches[0][key] for key in ("id", "members", "clock", "start", "end", "revision")}
+
     def _update_groups(self, batch):
         if not batch or self.config.group_distance_metres is None:
             return
         last = batch[-1]
         if not last.clock or last.uncertainty is None:
+            return
+        if any(observation.clock == last.clock and observation.observed_at > last.observed_at
+               for observation, _ in self._records()):
             return
         current = {}
         for observation, record in self._records():

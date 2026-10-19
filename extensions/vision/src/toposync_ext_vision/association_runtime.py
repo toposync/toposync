@@ -164,9 +164,10 @@ class AssociationRuntime(BaseOperatorRuntime):
         results = self.store.ingest([observation for _, observation in pending])
         emitted = set()
         for packet, observation in pending:
-            if observation.id in emitted:
+            emission = (observation.id, observation.closed)
+            if emission in emitted or (observation.id, True) in emitted:
                 continue
-            emitted.add(observation.id)
+            emitted.add(emission)
             record = results.get(observation.id)
             if record is not None and previous_revisions.get(observation.id) == record["revision"]:
                 continue
@@ -181,6 +182,7 @@ class AssociationRuntime(BaseOperatorRuntime):
                 "reason": record["reason"],
                 "gap": record["gap"],
                 "components": record["components"],
+                "group": self.store.group_for(observation, record["entity"]),
             }
             # Identity remains exclusively in the authorized gallery/review API.
             payload = {**packet.payload, "association": projection}

@@ -54,8 +54,8 @@ def test_camera_contributions_duplicate_close_and_restart_keep_one_occurrence(tm
         other = event("b", 2, Lifecycle.UPDATE)
         closed = replace(other, lifecycle=Lifecycle.CLOSE)
         for source in (original, original, other, closed, closed):
-            value = (await adapter.process_packet(source, None))[0]
-            await sink.process_packet(value, None)
+            for value in await adapter.process_packet(source, None):
+                await sink.process_packet(value, None)
         identifier = OccurrenceStore.identifier("garage", "visit-1")
         result = history.occurrences.get(identifier, read_filter=lambda _: True)
         assert result["status"] == "CLOSE" and result["revision"] == 3

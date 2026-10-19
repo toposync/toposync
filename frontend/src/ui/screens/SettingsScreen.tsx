@@ -1384,6 +1384,10 @@ export function SettingsScreen({
               </div>
 
               {item.status_detail ? <div className="extensionItemDetail">{item.status_detail}</div> : null}
+              {item.dependents?.length ? <div className="extensionItemDetail">
+                <strong>{t("core.ui.settings.extensions.dependents")}</strong>
+                <ul>{item.dependents.map(dependent => <li key={dependent.id}>{dependent.name}</li>)}</ul>
+              </div> : null}
               {extensionActivationDiagnostics[item.extension_id] ? (
                 <div className="extensionItemDetail">
                   {t("core.ui.settings.extensions.browser_activation_failed", {

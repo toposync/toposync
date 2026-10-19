@@ -92,6 +92,7 @@ export type ExtensionManagementItem = {
     entry_point_name: string;
     entry_point_value: string;
   }>;
+  dependents: Array<{ id: string; name: string }>;
 };
 
 export type ExtensionManagementCatalog = {

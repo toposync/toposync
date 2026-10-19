@@ -115,6 +115,30 @@ class AutomaticController:
             targets.extend(await self._provider(identifier, config, configuration=config))
         return targets
 
+    def extension_dependents(self, config):
+        dependencies = {}
+        for pipeline in config.pipelines:
+            info = pipeline.graph.get("meta", {}).get("automatic", {})
+            extensions = set(info.get("extension_ids", []))
+            for node in pipeline.graph.get("nodes", []):
+                operator = self.operators.get(node["operator"])
+                if operator is not None and operator.owner:
+                    extensions.add(operator.owner)
+            dependencies[pipeline.name] = extensions
+        outputs = {output["key"]: pipeline.name for pipeline in config.pipelines
+                   for output in pipeline.graph.get("meta", {}).get("outputs", [])}
+        dependents = {}
+        for pipeline in config.pipelines:
+            extensions = set(dependencies[pipeline.name])
+            binding = pipeline.graph.get("meta", {}).get("result_consumer", {})
+            producer = outputs.get(binding.get("request", {}).get("result_key"))
+            extensions.update(dependencies.get(producer, set()))
+            for extension in extensions - {"core"}:
+                dependents.setdefault(extension, []).append({
+                    "id": pipeline.name, "name": pipeline.display_name or pipeline.name,
+                })
+        return dependents
+
     async def prepare_config(self, config):
         self.config = config
         self.state = AutomaticState.model_validate(config.settings.core.get("automatic", {}))
@@ -156,6 +180,12 @@ class AutomaticController:
                 continue
             seen.add(current.name)
             if current.graph.get("meta", {}).get("automatic", {}).get("intent_id") in self.stale_preparations:
+                return False
+            info = current.graph.get("meta", {}).get("automatic", {})
+            if info.get("status", {}).get("reason") == "extension_unavailable":
+                return False
+            disabled = self.config.settings.core.get("extension_management", {}).get("disabled_extension_ids", [])
+            if set(info.get("extension_ids", [])).intersection(disabled):
                 return False
             nodes.extend(current.graph.get("nodes", []))
             for node in current.graph.get("nodes", []):
@@ -318,6 +348,11 @@ class AutomaticController:
             intent = next(item for item in state.intents if item.id == info["intent_id"])
             operators = [self.operators.get(node.operator_id) for node in compiled.nodes]
             operators.append(self.operators.get(info["consequence"]["operator"]))
+            info["extension_ids"] = sorted({
+                self.capabilities[intent.capability]["extension_id"],
+                self.capabilities[intent.consequence.capability]["extension_id"],
+                *(operator.owner for operator in operators if operator.owner),
+            })
             features = {
                 feature for operator in operators for feature in operator.definition.capabilities
             }
@@ -404,6 +439,13 @@ class AutomaticController:
                 pipeline = old.model_copy(deep=True)
                 pipeline.graph["meta"]["automatic"].update(revision=info["revision"], status=statuses[identifier])
             retained_plans.append(pipeline)
+        for intent in state.intents:
+            if statuses[intent.id].get("reason") == "extension_unavailable" and intent.id in previous_plans:
+                # Keep dependency evidence and the old contract, but never execute this stale plan.
+                old = previous_plans[intent.id].model_copy(deep=True)
+                old.display_name = intent.name
+                old.graph["meta"]["automatic"].update(revision=intent.revision, status=statuses[intent.id])
+                retained_plans.append(old)
         plans = retained_plans
         await self.store.commit_automatic(state, expected_config=config, derived_pipelines=plans)
         self.config = await self.store.load()

@@ -2450,23 +2450,29 @@ def create_app() -> FastAPI:
         pip: PipOperationResult | None = None,
         error: str | None = None,
     ) -> ExtensionOperationResponse:
+        if ok:
+            await request.app.state.pipelines_orchestrator._reconcile()
+        catalog = await _extension_management_catalog(request)
+        return ExtensionOperationResponse(ok=ok, pip=pip, catalog=catalog, error=error)
+
+    async def _extension_management_catalog(request: Request) -> ExtensionManagementCatalog:
         config_store: ConfigStore = request.app.state.config_store
         ext_manager: ExtensionManager = request.app.state.extensions
         catalog = await build_extension_management_catalog(
             config_store=config_store,
             extension_manager=ext_manager,
         )
-        return ExtensionOperationResponse(ok=ok, pip=pip, catalog=catalog, error=error)
+        principal = _auth_context(request).principal
+        if principal is not None and principal.role == "owner":
+            dependents = request.app.state.automatic.extension_dependents(await config_store.get_config())
+            for item in catalog.items:
+                item.dependents = dependents.get(item.extension_id, [])
+        return catalog
 
     @app.get("/api/extensions/manage", response_model=ExtensionManagementCatalog)
     async def extensions_management_catalog(request: Request) -> ExtensionManagementCatalog:
         _require(request, action="core:extensions:list")
-        config_store: ConfigStore = request.app.state.config_store
-        ext_manager: ExtensionManager = request.app.state.extensions
-        return await build_extension_management_catalog(
-            config_store=config_store,
-            extension_manager=ext_manager,
-        )
+        return await _extension_management_catalog(request)
 
     @app.post(
         "/api/extensions/manage/install",

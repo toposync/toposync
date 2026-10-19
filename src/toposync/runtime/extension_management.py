@@ -190,6 +190,7 @@ class ExtensionManagementItem(BaseModel):
     source_kind: Literal["pypi", "github", "git", "local"] = "pypi"
     editable: bool = False
     diagnostics: list[dict[str, str]] = Field(default_factory=list)
+    dependents: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ExtensionManagementCatalog(BaseModel):
@@ -398,7 +399,9 @@ async def remove_extension(config_store: ConfigStore, extension_id: str) -> PipO
         return result
 
     config.desired = [item for item in config.desired if item.extension_id != eid]
-    config.disabled_extension_ids = [item for item in config.disabled_extension_ids if item != eid]
+    # Uninstalling the package does not unload operators in this process.
+    if eid not in config.disabled_extension_ids:
+        config.disabled_extension_ids.append(eid)
     await save_extension_management_config(config_store, config)
     return result
 

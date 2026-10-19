@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS observation (
 CREATE INDEX IF NOT EXISTS observation_gallery ON observation(species, space, reference, quality DESC);
 CREATE INDEX IF NOT EXISTS observation_occurrence ON observation(occurrence_id);
 CREATE INDEX IF NOT EXISTS observation_identity ON observation(identity_id);
+CREATE TRIGGER IF NOT EXISTS observation_owners_delete AFTER DELETE ON observation BEGIN
+ DELETE FROM activity_reference WHERE observation_id=OLD.id;
+END;
 CREATE TABLE IF NOT EXISTS reference_representation (
  observation_id TEXT NOT NULL REFERENCES observation(id) ON DELETE CASCADE,
  space TEXT NOT NULL, evidence BLOB, eligible INTEGER NOT NULL,
@@ -183,9 +186,11 @@ class IdentityStore:
                 return False
         if reference:
             return True
-        owners = self._connection.execute("SELECT reference FROM activity_reference WHERE observation_id=?", (identifier,)).fetchall()
+        owners = self._connection.execute("SELECT owner_id,reference FROM activity_reference WHERE observation_id=?", (identifier,)).fetchall()
+        if any(owner['owner_id'] == 'independent' for owner in owners):
+            return True
         return not owners or self.activity_authorized is not None and any(
-            self.activity_authorized(self._open(owner[0])) for owner in owners)
+            self.activity_authorized(self._open(owner['reference'])) for owner in owners)
 
     def close(self) -> None:
         with self._lock:
@@ -997,8 +1002,13 @@ class IdentityStore:
 
     def _retain_activity_reference(self, connection, reference, occurrence_id, observation_id):
         if reference is None:
+            # The same capture can also belong to an authorized flow without an activity.
+            connection.execute("INSERT OR IGNORE INTO activity_reference VALUES('independent',?,?,?)",
+                (occurrence_id, observation_id, self._seal({})))
             return
         owner = reference["occurrence_id"]
+        if owner == 'independent':
+            raise ValueError('reserved activity owner')
         if connection.execute("SELECT count(*) FROM activity_reference WHERE owner_id=?", (owner,)).fetchone()[0] >= 512 and not connection.execute(
             "SELECT 1 FROM activity_reference WHERE owner_id=? AND observation_id=?", (owner, observation_id)).fetchone():
             raise IdentityCapacityError("activity reference capacity reached")
@@ -1079,6 +1089,11 @@ class IdentityStore:
             if connection.execute(
                 "SELECT 1 FROM observation WHERE id=?", (observation_id,)
             ).fetchone():
+                if not connection.execute("SELECT 1 FROM available_observation WHERE id=?", (observation_id,)).fetchone():
+                    return RecognitionDecision(status='unobservable', occurrence_id=evidence.occurrence_id,
+                        reason='evidence_unavailable', gallery_revision=gallery_revision)
+                if not connection.execute("SELECT 1 FROM activity_reference WHERE observation_id=?", (observation_id,)).fetchone():
+                    self._retain_activity_reference(connection, None, evidence.occurrence_id, observation_id)
                 self._retain_activity_reference(connection, activity_reference, evidence.occurrence_id, observation_id)
                 if current and policy and current.policy_fingerprint != policy.fingerprint():
                     return current.model_copy(update={"identity_id": None, "status": "unobservable", "provenance": "none",
@@ -1325,10 +1340,10 @@ class IdentityStore:
 
     def reconcile_activity_references(self) -> None:
         with self._lock:
-            rows = self._connection.execute("SELECT DISTINCT owner_id FROM activity_reference WHERE owner_id>? ORDER BY owner_id LIMIT 128", (self._activity_cursor,)).fetchall()
+            rows = self._connection.execute("SELECT DISTINCT owner_id FROM activity_reference WHERE owner_id<> 'independent' AND owner_id>? ORDER BY owner_id LIMIT 128", (self._activity_cursor,)).fetchall()
             if not rows:
                 self._activity_cursor = ""
-                rows = self._connection.execute("SELECT DISTINCT owner_id FROM activity_reference ORDER BY owner_id LIMIT 128").fetchall()
+                rows = self._connection.execute("SELECT DISTINCT owner_id FROM activity_reference WHERE owner_id<> 'independent' ORDER BY owner_id LIMIT 128").fetchall()
             for row in rows:
                 self._activity_cursor = row[0]
                 references = self._connection.execute("SELECT reference FROM activity_reference WHERE owner_id=?", (row[0],)).fetchall()

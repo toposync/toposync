@@ -142,6 +142,48 @@ def test_ownership_is_per_capture_not_the_entire_source_episode(tmp_path):
         gallery.close()
 
 
+@pytest.mark.parametrize('manual_first', [False, True])
+def test_same_capture_keeps_independent_manual_ownership_after_activity_removal(tmp_path, manual_first):
+    history = NotificationsRuntime(data_dir=tmp_path)
+    document, reference = activity(history)
+    gallery = IdentityStore(tmp_path / 'private', scope='synthetic', activity_authorized=history.occurrences.reference_allowed)
+    try:
+        sample = evidence('shared-manual-capture')
+        references = [None, reference] if manual_first else [reference, None]
+        decisions = [gallery.observe(sample, policy(), activity_reference=value) for value in references]
+        assert decisions[0].observation_id == decisions[1].observation_id
+        history.occurrences.erase(document['id'], expected_revision=document['revision'])
+        assert len(gallery.observations()) == 1
+        gallery.reconcile_activity_references()
+        assert len(gallery.observations()) == 1
+    finally:
+        gallery.close()
+    reopened = IdentityStore(tmp_path / 'private', scope='synthetic', activity_authorized=history.occurrences.reference_allowed)
+    try:
+        reopened.reconcile_activity_references()
+        assert len(reopened.observations()) == 1
+    finally:
+        reopened.close()
+
+
+def test_manual_replay_cannot_claim_an_already_revoked_capture(tmp_path):
+    history = NotificationsRuntime(data_dir=tmp_path)
+    document, reference = activity(history)
+    gallery = IdentityStore(tmp_path / 'private', scope='synthetic', activity_authorized=history.occurrences.reference_allowed)
+    try:
+        sample = evidence('revoked-capture')
+        gallery.observe(sample, policy(), activity_reference=reference)
+        history.occurrences.erase(document['id'], expected_revision=document['revision'])
+        replay = gallery.observe(sample, policy())
+        assert replay.status == 'unobservable' and replay.reason == 'evidence_unavailable'
+        assert not gallery._connection.execute("SELECT 1 FROM activity_reference WHERE owner_id='independent'").fetchone()
+        gallery.reconcile_activity_references()
+        assert not gallery.observations()
+        assert gallery._connection.execute('SELECT count(*) FROM activity_reference').fetchone()[0] == 0
+    finally:
+        gallery.close()
+
+
 def test_shared_capture_cannot_inherit_another_objectives_recognition_policy(tmp_path):
     gallery = IdentityStore(tmp_path, scope="synthetic")
     try:

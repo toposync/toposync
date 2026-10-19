@@ -99,7 +99,8 @@ def test_revoked_ownership_cannot_be_read_before_background_purge(client):
     history, gallery, document, identities = trio(client)
     # Deliberately miss the asynchronous derivative callback, as after an interrupted purge.
     history.occurrences.revoke_enrichment(document['id'], expected_revision=document['revision'])
-    assert gallery._connection.execute('SELECT count(*) FROM activity_reference').fetchone()[0] == 2
+    assert gallery._connection.execute('SELECT count(*) FROM activity_reference WHERE owner_id=?', (document['id'],)).fetchone()[0] == 2
+    assert gallery._connection.execute("SELECT count(*) FROM activity_reference WHERE owner_id='independent'").fetchone()[0] == 2
     assert all(value['status'] == 'unknown' for value in gallery.activity_participants(document, authorize_cameras=lambda _: None).values())
     response = client.get('/api/activity/' + document['id'])
     assert 'Synthetic person' not in response.text

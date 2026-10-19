@@ -158,6 +158,43 @@ async def identity_history_selection(*, request: Request, get_store: Callable[[]
     return {"scope": scope, "notification_ids": identifiers}
 
 
+async def activity_participants(*, request: Request, document: dict, get_store: Callable) -> dict:
+    from toposync.runtime.extension_management import disabled_extension_ids_from_settings
+
+    async def disabled():
+        return "com.toposync.vision" in disabled_extension_ids_from_settings(await request.app.state.config_store.get_settings())
+
+    if await disabled():
+        return {key: {"status": "unavailable"} for key in document["participants"]}
+
+    def project():
+        try:
+            request.state.auth_context = request.app.state.auth.resolve_request(request, refresh=False)
+            request.app.state.auth.authorize(context=request.state.auth_context, action="core:extension:use",
+                resource_type="core:extension", resource_selector="com.toposync.vision")
+            _authorize(request, cameras=set(document["scope"]["camera_ids"]))
+            gallery = get_store(create=False)
+            if gallery is None:
+                return {key: {"status": "unknown"} for key in document["participants"]}
+            def allowed(cameras):
+                try:
+                    _authorize(request, cameras=cameras)
+                    return True
+                except HTTPException as exc:
+                    if exc.status_code not in (401, 403):
+                        raise
+                    return False
+            return gallery.activity_participants(document, authorize_cameras=allowed)
+        except HTTPException as exc:
+            if exc.status_code not in (401, 403):
+                raise
+            return {key: {"status": "restricted"} for key in document["participants"]}
+    result = await asyncio.to_thread(project)
+    if await disabled():
+        return {key: {"status": "unavailable"} for key in document["participants"]}
+    return result
+
+
 def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
     router = APIRouter(prefix="/api/vision/identities", tags=["identity"])
 

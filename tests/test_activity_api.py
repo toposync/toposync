@@ -121,3 +121,34 @@ def test_activity_expiration_is_enforced_before_sweep(activity, monkeypatch):
 def test_activity_rejects_invalid_queries(activity, query):
     client, _ = activity
     assert client.get('/api/activity', params=query).status_code == 422
+
+
+def test_observed_queries_match_one_authorized_sample_not_configured_cameras_or_receipt_time(activity):
+    client, result = activity
+    query = {'observed_after': 10, 'observed_before': 11, 'clock_domain': 'fixture-shared-clock',
+             'participant_id': 'entity-1', 'camera_id': 'front'}
+    response = client.get('/api/activity', params=query)
+    assert response.status_code == 200, response.text
+    assert [item['id'] for item in response.json()['occurrences']] == [result['id']]
+    assert response.json()['coverage']['time_filter'] == 'observed_at'
+    assert response.json()['coverage']['matches'] == 'individual_observations'
+    combined = client.get('/api/activity', params={**query, 'created_after': result['created_at'] - 1})
+    assert combined.json()['coverage']['time_filter'] == 'recorded_and_observed_at'
+    assert [item['id'] for item in combined.json()['occurrences']] == [result['id']]
+    for changes in ({'observed_after': 9, 'observed_before': 10}, {'clock_domain': 'other-clock'}, {'camera_id': 'garage'}):
+        assert client.get('/api/activity', params={**query, **changes}).json()['occurrences'] == []
+    # Another participant's visit must not make a camera/participant/time conjunction true.
+    later = contribution('second', participant_id='entity-2', member_id='visit-2',
+                         camera_id='garage', source_id='garage-main', observed_at=12.0)
+    client.portal.call(partial(client.app.state.notifications.record_occurrence, later, retention_seconds=60.0))
+    assert client.get('/api/activity', params={**query, 'camera_id': 'garage', 'observed_before': 13}).json()['occurrences'] == []
+    matched = client.get('/api/activity', params={**query, 'camera_id': 'garage', 'participant_id': 'entity-2', 'observed_before': 13})
+    assert [item['id'] for item in matched.json()['occurrences']] == [result['id']]
+
+
+@pytest.mark.parametrize('query', [{'observed_after': 10}, {'observed_before': 11},
+    {'observed_after': 10, 'observed_before': 10, 'clock_domain': 'clock'},
+    {'observed_after': 'nan', 'clock_domain': 'clock'}, {'clock_domain': '*'}])
+def test_observed_interval_requires_a_comparable_clock_and_valid_bounds(activity, query):
+    client, _ = activity
+    assert client.get('/api/activity', params=query).status_code == 422

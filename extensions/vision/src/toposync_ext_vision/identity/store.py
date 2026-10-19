@@ -424,6 +424,54 @@ class IdentityStore:
                     return None
             return current
 
+    def activity_participants(self, document: dict, *, authorize_cameras: Callable[[set[str]], bool | None]) -> dict:
+        """Resolve current names only through retained captures owned by this activity."""
+        result = {key: {"status": "unknown"} for key in document["participants"]}
+        with self._lock:
+            if self.activity_authorized is None or not document["enrichment_allowed"]:
+                return result
+            rows = self._connection.execute(
+                "SELECT occurrence_id,observation_id,reference FROM activity_reference WHERE owner_id=?",
+                (document["id"],)).fetchall()
+            references = [(row, self._open(row["reference"])) for row in rows]
+            candidates = {}
+            for item in document["enrichments"]:
+                target = item.get("identity_occurrence_id")
+                if item["kind"] != "recognition" or not target:
+                    continue
+                reference = {"occurrence_id": document["id"], "privacy_revision": document["privacy_revision"],
+                    "participant_id": item["participant_id"], "evidence_id": item["evidence_id"], "observed_at": item["observed_at"]}
+                owned = {row["observation_id"] for row, saved in references if row["occurrence_id"] == target and saved == reference}
+                if not owned or not self.activity_authorized(reference):
+                    continue
+                current = self.decision(target)
+                if current is None or current.observation_id not in owned:
+                    continue
+                if current.provenance == "human":
+                    assignment = self._connection.execute(
+                        "SELECT identity_id,confirmed FROM observation WHERE id=?", (current.observation_id,)).fetchone()
+                    if not assignment or not assignment["confirmed"] or assignment["identity_id"] != current.identity_id:
+                        continue
+                else:
+                    current = self.validated_decision(target, decision_revision=current.revision,
+                        observed_at=item["observed_at"], max_age_seconds=0)
+                if current is None or current.status != "recognized" or current.identity_id is None:
+                    continue
+                identity = self._identity(self._connection, current.identity_id)
+                if authorize_cameras(self.camera_ids(identity_id=current.identity_id)) is False:
+                    continue
+                candidates.setdefault(item["participant_id"], {})[current.identity_id] = {
+                    "status": "recognized", "identity_id": current.identity_id,
+                    "name": self._open(identity["name"]), "provenance": current.provenance,
+                    "gallery_revision": self.revision, "decision_revision": current.revision,
+                    "evidence_id": item["evidence_id"], "observed_at": item["observed_at"]}
+            for key, identities in candidates.items():
+                result[key] = next(iter(identities.values())) if len(identities) == 1 else {
+                    "status": "unknown", "reason": "conflicting_identities"}
+            if not all(self.activity_authorized(saved) for _, saved in references):
+                return {key: {"status": "unknown"} for key in document["participants"]}
+            return result
+
     def observation_context(self, observation_id: str) -> dict | None:
         with self._lock:
             row = self._connection.execute(

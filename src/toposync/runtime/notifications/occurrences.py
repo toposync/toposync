@@ -387,13 +387,20 @@ class OccurrenceStore:
     def list(self, *, read_filter: ReadFilter, limit: int = 50, before: str | None = None,
              camera_id: str | None = None, area_id: str | None = None, participant_id: str | None = None,
              created_after: float | None = None, created_before: float | None = None,
+             observed_after: float | None = None, observed_before: float | None = None,
+             clock_domain: str | None = None,
              now: float | None = None) -> tuple[list[dict], str | None]:
         now = TypeAdapter(Timestamp).validate_python(time.time() if now is None else now)
-        for value in (created_after, created_before):
+        for value in (created_after, created_before, observed_after, observed_before):
             if value is not None:
                 TypeAdapter(Timestamp).validate_python(value)
         if created_after is not None and created_before is not None and created_before <= created_after:
             raise ValueError("Occurrence interval must have positive duration")
+        if observed_after is not None or observed_before is not None:
+            if clock_domain is None:
+                raise ValueError("Observed interval requires its clock domain")
+            if observed_after is not None and observed_before is not None and observed_before <= observed_after:
+                raise ValueError("Observed interval must have positive duration")
         limit = max(1, min(limit, 250))
         where = ["notification_visible(document_json)", "status NOT IN ('deleted', 'expired')", "expires_at > ?"]
         arguments = [now]
@@ -401,15 +408,22 @@ class OccurrenceStore:
             if value is not None:
                 where.append(f"{field} {operator} ?")
                 arguments.append(value)
-        for field, value in (("camera_ids", camera_id), ("area_ids", area_id)):
+        if area_id is not None:
+            TypeAdapter(Identifier).validate_python(area_id)
+            where.append("EXISTS (SELECT 1 FROM json_each(document_json, '$.scope.area_ids') WHERE value = ?)")
+            arguments.append(area_id)
+        evidence_filters = []
+        for field, value in (("camera_id", camera_id), ("participant_id", participant_id), ("clock_domain", clock_domain)):
             if value is not None:
                 TypeAdapter(Identifier).validate_python(value)
-                where.append(f"EXISTS (SELECT 1 FROM json_each(document_json, '$.scope.{field}') WHERE value = ?)")
+                evidence_filters.append(f"json_extract(value, '$.{field}') = ?")
                 arguments.append(value)
-        if participant_id is not None:
-            TypeAdapter(Identifier).validate_python(participant_id)
-            where.append("EXISTS (SELECT 1 FROM json_each(document_json, '$.participants') WHERE key = ?)")
-            arguments.append(participant_id)
+        for operator, value in ((">=", observed_after), ("<", observed_before)):
+            if value is not None:
+                evidence_filters.append(f"json_extract(value, '$.observed_at') {operator} ?")
+                arguments.append(value)
+        if evidence_filters:
+            where.append("EXISTS (SELECT 1 FROM json_each(document_json, '$.evidence') WHERE " + " AND ".join(evidence_filters) + ")")
         if before is not None:
             previous = self.get(before, read_filter=read_filter, now=now)
             if previous is None or previous["status"] in {"deleted", "expired"}:

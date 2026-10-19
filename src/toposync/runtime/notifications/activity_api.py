@@ -32,6 +32,19 @@ def install_activity_routes(app: FastAPI) -> None:
             raise HTTPException(410, document["status"])
         return store, document
 
+    async def project(request, document):
+        services = request.app.state.services
+        names = {}
+        if "occurrences.participants" in services.list_ids():
+            names = await services.call("occurrences.participants", request=request, document=document)
+        # A permission or privacy change during private projection invalidates the response.
+        _, current = await visible(request, document["id"])
+        if current["revision"] != document["revision"]:
+            raise HTTPException(409, "Occurrence changed; refresh the selection")
+        return {**document, "participants": {key: {**value,
+            "identification": names.get(key, {"status": "unavailable"})}
+            for key, value in document["participants"].items()}}
+
     @router.get("")
     async def activity(request: Request, response: Response, limit: int = Query(50, ge=1, le=250),
                  before: str | None = Query(None, max_length=64),
@@ -39,7 +52,10 @@ def install_activity_routes(app: FastAPI) -> None:
                  area_id: str | None = Query(None, min_length=1, max_length=256),
                  participant_id: str | None = Query(None, min_length=1, max_length=256),
                  created_after: float | None = Query(None, ge=0, allow_inf_nan=False),
-                 created_before: float | None = Query(None, ge=0, allow_inf_nan=False)):
+                 created_before: float | None = Query(None, ge=0, allow_inf_nan=False),
+                 observed_after: float | None = Query(None, ge=0, allow_inf_nan=False),
+                 observed_before: float | None = Query(None, ge=0, allow_inf_nan=False),
+                 clock_domain: str | None = Query(None, min_length=1, max_length=256)):
         access = NotificationAccess(request)
         access.principal()
         response.headers["Cache-Control"] = "private, no-store"
@@ -47,18 +63,23 @@ def install_activity_routes(app: FastAPI) -> None:
             await request.app.state.notifications.expire_occurrences()
             items, cursor = await asyncio.to_thread(request.app.state.notifications.occurrences.list, read_filter=access,
                 limit=limit, before=before, camera_id=camera_id, area_id=area_id, participant_id=participant_id,
-                created_after=created_after, created_before=created_before)
+                created_after=created_after, created_before=created_before,
+                observed_after=observed_after, observed_before=observed_before, clock_domain=clock_domain)
         except OccurrenceConflict as exc:
             raise HTTPException(409, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return {"occurrences": items, "next_cursor": cursor, "coverage": {
-            "basis": "recorded_occurrences", "time_filter": "recorded_at", "continuous_video": False,
+            "basis": "recorded_occurrences", "time_filter": ("recorded_and_observed_at"
+                if clock_domain and (created_after is not None or created_before is not None)
+                else "observed_at" if clock_domain else "recorded_at"),
+            "clock_domain": clock_domain, "matches": "individual_observations", "continuous_video": False,
             "expired_evidence_included": False, "complete_day": False}}
 
     @router.get("/{identifier}")
     async def detail(request: Request, response: Response, identifier: str):
         store, document = await visible(request, identifier)
+        document = await project(request, document)
         response.headers["Cache-Control"] = "private, no-store"
         return {"occurrence": document, "revisions": await asyncio.to_thread(store.revisions, identifier), "deliveries": await asyncio.to_thread(store.deliveries, identifier)}
 
@@ -74,6 +95,7 @@ def install_activity_routes(app: FastAPI) -> None:
     @router.get("/{identifier}/manifest")
     async def manifest(request: Request, identifier: str):
         store, document = await visible(request, identifier)
+        document = await project(request, document)
         manifest = {"schema_version": 1, "id": identifier, "name": document["title"],
             "revision": document["revision"], "objective_id": document["objective_id"],
             "scope": document["scope"], "participants": list(document["participants"].values()),

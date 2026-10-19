@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { PipelineOperatorPanel, PipelineReviewPanel, SettingsPanel } from "@toposync/plugin-api";
 
 import { i18n, resolveLocalizedString } from "../../util/i18n";
-import { navigate, replace, usePathname } from "../router";
+import { navigate, replace, snapshotPathname, usePathname } from "../router";
 import type {
   CamerasIndexResponse,
   Pipeline,
@@ -179,9 +179,15 @@ function cameraSourceRefsFromPipelineGraph(graph: unknown): Array<{ cameraId: st
   return refs;
 }
 
+function isAutomaticPipeline(pipeline: Pipeline): boolean {
+  const graph = isRecord(pipeline.graph) ? pipeline.graph : null;
+  const meta = graph && isRecord(graph.meta) ? graph.meta : null;
+  return isRecord(meta?.automatic) && typeof meta.automatic.intent_id === "string" && Boolean(meta.automatic.intent_id);
+}
+
 function isImplicitPipeline(pipeline: Pipeline): boolean {
   const name = String(pipeline.name || "").trim();
-  if (name.startsWith("implicit__")) return true;
+  if (name.startsWith("implicit__") || isAutomaticPipeline(pipeline)) return true;
 
   const graph = isRecord(pipeline.graph) ? pipeline.graph : null;
   const meta = graph && isRecord(graph.meta) ? graph.meta : null;
@@ -232,7 +238,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
-    return pipelineNameFromPipelinesPath(window.location.pathname) ?? null;
+    return pipelineNameFromPipelinesPath(snapshotPathname()) ?? null;
   });
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
 
@@ -316,7 +322,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       setCamerasIndex(cameras);
       setSelectedName((prev) => {
         if (pipelineList.length === 0) return null;
-        const fromPath = typeof window === "undefined" ? null : pipelineNameFromPipelinesPath(window.location.pathname);
+        const fromPath = pipelineNameFromPipelinesPath(snapshotPathname());
         if (!fromPath) return null;
         if (pipelineList.some((pipeline) => pipeline.name === fromPath)) return fromPath;
         if (prev && pipelineList.some((pipeline) => pipeline.name === prev)) return prev;
@@ -960,7 +966,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const renderPipelineListItem = (pipeline: Pipeline): React.ReactElement => {
     const implicit = isImplicitPipeline(pipeline);
     const metaParts = [
-      pipeline.enabled === false ? t("core.ui.pipelines.status.disabled") : t("core.ui.pipelines.status.enabled"),
+      isAutomaticPipeline(pipeline) ? t("core.ui.pipelines.status.automatic") : pipeline.enabled === false ? t("core.ui.pipelines.status.disabled") : t("core.ui.pipelines.status.enabled"),
       pipeline.processing_server_id ?? "local",
       implicit ? t("core.ui.pipelines.status.read_only", {}, "read-only") : "",
     ].filter(Boolean);
@@ -1201,6 +1207,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   <div className="pipelinesAlertText">
                     <div className="pipelinesAlertMessage">
                       {t("core.ui.pipelines.read_only.message", {}, "This generated pipeline is managed by its source and can only be inspected here.")}
+                      {isAutomaticPipeline(draft) && <button className="chipButton" onClick={() => navigate("/settings?panel=__automatic__")}>{t("core.ui.pipelines.open_automatic")}</button>}
                     </div>
                   </div>
                 </div>

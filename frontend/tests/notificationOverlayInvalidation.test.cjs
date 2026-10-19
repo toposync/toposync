@@ -38,12 +38,15 @@ test("main 3D host disposes and recreates the notification overlay after a local
   visit(file);
   let created = 0, disposed = 0;
   const contexts = [];
+  const framed = [];
   const ref = (current) => ({ current });
   const context = {
     console, THREE: {}, elements: [],
     notificationOverlayRef: ref(null), sceneRef: ref({ add() {}, remove() {} }),
     rendererRef: ref({}), cameraRef: ref({}), viewRef: ref({}), onOpenImageRef: ref(null),
     activeNotificationRef: ref({ id: "human-1" }),
+    notificationFramingRef: ref({ select(value) { framed.push(value); } }),
+    frameNotification() {},
     activeNotificationRendererRef: ref({ id: "human", create3DOverlay(ctx) {
       created++; contexts.push(ctx); return { object: {}, dispose() { disposed++; }, update() {} };
     } }),
@@ -58,6 +61,7 @@ test("main 3D host disposes and recreates the notification overlay after a local
   context.elements = [{ id: "edited-wall" }];
   context.syncNotificationOverlay();
   assert.equal(created, 2);
+  assert.deepEqual(framed, ["map-1:human-1", "map-1:human-1"]);
   assert.equal(disposed, 1);
   assert.notEqual(contexts[1].elements, original);
   assert.equal(contexts[1].elements, context.elements);

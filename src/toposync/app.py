@@ -5097,6 +5097,8 @@ def create_app() -> FastAPI:
                         break
                     notification = event.get("notification") if isinstance(event, dict) else None
                     if notification is None:
+                        if isinstance(event, dict) and event.get("op") == "invalidate" and await runtime.event_visible(event, read_filter=access):
+                            yield f'data: {json.dumps({"op": "invalidate", "notification_id": event["notification_id"]})}\n\n'
                         if isinstance(event, dict) and event.get("op") == "resync" and await runtime.event_visible(event, read_filter=access):
                             yield 'data: {"op":"resync"}\n\n'
                         continue
@@ -5165,6 +5167,8 @@ def create_app() -> FastAPI:
                         break
                     notification = event.get("notification") if isinstance(event, dict) else None
                     if notification is None:
+                        if isinstance(event, dict) and event.get("op") == "invalidate" and await runtime.event_visible(event, read_filter=access):
+                            yield f'data: {json.dumps({"op": "invalidate", "notification_id": event["notification_id"]})}\n\n'
                         if isinstance(event, dict) and event.get("op") == "resync" and await runtime.event_visible(event, read_filter=access):
                             yield 'data: {"op":"resync"}\n\n'
                         continue

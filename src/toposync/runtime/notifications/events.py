@@ -103,7 +103,7 @@ class EventBroadcaster:
         if not self._subscribers:
             return
         notification = event.get("notification")
-        notification_id = notification.get("id") if isinstance(notification, dict) else None
+        notification_id = notification.get("id") if isinstance(notification, dict) else event.get("notification_id")
         # A separate argument prevents transient bytes from entering stored/public records.
         validated_monotonic = time.monotonic()
         validated_unix_ms = time.time() * 1000

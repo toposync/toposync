@@ -23,6 +23,7 @@ def test_activity_api_exposes_persisted_history_and_controlled_relative_manifest
     assert response.json()['occurrences'][0]['id'] == result['id']
     assert response.json()['coverage']['complete_day'] is False
     detail = client.get('/api/activity/' + result['id']).json()
+    assert detail['permissions']['manage'] is True
     assert detail['revisions'][0]['kind'] == 'OPEN'
     assert detail['deliveries'][0]['status'] == 'confirmed' and detail['deliveries'][0]['simulated']
     manifest = client.get('/api/activity/' + result['id'] + '/manifest')
@@ -52,7 +53,8 @@ def test_api_rechecks_all_cameras_for_counts_metadata_export_and_mutation(activi
     assert response.status_code == 403
     client.app.state.auth.store.upsert_grant(user_id=user['id'], action='core:camera:read',
         resource_type='core:camera', include=['front', 'garage'], exclude=[])
-    assert client.get('/api/activity/' + result['id']).status_code == 200
+    visible = client.get('/api/activity/' + result['id'])
+    assert visible.status_code == 200 and visible.json()['permissions']['manage'] is False
     client.app.state.auth.store.upsert_grant(user_id=user['id'], action='core:camera:read',
         resource_type='core:camera', include=['front', 'garage'], exclude=['garage'])
     assert client.get('/api/activity/' + result['id'] + '/manifest').status_code == 404
@@ -86,6 +88,7 @@ def test_delete_purges_pending_delivery_and_embedding_cache(activity):
     queue = client.portal.call(queue_pending)
     assert queue.qsize() == 1
     assert client.request('DELETE', '/api/activity/' + result['id'], json={'expected_revision': 1}).status_code == 200
+    assert queue.get_nowait() == {'op': 'invalidate', 'notification_id': notification['id'], 'occurrence_id': result['id']}
     assert queue.empty()
     assert runtime.store._conn.execute('SELECT count(*) FROM ai_notification_embedding').fetchone()[0] == 0
     client.portal.call(runtime.broadcaster.unsubscribe, queue)
@@ -152,3 +155,13 @@ def test_observed_queries_match_one_authorized_sample_not_configured_cameras_or_
 def test_observed_interval_requires_a_comparable_clock_and_valid_bounds(activity, query):
     client, _ = activity
     assert client.get('/api/activity', params=query).status_code == 422
+
+
+def test_manifest_retains_human_source_labels_under_the_same_scope_gate(activity):
+    client, result = activity
+    sample = contribution('labelled', camera_name='Frente', source_name='Principal')
+    client.portal.call(partial(client.app.state.notifications.record_occurrence, sample, retention_seconds=60.0))
+    response = client.get('/api/activity/' + result['id'] + '/manifest')
+    entry = next(item for item in response.json()['evidence'] if item['id'] == 'labelled')
+    assert entry['name'] == 'Frente · Principal · 10.0'
+    assert entry['camera_id'] == 'front' and entry['source_id'] == 'front-main'

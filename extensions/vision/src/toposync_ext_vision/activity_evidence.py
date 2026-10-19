@@ -86,6 +86,9 @@ class ActivityEvidenceRuntime(TransformOperatorRuntime):
         }
         if activity and activity.get("entity_id") != participant:
             raise ValueError("Activity membership differs from its association evidence")
+        for key, label in (("camera_name", payload.get("camera_name")), ("source_name", source.get("source_name"))):
+            if isinstance(label, str) and label.strip():
+                value[key] = label.strip()
         group = association.get("group")
         group_id = None
         if group is not None:

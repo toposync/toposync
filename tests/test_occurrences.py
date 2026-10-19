@@ -234,3 +234,33 @@ def test_record_only_is_activity_without_notification_or_delivery(tmp_path):
         assert queue.empty()
         runtime.broadcaster.unsubscribe(queue)
     asyncio.run(scenario())
+
+
+def test_revocation_scrubs_projection_without_new_notification_time_unread_or_notice(tmp_path, monkeypatch):
+    from toposync_ext_ai.text_embeddings import TextHistorySearch
+    runtime = NotificationsRuntime(data_dir=tmp_path)
+    async def scenario():
+        first = await runtime.record_occurrence(contribution(), retention_seconds=60.0, request_notice=True, now=1000.0)
+        rich = await runtime.enrich_occurrence(enrichment(first['id']), now=1005.0)
+        original = runtime.list_sync()[0][0]
+        await runtime.mark_all_viewed()
+        search = TextHistorySearch(runtime, None)
+        search.cache('synthetic', {original['id']: ('hash', 'private context')}, {original['id']: [1.0, 0.0]})
+        queue = runtime.broadcaster.subscribe()
+        runtime.broadcaster.publish({'op': 'update', 'notification': original})
+        monkeypatch.setattr('time.time', lambda: 1006.0)
+        await runtime.revoke_occurrence_enrichment(first['id'], expected_revision=rich['revision'])
+        current = runtime.list_sync()[0][0]
+        assert current['id'] == original['id'] and current['createdAt'] == original['createdAt']
+        assert current['updatedAt'] != original['updatedAt']
+        assert current['payload']['event'] == original['payload']['event']
+        assert current['payload']['data']['occurrence']['enrichments'] == []
+        assert runtime.count_summary_sync()['unread_total'] == 0
+        assert len(runtime.occurrences.deliveries(first['id'])) == 1
+        assert runtime.store._conn.execute('SELECT count(*) FROM ai_notification_embedding').fetchone()[0] == 0
+        assert queue.get_nowait() == {'op': 'invalidate', 'notification_id': original['id'], 'occurrence_id': first['id']}
+        event = queue.get_nowait()
+        assert queue.empty() and event['op'] == 'update' and event['notification']['id'] == original['id']
+        assert event['notification']['payload']['data']['occurrence']['enrichments'] == []
+        runtime.broadcaster.unsubscribe(queue)
+    asyncio.run(scenario())

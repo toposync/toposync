@@ -42,6 +42,8 @@ class Contribution(BaseModel):
     category: str = Field(min_length=1, max_length=128, strict=True)
     camera_id: Identifier
     source_id: Identifier
+    camera_name: str | None = Field(default=None, min_length=1, max_length=256, strict=True)
+    source_name: str | None = Field(default=None, min_length=1, max_length=256, strict=True)
     lifecycle: Literal["OPEN", "UPDATE", "CLOSE"]
     observed_at: Timestamp
     started_at: Timestamp | None = None
@@ -278,6 +280,8 @@ class OccurrenceStore:
                 "capture_instance", "capture_generation", "frame_sequence", "position",
                 "coordinate_reference", "mapping_revision", "position_error_metres", "association_reason", "gap")}
             sample = json.loads(_json(sample))
+            sample.update({key: getattr(contribution, key) for key in ("camera_name", "source_name")
+                           if getattr(contribution, key) is not None})
             previous = document["evidence"].get(contribution.evidence_id)
             if previous is not None and previous != sample:
                 raise OccurrenceConflict("occurrence_evidence_changed")
@@ -366,23 +370,26 @@ class OccurrenceStore:
             return {"id": identifier, "status": document["status"] if document["status"] == "deleted" else "expired"}
         return document
 
+    @staticmethod
+    def _projection(connection, document):
+        return {"source": "occurrences", "occurrence_id": document["id"],
+            "priority": "medium" if connection.execute("SELECT 1 FROM occurrence_delivery WHERE occurrence_id = ?", (document["id"],)).fetchone() else "silent",
+            "occurrence_revision": document["revision"], "access_scope": document["access_scope"],
+            "status": "closed" if document["status"] == "CLOSE" else "open",
+            "lifecycle": document["status"].lower(), "event": {
+                "started_ts": document["started_at"], "ts": document["last_observed_at"],
+                "duration_seconds": document["duration_seconds"], "duration_status": document["duration_status"],
+                "time_basis": document["clock_domain"]},
+            "data": {"occurrence": document}}
+
     def publish(self, identifier: str, *, now: float | None = None):
         now = TypeAdapter(Timestamp).validate_python(time.time() if now is None else now)
         with self._transaction() as connection:
             document = self._load(connection, identifier)
             if document is None or document["status"] in {"deleted", "expired"} or now >= document["expires_at"]:
                 return None
-            payload = {"source": "occurrences", "occurrence_id": identifier,
-                "priority": "medium" if connection.execute("SELECT 1 FROM occurrence_delivery WHERE occurrence_id = ?", (identifier,)).fetchone() else "silent",
-                "occurrence_revision": document["revision"], "access_scope": document["access_scope"],
-                "status": "closed" if document["status"] == "CLOSE" else "open",
-                "lifecycle": document["status"].lower(), "event": {
-                    "started_ts": document["started_at"], "ts": document["last_observed_at"],
-                    "duration_seconds": document["duration_seconds"], "duration_status": document["duration_status"],
-                    "time_basis": document["clock_domain"]},
-                "data": {"occurrence": document}}
             return self.notifications.upsert(type="occurrences.activity", title=document["title"],
-                payload=payload, dedupe_key="occurrence:" + identifier, now=now)
+                payload=self._projection(connection, document), dedupe_key="occurrence:" + identifier, now=now)
 
     def list(self, *, read_filter: ReadFilter, limit: int = 50, before: str | None = None,
              camera_id: str | None = None, area_id: str | None = None, participant_id: str | None = None,
@@ -453,8 +460,11 @@ class OccurrenceStore:
             document["enrichment_allowed"] = False
             document["enrichments"] = []
             self._save(connection, document, now=now, kind="enrichment_revoked")
-            # Derived notification content cannot remain readable while its projection is rebuilt.
-            invalidated = self._delete_notifications(connection, identifier)
+            # Scrub private content atomically without creating a new event or unread receipt.
+            rows = connection.execute("SELECT id FROM notification WHERE dedupe_key=?", ("occurrence:" + identifier,)).fetchall()
+            invalidated = tuple(row["id"] for row in rows)
+            connection.execute("UPDATE notification SET payload_json=?, description='', image_path=NULL, updated_at=? WHERE dedupe_key=?",
+                (_json(self._projection(connection, document)), now, "occurrence:" + identifier))
             return OccurrenceChange(document, True, invalidated_notifications=invalidated)
 
     @staticmethod

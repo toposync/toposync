@@ -47,6 +47,9 @@ class NotificationsRuntime:
 
     async def _invalidate_occurrence(self, change: OccurrenceChange) -> None:
         self.broadcaster.discard(change.invalidated_notifications)
+        for identifier in change.invalidated_notifications:
+            self.broadcaster.publish({"op": "invalidate", "notification_id": identifier,
+                "occurrence_id": change.document["id"]})
         results = await asyncio.gather(*(callback(change.document["id"]) for callback in (
             self.invalidate_occurrence_runtime, self.invalidate_occurrence_derivatives) if callback is not None), return_exceptions=True)
         for result in results:
@@ -196,8 +199,15 @@ class NotificationsRuntime:
         return await asyncio.to_thread(self.get_sync, notification_id, read_filter=read_filter)
 
     async def event_visible(self, event: dict, *, read_filter: ReadFilter) -> bool:
+        if event.get("op") == "invalidate":
+            identifier = event.get("occurrence_id")
+            return isinstance(identifier, str) and await asyncio.to_thread(
+                self.occurrences.get, identifier, read_filter=read_filter) is not None
         if event.get("op") == "resync":
             identifier = event.get("notification_id")
+            # Overflow carries no source data; the stream checks its own permission.
+            if identifier is None:
+                return True
             return isinstance(identifier, str) and await self.get(identifier, read_filter=read_filter) is not None
         queued = event.get("notification")
         if not isinstance(queued, dict) or not read_filter(queued.get("payload") or {}):

@@ -259,3 +259,17 @@ def test_record_preparation_rejects_a_provider_without_evidence_before_starting(
                 "capability": "test.presence", "scope": {"camera_ids": ["fixture"]}}]}})
         assert response.status_code == 422 and "observation evidence contract" in response.text
         assert "started" not in calls and not client.app.state.pipeline_demands.demands
+
+
+def test_activity_adapter_retains_source_labels_without_pixels():
+    async def scenario():
+        source = event()
+        source = replace(source, payload={**source.payload, 'camera_name': ' Frente ',
+            'source': {**source.payload['source'], 'source_name': ' Principal '}})
+        runtime = ActivityEvidenceRuntime()
+        adapted, = await runtime.process_packet(source, None)
+        value = adapted.payload['activity_observation']
+        assert value['camera_name'] == 'Frente' and value['source_name'] == 'Principal'
+        assert value['camera_id'] == 'a' and value['source_id'] == 'a'
+        assert not next(iter(runtime.members.values()))[1].artifacts
+    asyncio.run(scenario())

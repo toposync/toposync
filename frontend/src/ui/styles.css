@@ -8994,3 +8994,16 @@ a[aria-disabled="true"] {
 .geographicNotificationTarget.isSelected { z-index: 2; }
 .choiceList > button.choiceItem { text-align: left; color: inherit; font: inherit; }
 .choiceList > button.choiceItem > span { display: block; }
+
+.activityView { display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }
+.activityView h3, .activityView h4, .activityView p { margin: 0; }
+.activityParticipants { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 8px; }
+.activityParticipants button { color: inherit; text-align: start; cursor: pointer; display: grid; gap: 6px; }
+.activityParticipants button[aria-pressed="true"] { border-color: var(--accent, #60a5fa); }
+.activityParticipants button:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.activityActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.activityActions .chipButton { min-height: 36px; white-space: normal; }
+.activityObservations { padding-inline-start: 24px; margin: 0; }
+.activityObservations li { padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, .1); }
+.activityObservations li > span, .activityObservations li > strong { display: block; }
+.activityView details > summary { cursor: pointer; padding-block: 6px; }

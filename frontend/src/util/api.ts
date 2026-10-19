@@ -1455,7 +1455,7 @@ async function _parseHttpError(res: Response, fallback: string): Promise<string>
   return fallback;
 }
 
-async function requestJson<T>(input: string, init: RequestInit | undefined, fallback: string): Promise<T> {
+export async function requestJson<T>(input: string, init: RequestInit | undefined, fallback: string): Promise<T> {
   const res = await fetch(input, init);
   if (!res.ok) throw Object.assign(new Error(await _parseHttpError(res, fallback)), { status: res.status });
   return res.json();

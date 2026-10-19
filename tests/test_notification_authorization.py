@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import json
 from starlette.requests import Request
 
 from test_auth_local import _create_client, _setup_owner
@@ -112,6 +113,43 @@ def test_queued_stream_content_is_not_delivered_after_revocation(restricted_hist
             resource_type='core:global', include=['*'], exclude=['*'])
         with pytest.raises(StopAsyncIteration):
             await asyncio.wait_for(anext(iterator), timeout=1)
+        assert not runtime.broadcaster._subscribers
+    client.portal.call(scenario)
+
+
+@pytest.mark.parametrize('selected', [False, True])
+def test_activity_deletion_invalidates_open_clients_without_disclosing_other_scopes(restricted_history, selected):
+    from test_occurrences import contribution
+    from toposync.runtime.notifications.access import NotificationAccess
+    client, _, _ = restricted_history
+    async def scenario():
+        runtime = client.app.state.notifications
+        documents = {}
+        identifiers = {}
+        for camera in ('front', 'back'):
+            document = await runtime.record_occurrence(contribution(objective_id=camera, camera_id=camera,
+                scope={'camera_ids': [camera], 'area_ids': []}), retention_seconds=60, request_notice=True)
+            documents[camera] = document
+            identifiers[camera] = next(item['id'] for item in runtime.list_sync()[0]
+                if item['payload'].get('occurrence_id') == document['id'])
+        path = '/api/notifications/{notification_id}/stream' if selected else '/api/notifications/stream'
+        route = next(route for route in client.app.routes if getattr(route, 'path', '') == path)
+        request = stream_request(client, path)
+        access = NotificationAccess(request)
+        response = await route.endpoint(request, identifiers['front']) if selected else await route.endpoint(request)
+        iterator = response.body_iterator
+        assert await anext(iterator) == 'retry: 1000\n\n'
+        assert 'event: ready' in await anext(iterator)
+        for camera in ('back', 'front'):
+            await runtime.erase_occurrence(documents[camera]['id'], expected_revision=documents[camera]['revision'])
+            visible = await runtime.event_visible({'op': 'invalidate', 'notification_id': identifiers[camera],
+                'occurrence_id': documents[camera]['id']}, read_filter=access)
+            assert visible is (camera == 'front')
+        message = await asyncio.wait_for(anext(iterator), timeout=1)
+        assert json.loads(message.removeprefix('data: ')) == {'op': 'invalidate', 'notification_id': identifiers['front']}
+        assert await runtime.event_visible({'op': 'resync'}, read_filter=access)
+        assert not await runtime.event_visible({'op': 'resync', 'notification_id': identifiers['back']}, read_filter=access)
+        await iterator.aclose()
         assert not runtime.broadcaster._subscribers
     client.portal.call(scenario)
 

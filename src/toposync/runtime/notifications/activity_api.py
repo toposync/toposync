@@ -81,7 +81,15 @@ def install_activity_routes(app: FastAPI) -> None:
         store, document = await visible(request, identifier)
         document = await project(request, document)
         response.headers["Cache-Control"] = "private, no-store"
-        return {"occurrence": document, "revisions": await asyncio.to_thread(store.revisions, identifier), "deliveries": await asyncio.to_thread(store.deliveries, identifier)}
+        manage = False
+        try:
+            NotificationAccess(request).principal("core:occurrences:write")
+            manage = True
+        except HTTPException as exc:
+            if exc.status_code not in (401, 403):
+                raise
+        return {"occurrence": document, "permissions": {"manage": manage},
+            "revisions": await asyncio.to_thread(store.revisions, identifier), "deliveries": await asyncio.to_thread(store.deliveries, identifier)}
 
     @router.get("/{identifier}/evidence")
     async def evidence(request: Request, response: Response, identifier: str, evidence_id: str = Query(min_length=1, max_length=256)):
@@ -100,7 +108,7 @@ def install_activity_routes(app: FastAPI) -> None:
             "revision": document["revision"], "objective_id": document["objective_id"],
             "scope": document["scope"], "participants": list(document["participants"].values()),
             "coverage": document["coverage"], "evidence": [
-                {"id": key, "kind": "observation_metadata", "name": f"{value['camera_id']} · {value['observed_at']}",
+                {"id": key, "kind": "observation_metadata", "name": f"{value.get('camera_name') or value['camera_id']} · {value.get('source_name') or value['source_id']} · {value['observed_at']}",
                  "camera_id": value["camera_id"], "source_id": value["source_id"],
                  "href": f"./evidence?evidence_id={quote(key, safe='')}",
                  "uses": [identifier], "expires_at": document["expires_at"]}

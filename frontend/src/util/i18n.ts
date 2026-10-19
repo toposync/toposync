@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { pipelineOperatorTranslations } from "./pipelineOperatorTranslations";
 import { inspectionTranslations } from "../ui/streams/inspectionTranslations";
+import { activityTranslations } from "../ui/notifications/activityTranslations";
 
 export type Locale = "en" | "pt-BR";
 
@@ -30,6 +31,7 @@ const translationsByLocale: Record<Locale, Translations> = {
   en: {
     ...pipelineOperatorTranslations.en,
     ...inspectionTranslations.en,
+    ...activityTranslations.en,
     "core.map.element": "Element",
     "core.map.devices": "{{count}} devices",
     "core.map.selection_unpositioned": "{{name}} has no geographic position. Use Position on map beside its name.",
@@ -2788,6 +2790,7 @@ const translationsByLocale: Record<Locale, Translations> = {
   "pt-BR": {
     ...pipelineOperatorTranslations["pt-BR"],
     ...inspectionTranslations["pt-BR"],
+    ...activityTranslations["pt-BR"],
     "core.map.element": "Elemento",
     "core.map.devices": "{{count}} dispositivos",
     "core.map.selection_unpositioned": "{{name}} ainda não tem posição geográfica. Use Posicionar no mapa ao lado do nome.",

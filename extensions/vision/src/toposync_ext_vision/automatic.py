@@ -148,6 +148,13 @@ def register_automatic_capabilities(services):
             eligible = {"pose": {"person"}, "gestures": {"person"}, "recognition": {"person", "dog", "cat"}}.get(name)
             if eligible:
                 entry["fields"][0]["choices"] = [choice for choice in entry["fields"][0]["choices"] if choice["value"] in eligible]
+            if name == "recognition":
+                entry["resource_operator"] = "vision.recognize_identity"
+                entry["resource_consent_fields"] = ["policies"]
+                entry["resource_hint"] = {
+                    "en": "Use measured calibration values for the selected model. Without a calibrated policy, identity remains unconfirmed. Manage gallery references in People and pets; prepare models in the identity evidence operator in Flows.",
+                    "pt-BR": "Use valores de calibração medidos para o modelo selecionado. Sem política calibrada, a identidade permanece não confirmada. Gerencie referências da galeria em Pessoas e pets; prepare modelos no operador de evidência de identidade em Fluxos.",
+                }
             if name in {"pose", "gestures", "segmentation"}:
                 entry["operators"].append("vision.observation_detail")
                 task = "segmentation" if name == "segmentation" else "pose"

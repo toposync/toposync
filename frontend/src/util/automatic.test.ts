@@ -63,3 +63,14 @@ test("detail changes preserve duration and consent; changing the AI profile requ
   assert.deepEqual(changedProfile.consents, ["recognition"]);
   assert.deepEqual(intent, before);
 });
+
+test("editing recognition calibration renews its consent without changing observation duration", () => {
+  const intent = automaticDraft(snapshot, "en")!;
+  intent.condition = { minimum_duration_seconds: 12, resource_parameters: { policies: [] } };
+  intent.consents = ["recognition", "external"];
+  const capability = { ...snapshot.catalog[0], required_consents: ["recognition"], resource_consent_fields: ["policies"] };
+  const changed = replaceAutomaticResources(intent, capability, { policies: [{ calibration_revision: "reviewed" }] });
+  assert.deepEqual(changed.consents, ["external"]);
+  assert.equal(changed.condition.minimum_duration_seconds, 12);
+  assert.deepEqual(changed.consequence, intent.consequence);
+});

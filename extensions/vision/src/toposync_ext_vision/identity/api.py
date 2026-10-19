@@ -161,6 +161,28 @@ async def identity_history_selection(*, request: Request, get_store: Callable[[]
 def create_identity_router(get_store: Callable[[], IdentityStore]) -> APIRouter:
     router = APIRouter(prefix="/api/vision/identities", tags=["identity"])
 
+    @router.get("/recognition-options")
+    def recognition_options(request: Request):
+        _authorize(request, write=True)
+        from ..registry.manifests import build_default_model_registry
+        from .extraction import IdentityExtractor
+        from .pipelines import IdentityEvidenceConfig
+
+        registry = build_default_model_registry()
+        defaults = IdentityEvidenceConfig()
+        choices = []
+        for species in ("person", "cat", "dog"):
+            model_id = defaults.person_model_id if species == "person" else defaults.pet_model_id
+            manifest = registry.get_manifest(model_id)
+            detector = registry.get_manifest(defaults.face_detector_model_id) if species == "person" else None
+            if manifest is None or (species == "person" and detector is None):
+                continue
+            # Construction fingerprints metadata only; no weights, inference or gallery access.
+            extractor = IdentityExtractor(manifest, face_detector=detector)
+            choices.append({"species": species, "embedding_space": extractor.embedding_space,
+                            "model_name": manifest.display_name or model_id})
+        return {"choices": choices}
+
     def store() -> IdentityStore:
         try:
             return get_store()

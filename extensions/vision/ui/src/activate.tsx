@@ -6,6 +6,7 @@ import { ModelSetup } from "./ModelSetup";
 import { translations } from "./translations";
 import { manualResultTranslations } from "./ManualAssociationResult";
 import { Association, associationTranslations } from "./Association";
+import { RecognitionPolicyPanel, RecognitionPolicySummary } from "./RecognitionPolicy";
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(translations);
   host.i18n.registerTranslations(associationTranslations);
@@ -31,7 +32,10 @@ export function activate(host: ToposyncHost): void {
   });
   host.registerSettingsPanel({ id: "com.toposync.vision.identities", name: { key: "ext.vision.identity.title" }, description: { key: "ext.vision.identity.description" }, icon: "users", render: ({ i18n }) => <Gallery i18n={i18n} ui={host.ui} /> });
   host.registerNotificationDetailPanel?.({ id: "com.toposync.vision.identities", supports: supportsRecognition, render: (notification) => <NotificationIdentity key={notification.id} notification={notification} i18n={host.i18n} ui={host.ui} />, renderSummary: (notification) => <NotificationIdentity key={notification.id} notification={notification} i18n={host.i18n} summary /> });
-  for (const operatorId of ["vision.identity_context", "vision.identity_evidence", "vision.recognize_identity"]) {
+  host.registerPipelineOperatorPanel({ id: "vision.recognize_identity.panel", operatorId: "vision.recognize_identity",
+    renderSummary: config => <RecognitionPolicySummary i18n={host.i18n} config={config} />,
+    render: props => <><label hidden={props.purpose === "automatic"}><input type="checkbox" checked={props.config.enabled === true} onChange={event => props.updateConfig({ enabled: event.target.checked })} /> {props.i18n.t("ext.vision.identity.enabled")}</label><RecognitionPolicyPanel {...props} /></> });
+  for (const operatorId of ["vision.identity_context", "vision.identity_evidence"]) {
     host.registerPipelineOperatorPanel({ id: `${operatorId}.panel`, operatorId, render: ({ i18n, config, updateConfig, processingServerId }) => <div className="formGrid"><label><input type="checkbox" checked={config.enabled === true} onChange={(event) => updateConfig({ enabled: event.target.checked })} /> {i18n.t("ext.vision.identity.enabled")}</label><p>{i18n.t(`ext.vision.identity.${operatorId === "vision.identity_context" ? "contextHelp" : "operatorHelp"}`)}</p>{operatorId === "vision.identity_evidence" && <ModelSetup i18n={i18n} processingServerId={processingServerId} config={config} />}</div> });
   }
 }

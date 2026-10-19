@@ -184,6 +184,25 @@ def test_real_observation_graphs_compile_without_capture_or_inference(capability
     )
 
 
+def test_recognition_refinement_reuses_policy_contract_without_changing_duration():
+    from test_identity_store import policy
+    from toposync.runtime.services import ServiceRegistry
+    from toposync_ext_vision.automatic import register_automatic_capabilities
+
+    services = ServiceRegistry()
+    register_automatic_capabilities(services)
+    entry = next(item for item in asyncio.run(services.call("automatic.catalog.vision")) if item["id"] == "vision.recognition")
+    assert entry["resource_operator"] == "vision.recognize_identity"
+    assert entry["resource_consent_fields"] == ["policies"]
+    policies = [policy().model_dump()]
+    value = intent("vision.recognition", minimum_duration_seconds=17, resource_parameters={"policies": policies})
+    graph = plan_observation(intent=value, configuration=configuration())["graph"]
+    recognize = next(node for node in graph["nodes"] if node["operator"] == "vision.recognize_identity")
+    assert recognize["config"] == {"enabled": True, "policies": policies}
+    occurrence = next(node for node in graph["nodes"] if node["operator"] == "camera.frame_occurrence")
+    assert occurrence["config"]["minimum_duration_seconds"] == 17
+
+
 def test_shared_detection_and_independent_conditions_use_one_physical_prefix():
     producers = []
     for duration in (1, 10):

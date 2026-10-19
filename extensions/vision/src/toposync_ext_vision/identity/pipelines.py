@@ -9,7 +9,7 @@ import json
 import time
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from toposync.runtime.pipelines.execution import (
     PipelineRuntimeDependencies,
@@ -88,6 +88,12 @@ class RecognizeIdentityConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
     policies: list[RecognitionPolicy] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def unique_policies(self):
+        if len({(policy.species, policy.embedding_space) for policy in self.policies}) != len(self.policies):
+            raise ValueError("Each species and embedding space must have one recognition policy")
+        return self
 
 
 def occurrence_key(packet: Packet) -> str | None:

@@ -710,6 +710,75 @@ def test_source_preparation_detects_default_removal_clock_and_mapping_changes_wi
     assert plan_observation(intent=activity, configuration=changed)["graph"]["meta"]["outputs"][0]["production_scope"] == changed_scope
 
 
+@pytest.mark.parametrize("active", [
+    {"applies": True, "reason": "composition_changed"},
+    {"applies": True, "reason": "panorama_revision_mismatch"},
+    {"applies": False},
+    {"applies": True},
+    {"applies": True, "job": {"id": "replacement", "revision": 5, "source_id": "a"}},
+    {"applies": True, "job": {"id": "panorama-a", "revision": 6, "source_id": "a"}},
+    RuntimeError("private validation error"),
+    None,
+])
+def test_automatic_rejects_stored_ready_panorama_when_current_mapping_is_unavailable(active):
+    from toposync.runtime.services import ServiceRegistry
+    from toposync_ext_cameras.automatic import observation_preparation, register_automatic_planner
+
+    config = configuration()
+    config.compositions[0].elements[1].props = {"camera_id": "a", "panorama_mapping": {
+        "job_id": "panorama-a", "revision": 5, "source_id": "a", "status": "ready",
+    }}
+    activity = intent("vision.presence", kind="physical_area", multiple=True, association=association())
+    services = ServiceRegistry()
+    calls = []
+    def get_active(**kwargs):
+        calls.append(kwargs)
+        if isinstance(active, Exception):
+            raise active
+        return active
+    if active is not None:
+        services.register("cameras.panorama.get_active", get_active)
+    register_automatic_planner(services)
+    preparation = observation_preparation(intent=activity, configuration=config)
+    result = asyncio.run(services.call("automatic.plan.camera_observation", intent=activity, configuration=config))
+    assert "graph" not in result
+    assert result["state"] == "unavailable"
+    assert result["reason"] == "source_preparation_changed"
+    assert "private validation error" not in str(result)
+    assert asyncio.run(services.call("automatic.validate.camera_observation", intent=activity,
+        configuration=config, preparation=preparation)) is False
+    assert all(call == {"camera_id": "a", "source_id": "a", "composition_id": "ground"} for call in calls)
+
+
+def test_automatic_checks_current_panorama_only_for_mapped_area_sources():
+    from toposync.runtime.services import ServiceRegistry
+    from toposync_ext_cameras.automatic import observation_preparation, register_automatic_planner
+
+    config = configuration()
+    services = ServiceRegistry()
+    calls = []
+    def get_active(**kwargs):
+        calls.append(kwargs)
+        return {"applies": True, "job": {"id": "panorama-a", "revision": 5, "source_id": "a"}}
+    services.register("cameras.panorama.get_active", get_active)
+    register_automatic_planner(services)
+    activity = intent("vision.presence", kind="physical_area", multiple=True, association=association())
+    assert "graph" in asyncio.run(services.call("automatic.plan.camera_observation", intent=activity, configuration=config))
+    assert not calls
+    config.compositions[0].elements[1].props = {"camera_id": "a", "panorama_mapping": {
+        "job_id": "panorama-a", "revision": 5, "source_id": "a", "status": "ready",
+    }}
+    preparation = observation_preparation(intent=activity, configuration=config)
+    assert "graph" in asyncio.run(services.call("automatic.plan.camera_observation", intent=activity, configuration=config))
+    assert asyncio.run(services.call("automatic.validate.camera_observation", intent=activity,
+        configuration=config, preparation=preparation)) is True
+    assert len(calls) == 2
+    calls.clear()
+    camera = intent("vision.presence")
+    assert "graph" in asyncio.run(services.call("automatic.plan.camera_observation", intent=camera, configuration=config))
+    assert not calls
+
+
 @pytest.mark.parametrize(
     "field,value,reason",
     [

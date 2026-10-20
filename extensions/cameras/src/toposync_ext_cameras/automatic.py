@@ -762,8 +762,46 @@ def observation_targets(*, configuration):
 
 
 def register_automatic_planner(services):
+    async def current_mapping_available(*, intent, configuration):
+        if intent.scope.kind != "physical_area":
+            return True
+        sources, _, _ = resolve_sources(intent.scope, configuration)
+        for source in sources:
+            references = [element.props["panorama_mapping"]
+                for composition in configuration.compositions if composition.id == intent.scope.composition_id
+                for element in composition.elements
+                if element.props.get("camera_id") == source["camera_id"]
+                and element.props.get("panorama_mapping") is not None]
+            if not references:
+                continue
+            try:
+                active = await services.call("cameras.panorama.get_active", camera_id=source["camera_id"],
+                    source_id=source["source_id"], composition_id=intent.scope.composition_id)
+            except Exception:
+                return False
+            if not isinstance(active, dict) or active.get("applies") is not True or active.get("reason"):
+                return False
+            job = active.get("job")
+            if not isinstance(job, dict) or any(
+                not isinstance(reference, dict)
+                or job.get("id") != reference.get("job_id")
+                or job.get("revision") != reference.get("revision")
+                or job.get("source_id") != source["source_id"]
+                for reference in references
+            ):
+                return False
+        return True
+
+    async def validate(**kwargs):
+        return validate_observation_preparation(**kwargs) and await current_mapping_available(
+            intent=kwargs["intent"], configuration=kwargs["configuration"])
+
     async def plan(**kwargs):
         result = plan_observation(**kwargs)
+        if result.get("graph") and not await current_mapping_available(**kwargs):
+            result.pop("graph")
+            result.update(state="unavailable", reason="source_preparation_changed")
+            return result
         condition = ObservationCondition.model_validate(kwargs["intent"].condition)
         if (
             result.get("graph")
@@ -792,5 +830,5 @@ def register_automatic_planner(services):
         return result
 
     services.register("automatic.plan.camera_observation", plan)
-    services.register("automatic.validate.camera_observation", validate_observation_preparation)
+    services.register("automatic.validate.camera_observation", validate)
     services.register("automatic.targets.cameras", observation_targets)

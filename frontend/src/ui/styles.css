@@ -2959,6 +2959,12 @@ video {
   filter: blur(2px);
 }
 
+.streamsOverlayAutoHide.isHidden .railNotifications,
+.streamsOverlayAutoHide.isHidden .railNotifications .railTitle,
+.streamsOverlayAutoHide.isHidden .railNotifications .railScroll {
+  pointer-events: none;
+}
+
 .overlayTopRight.streamsOverlayAutoHide.isHidden {
   transform: translateY(-8px);
 }
@@ -4098,6 +4104,10 @@ video {
 }
 
 @media (max-width: 960px) {
+  .screenRoot:has(> .streamsRoot) > .overlayLeft.isOpen {
+    padding-bottom: calc(var(--control-height-m) * 2 + var(--space-2) * 6);
+  }
+
   .streamsGrid.is2x2 {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(4, minmax(0, 1fr));

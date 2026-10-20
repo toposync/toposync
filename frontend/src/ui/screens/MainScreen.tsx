@@ -546,6 +546,7 @@ export function MainScreen({
     }
     streamsOverlayTimerRef.current = window.setTimeout(() => {
       streamsOverlayTimerRef.current = null;
+      if (document.activeElement?.closest(".streamsHud, .streamsTileOverlay, .streamsOverlayAutoHide")) return;
       setStreamsOverlayVisible(false);
     }, STREAMS_OVERLAY_IDLE_MS);
   }, [clearStreamsOverlayTimer, autoHideStreamsOverlay]);
@@ -596,11 +597,15 @@ export function MainScreen({
 
     showOverlays();
     window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("pointerdown", showOverlays);
+    window.addEventListener("focusin", showOverlays);
     window.addEventListener("keydown", onKeyDown);
     document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("pointerdown", showOverlays);
+      window.removeEventListener("focusin", showOverlays);
       window.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       clearStreamsOverlayTimer();

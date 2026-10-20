@@ -52,7 +52,7 @@ export function Association({ i18n, config, updateConfig, configurationOnly = fa
     <h3>{t("title")}</h3>{!configurationOnly && <ManualAssociationResult key={scope} i18n={i18n} />}<p>{t("help")}</p>
     {!configurationOnly && <label>{t("scope")}<input value={scope} onChange={event => updateConfig({ scope: event.target.value })} pattern="(?:[a-zA-Z0-9_]|-)+" /></label>}
     <label>{t("horizon")}<input type="number" min="1" max="3600" value={Number(config.horizon_seconds ?? 120)} onChange={event => updateConfig({ horizon_seconds: event.target.valueAsNumber })} /></label>
-    {!configurationOnly && <label>{t("group")}<input type="number" min="0.01" max="20" step="any" value={config.group_distance_metres == null ? "" : Number(config.group_distance_metres)} onChange={event => updateConfig({ group_distance_metres: event.target.value === "" ? null : event.target.valueAsNumber })} /></label>}
+    <label>{t("group")}<input type="number" min="0.01" max="20" step="any" value={config.group_distance_metres == null ? "" : Number(config.group_distance_metres)} onChange={event => updateConfig({ group_distance_metres: event.target.value === "" ? null : event.target.valueAsNumber })} /></label>
     <h4>{t("sources")}</h4>
     {sources.map((source, index) => <fieldset key={index}><legend>{t("source")} {index + 1}</legend>
       {([['camera_id','camera'],['source_id','source'],['clock_domain','clock'],['coordinate_reference','coordinates']] as const).map(([key,label]) => <label key={key}>{t(label)}<input readOnly={configurationOnly && key !== 'clock_domain'} value={source[key]} onChange={event => sourceChange(index, { [key]: event.target.value })} /></label>)}

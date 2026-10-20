@@ -7,7 +7,7 @@ import { fetchCameraOnvifCapabilities, observeCameraOnvifEvents } from "../api/c
 type Translate = ReturnType<HostI18n["useI18n"]>["t"];
 
 export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, processingServerId, value, onChange, onPendingChange, t, disabled, automaticWindow = false }: {
-  camera: CameraConfig; sourceId: string; preset: CameraPipelinePreset; processingServerId: string;
+  camera: Omit<CameraConfig, "clock_domain">; sourceId: string; preset: CameraPipelinePreset; processingServerId: string;
   onPendingChange?: (pending: boolean) => void;
   value?: CameraOnvifOptimization; onChange: (value?: CameraOnvifOptimization, profileToken?: string) => void; t: Translate; disabled: boolean;
   automaticWindow?: boolean;

@@ -79,6 +79,7 @@ export type CameraConfig = {
   id: string;
   name: string;
   enabled: boolean;
+  clock_domain: string;
   control: CameraControlConfig;
   onvif?: CameraOnvifConfig | null;
   sources: CameraSourceConfig[];

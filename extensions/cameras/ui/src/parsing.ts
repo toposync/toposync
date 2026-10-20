@@ -537,6 +537,7 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
       id,
       name: readString(device.name),
       enabled: typeof device.enabled === "boolean" ? device.enabled : true,
+      clock_domain: readString(device.clock_domain).trim() || `device:${id}`,
       control: {
         type: controlType,
         automation_exclusive_control_confirmed:
@@ -559,7 +560,7 @@ export function serializeCameras(settings: CameraConfig[]): Record<string, unkno
         name: camera.name,
         kind: "camera",
         enabled: camera.enabled,
-        clock_domain: `device:${camera.id}`,
+        clock_domain: camera.clock_domain,
         control: {
           type: camera.control?.type === "onvif" ? "onvif" : "none",
           automation_exclusive_control_confirmed:

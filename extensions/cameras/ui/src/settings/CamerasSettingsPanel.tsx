@@ -893,6 +893,7 @@ function CamerasSettingsPanelContent({
       id,
       name: controlType === "onvif" ? "Nova câmera ONVIF" : "Nova câmera manual",
       enabled: true,
+      clock_domain: `device:${id}`,
       control: {
         type: controlType,
       },
@@ -919,6 +920,7 @@ function CamerasSettingsPanelContent({
       id,
       name,
       enabled: true,
+      clock_domain: `device:${id}`,
       control: {
         type: "onvif",
       },

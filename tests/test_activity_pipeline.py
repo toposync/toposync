@@ -41,6 +41,8 @@ def event(camera="a", sequence=1, lifecycle=Lifecycle.OPEN):
 def dependencies(history):
     services = ServiceRegistry()
     services.register("occurrences.record", history.record_occurrence)
+    services.register("occurrences.register_recorder", history.register_occurrence_recorder)
+    services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
     return PipelineRuntimeDependencies(services=services)
 
 
@@ -212,6 +214,8 @@ def test_durable_result_queue_keeps_every_update_under_slow_storage(tmp_path):
                 finished.set()
         services = ServiceRegistry()
         services.register("occurrences.record", record)
+        services.register("occurrences.register_recorder", history.register_occurrence_recorder)
+        services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
         compiled = compiler.compile_many(demands.pipelines(), catalog=[producer])
         runtime = PipelineBundleRuntime(compiled, operators,
             PipelineRuntimeDependencies(services=services, demand_registry=demands))
@@ -266,6 +270,8 @@ def test_recording_joins_a_running_manual_producer_without_restarting_it(tmp_pat
             recorded.set()
             return result
         services.register("occurrences.record", record)
+        services.register("occurrences.register_recorder", history.register_occurrence_recorder)
+        services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
         def compile():
             return compiler.compile_many(demands.pipelines(), catalog=[producer])
         runtime = PipelineBundleRuntime(compile(), operators,
@@ -283,17 +289,67 @@ def test_recording_joins_a_running_manual_producer_without_restarting_it(tmp_pat
             await pending.put(event(sequence=5, lifecycle=Lifecycle.UPDATE))
             await asyncio.wait_for(recorded.wait(), 1)
             assert len(starts) == 1 and manual.received == 2
+            # Replacing a recorder for a rename keeps semantic observation available.
+            automatic.consequence["config"]["title"] = "Renamed garage"
+            await runtime.reconcile(compile())
+            identifier = OccurrenceStore.identifier("garage", "visit-1")
+            result = history.occurrences.get(identifier, read_filter=lambda _: True)
+            assert result["observation_state"] == "observing"
+            demands.release(automatic.id)
+            await runtime.reconcile(compile())
+            result = history.occurrences.get(identifier, read_filter=lambda _: True)
+            assert result["observation_state"] == "interrupted" and result["status"] == "OPEN"
+            assert result["duration_seconds"] is None
+            automatic = demand("automatic")
+            automatic.consequence = {"operator": "core.record_occurrence", "config": settings()}
+            await runtime.reconcile(compile())
+            assert history.occurrences.get(identifier, read_filter=lambda _: True)["observation_state"] == "interrupted"
             recorded.clear()
             await pending.put(event(sequence=6, lifecycle=Lifecycle.CLOSE))
             await asyncio.wait_for(recorded.wait(), 1)
             result = history.occurrences.get(OccurrenceStore.identifier("garage", "visit-1"), read_filter=lambda _: True)
             assert result["status"] == "CLOSE" and result["started_at"] == 5
+            assert result["ended_at"] == 6 and result["duration_seconds"] is None
             assert result["coverage"]["gaps"] and len(history.occurrences.deliveries(result["id"])) == 1
         finally:
             for identifier in list(demands.demands): demands.release(identifier)
             await runtime.stop()
             await runtime.dependencies.execution_scheduler.shutdown()
     asyncio.run(asyncio.wait_for(scenario(), 4))
+
+
+def test_cancelled_record_is_drained_before_last_recorder_interrupts(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        services = dependencies(history)
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def record(**kwargs):
+            entered.set()
+            await release.wait()
+            return await history.record_occurrence(**kwargs)
+        services.services.register("occurrences.record", record)
+        sink = RecordOccurrenceRuntime(settings(), services)
+        await sink.prepare(None)
+        await sink.prepare(None)
+        assert len(history._occurrence_recorders) == 1
+        value = (await ActivityEvidenceRuntime().process_packet(event(), None))[0]
+        processing = asyncio.create_task(sink.process_packet(value, None))
+        await entered.wait()
+        processing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await processing
+        stopping = asyncio.create_task(sink.shutdown())
+        await asyncio.sleep(0)
+        assert not stopping.done()
+        assert await sink.process_packet(value, None) == []
+        release.set()
+        await stopping
+        result = history.occurrences.get(OccurrenceStore.identifier("garage", "visit-1"), read_filter=lambda _: True)
+        assert result["observation_state"] == "interrupted"
+        assert result["revision"] == 2 and len(history.occurrences.deliveries(result["id"])) == 1
+        await sink.shutdown()
+        assert not history._occurrence_recorders
+    asyncio.run(asyncio.wait_for(scenario(), 2))
 
 
 def test_admission_retains_observed_start_without_extending_time_at_close(tmp_path):

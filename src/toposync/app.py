@@ -1344,6 +1344,8 @@ async def _lifespan(app: FastAPI):
     await asyncio.to_thread(notifications.occurrences.recover)
     services.register("notifications.upsert", notifications.upsert)
     services.register("occurrences.record", notifications.record_occurrence)
+    services.register("occurrences.register_recorder", notifications.register_occurrence_recorder)
+    services.register("occurrences.unregister_recorder", notifications.unregister_occurrence_recorder)
     services.register("occurrences.enrich", notifications.enrich_occurrence)
     services.register("occurrences.enrichment_allowed", notifications.enrichment_allowed)
 

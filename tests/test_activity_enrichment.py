@@ -146,6 +146,8 @@ def test_record_and_close_precede_slow_enrichment_and_privacy_is_rechecked(tmp_p
                 enriched.set()
             return document
         services.register("occurrences.record", record)
+        services.register("occurrences.register_recorder", history.register_occurrence_recorder)
+        services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
         services.register("occurrences.enrichment_allowed", history.enrichment_allowed)
         services.register("occurrences.enrich", enrich)
         services.register("ai.infer.evaluate_condition", infer)

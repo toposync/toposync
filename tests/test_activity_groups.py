@@ -132,6 +132,8 @@ def test_trio_group_history_keeps_members_sources_overlapping_objectives_and_rep
                     finished.set()
             return document
         services.register("occurrences.record", record)
+        services.register("occurrences.register_recorder", history.register_occurrence_recorder)
+        services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
         report = PipelineGraphCompiler(operators).compile_many([Pipeline(name="group", graph=graph)])
         runtime = PipelineBundleRuntime(report, operators, PipelineRuntimeDependencies(services=services))
         await runtime.start()

@@ -6,13 +6,14 @@ import { activityError, activityIdentifier, activityUrl, changeActivity, getActi
 
 type View = { key: string; data: ActivityDetail | null; error: string | null };
 const pageSize = 30;
+const activityStatus = (document?: ActivityDetail["occurrence"]) => document?.status !== "CLOSE" && document?.observation_state === "interrupted" ? "interrupted" : document?.status || "OPEN";
 
 export function ActivitySummary({ notification }: { notification: Notification }) {
   const { t } = i18n.useI18n();
   const payload = notification.payload as { data?: { occurrence?: ActivityDetail["occurrence"] } } | undefined;
   const document = payload?.data?.occurrence;
   const count = document?.participants && typeof document.participants === "object" ? Object.keys(document.participants).length : 0;
-  return <span className="notificationCardDesc">{t("activity.card", { count, status: t(`activity.${document?.status || "OPEN"}`) })}</span>;
+  return <span className="notificationCardDesc">{t("activity.card", { count, status: t(`activity.${activityStatus(document)}`) })}</span>;
 }
 
 export function ActivityView({ notification }: { notification: Notification }) {
@@ -104,11 +105,11 @@ export function ActivityView({ notification }: { notification: Notification }) {
   const name = (item: typeof participant, index: number) => item.identification.status === "recognized" && item.identification.name
     ? item.identification.name : t("activity.anonymous", { number: index + 1 });
   return <section className="activityView" aria-label={t("activity.title")}>
-    <h3>{t("activity.title")} · {t(`activity.${occurrence.status}`)}</h3>
+    <h3>{t("activity.title")} · {t(`activity.${activityStatus(occurrence)}`)}</h3>
     {data.maintenance_error && <p role="alert">{t("activity.maintenance_error")}</p>}
     <p className="muted">{t("activity.coverage")}</p>
     <div className="notificationDetailsGrid">
-      <div className="notificationDetailField">{occurrence.duration_seconds === null ? t("activity.incomparable") : t("activity.duration", { seconds: number(occurrence.duration_seconds) })}</div>
+      <div className="notificationDetailField">{occurrence.duration_seconds === null ? t(occurrence.duration_status === "interrupted" ? "activity.duration_interrupted" : "activity.incomparable") : t("activity.duration", { seconds: number(occurrence.duration_seconds) })}</div>
       <div className="notificationDetailField">{t("activity.expires", { date: date(occurrence.expires_at) })}</div>
       <div className="notificationDetailField">{t("activity.revision", { number: occurrence.revision })}</div>
     </div>

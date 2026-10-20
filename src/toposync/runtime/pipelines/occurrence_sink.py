@@ -5,6 +5,7 @@ from typing import Literal
 from dataclasses import replace
 import hashlib
 import json
+import asyncio
 
 from ..notifications.occurrences import Contribution, Enrichment, Identifier, OccurrenceConflict, OccurrenceReference, Scope
 from .execution import SinkRuntime, TransformOperatorRuntime
@@ -29,17 +30,50 @@ class RecordOccurrenceRuntime(SinkRuntime):
     def __init__(self, config, dependencies):
         self.config = RecordOccurrenceConfig.model_validate(config)
         self.services = dependencies.services
+        self._recorder_token = None
+        self._pending_record = None
+        self._closed = False
 
     async def prepare(self, context):
         if any(getattr(self.config, key) is None for key in ("objective_id", "title", "kind", "scope")):
             raise ValueError("Select an activity objective and explicit source scope")
-        required = {"occurrences.record"}
+        required = {"occurrences.record", "occurrences.register_recorder", "occurrences.unregister_recorder"}
         if self.config.enrich:
             required.update({"occurrences.enrichment_allowed", "occurrences.enrich"})
         if self.services is None or not required <= set(self.services.list_ids()):
             raise RuntimeError("Occurrence history is unavailable")
+        if self._recorder_token is None:
+            self._recorder_token = await self.services.call("occurrences.register_recorder",
+                objective_id=self.config.objective_id, kind=self.config.kind, scope=self.config.scope)
+            self._closed = False
+
+    async def shutdown(self):
+        self._closed = True
+        async def finish():
+            try:
+                if self._pending_record is not None:
+                    await self._pending_record
+            finally:
+                self._pending_record = None
+                if self._recorder_token is not None:
+                    token = self._recorder_token
+                    self._recorder_token = None
+                    await self.services.call("occurrences.unregister_recorder", token=token)
+        cleanup = asyncio.create_task(finish())
+        cancelled = False
+        # A database write in a thread must finish before observation is marked interrupted.
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def process_packet(self, packet, context):
+        if self._closed:
+            return []
         evidence = packet.payload.get("activity_observation")
         if not isinstance(evidence, dict):
             raise ValueError("Occurrence evidence is required")
@@ -51,10 +85,11 @@ class RecordOccurrenceRuntime(SinkRuntime):
         if value.lifecycle != packet.lifecycle.value.upper():
             raise ValueError("Occurrence lifecycle differs from its packet")
         try:
-            result = await self.services.call("occurrences.record", contribution=value,
+            self._pending_record = asyncio.create_task(self.services.call("occurrences.record", contribution=value,
                 retention_seconds=float(self.config.retention_days * 86400),
                 request_notice=self.config.notice == "simulated", admit_live_update=True,
-                **({"return_change": True} if self.config.enrich else {}))
+                **({"return_change": True} if self.config.enrich else {})))
+            result = await asyncio.shield(self._pending_record)
         except OccurrenceConflict as error:
             if str(error) == "occurrence_requires_open" and (value.lifecycle == "CLOSE" or value.replay):
                 if context is not None:
@@ -66,7 +101,10 @@ class RecordOccurrenceRuntime(SinkRuntime):
             if context is not None:
                 context.inspect("filtered", packet, reason="occurrence_unavailable")
             return []
-        if not self.config.enrich or not result.changed or value.replay:
+        finally:
+            if self._pending_record is not None and self._pending_record.done():
+                self._pending_record = None
+        if self._closed or not self.config.enrich or not result.changed or value.replay:
             return []
         document = result.document
         if document["status"] == "CLOSE" or not document["enrichment_allowed"]:

@@ -246,7 +246,7 @@ class OccurrenceStore:
                     "scope": contribution.scope.model_dump(mode="json"),
                     "access_scope": {"complete": True, "camera_ids": contribution.scope.camera_ids,
                                      "area_ids": contribution.scope.area_ids},
-                    "status": "OPEN", "revision": 0, "privacy_revision": 1, "enrichment_allowed": True,
+                    "status": "OPEN", "observation_state": "observing", "revision": 0, "privacy_revision": 1, "enrichment_allowed": True,
                     "created_at": now, "updated_at": now, "expires_at": now + retention_seconds,
                     "started_at": contribution.started_at if contribution.started_at is not None else contribution.observed_at,
                     "last_observed_at": contribution.observed_at,
@@ -300,23 +300,53 @@ class OccurrenceStore:
             document["members"][contribution.member_id] = {"participant_id": contribution.participant_id,
                 "closed": contribution.lifecycle == "CLOSE"}
             document["coverage"]["gaps"] |= contribution.gap
+            if (previous is None and not contribution.replay
+                    and contribution.clock_domain == document["clock_domain"]
+                    and contribution.observed_at > document["last_observed_at"]):
+                document["observation_state"] = "observing"
             if document["clock_domain"] != contribution.clock_domain:
                 document["duration_status"] = "incomparable_clocks"
-            if document["duration_status"] == "observed":
+            if document["duration_status"] != "incomparable_clocks":
                 start = contribution.started_at if contribution.started_at is not None else contribution.observed_at
                 # A late consumer cannot recover an unobserved interval from later producer updates.
                 start = max(document.get("admitted_at", 0), start)
                 document["started_at"] = min(document["started_at"], start)
                 document["last_observed_at"] = max(document["last_observed_at"], contribution.observed_at)
-                document["duration_seconds"] = document["last_observed_at"] - document["started_at"]
+                document["duration_seconds"] = (document["last_observed_at"] - document["started_at"]
+                    if document["duration_status"] == "observed" else None)
             else:
                 document["duration_seconds"] = None
             document["status"] = "UPDATE" if document["revision"] else "OPEN"
             if all(value["closed"] for value in document["members"].values()):
-                document.update(status="CLOSE", ended_at=document["last_observed_at"] if document["duration_status"] == "observed" else None,
+                document.update(status="CLOSE", ended_at=document["last_observed_at"] if document["duration_status"] != "incomparable_clocks" else None,
                     close_reason=contribution.reason)
             self._save(connection, document, now=now, kind="ADMIT" if admitted else contribution.lifecycle, evidence_id=contribution.evidence_id)
             return OccurrenceChange(document, True, requested_delivery)
+
+    def interrupt(self, objective_id: str, kind: str, scope: Scope, *, now: float | None = None) -> list[str]:
+        now = TypeAdapter(Timestamp).validate_python(time.time() if now is None else now)
+        scope = Scope.model_validate(scope).model_dump(mode="json")
+        changed, cursor = [], ""
+        while True:
+            with self._transaction() as connection:
+                rows = connection.execute("""SELECT id, document_json FROM occurrence
+                    WHERE objective_id = ? AND status IN ('OPEN', 'UPDATE') AND id > ?
+                    ORDER BY id LIMIT 250""", (objective_id, cursor)).fetchall()
+                for row in rows:
+                    document = json.loads(row["document_json"])
+                    if (document["kind"] != kind or document["scope"] != scope or now >= document["expires_at"]
+                            or document.get("observation_state") == "interrupted"):
+                        continue
+                    document["observation_state"] = "interrupted"
+                    document["coverage"]["gaps"] = True
+                    if document["duration_status"] == "observed":
+                        document["duration_status"] = "interrupted"
+                    document["duration_seconds"] = None
+                    self._save(connection, document, now=now, kind="interrupted")
+                    changed.append(document["id"])
+            if not rows:
+                return changed
+            cursor = rows[-1]["id"]
 
     def _enrichment_document(self, connection, reference: OccurrenceReference, now: float):
         document = self._load(connection, reference.occurrence_id)
@@ -386,7 +416,7 @@ class OccurrenceStore:
         return {"source": "occurrences", "occurrence_id": document["id"],
             "priority": "medium" if connection.execute("SELECT 1 FROM occurrence_delivery WHERE occurrence_id = ?", (document["id"],)).fetchone() else "silent",
             "occurrence_revision": document["revision"], "access_scope": document["access_scope"],
-            "status": "closed" if document["status"] == "CLOSE" else "open",
+            "status": "closed" if document["status"] == "CLOSE" else "interrupted" if document.get("observation_state") == "interrupted" else "open",
             "lifecycle": document["status"].lower(), "event": {
                 "started_ts": document["started_at"], "ts": document["last_observed_at"],
                 "duration_seconds": document["duration_seconds"], "duration_status": document["duration_status"],
@@ -535,7 +565,7 @@ class OccurrenceStore:
                 rows = connection.execute("SELECT document_json FROM occurrence WHERE status IN ('OPEN', 'UPDATE') LIMIT 250").fetchall()
                 for row in rows:
                     document = json.loads(row["document_json"])
-                    document.update(status="CLOSE", ended_at=document["last_observed_at"] if document["duration_status"] == "observed" else None,
+                    document.update(status="CLOSE", ended_at=document["last_observed_at"] if document["duration_status"] != "incomparable_clocks" else None,
                         close_reason="runtime_restart")
                     for member in document["members"].values():
                         member["closed"] = True

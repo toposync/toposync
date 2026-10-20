@@ -16,6 +16,7 @@ export type ActivityDetail = {
     id: string; title: string; revision: number; status: "OPEN" | "UPDATE" | "CLOSE";
     started_at: number; ended_at: number | null; last_observed_at: number;
     duration_seconds: number | null; duration_status: string; clock_domain: string;
+    observation_state?: "observing" | "interrupted";
     close_reason: string | null; expires_at: number; enrichment_allowed: boolean;
     participants: Record<string, ActivityParticipant>; evidence: Record<string, ActivityEvidence>;
     coverage: { gaps: boolean; continuous_video: boolean };

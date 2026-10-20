@@ -40,6 +40,79 @@ def record(store, value=None, **kwargs):
     return store.record(value or contribution(), retention_seconds=60.0, now=1000.0, **kwargs)
 
 
+def test_pause_preserves_episode_and_notice_without_claiming_continuous_duration(tmp_path):
+    async def scenario():
+        runtime = NotificationsRuntime(data_dir=tmp_path)
+        value = contribution()
+        key = dict(objective_id=value.objective_id, kind=value.kind, scope=value.scope)
+        first = await runtime.register_occurrence_recorder(**key)
+        second = await runtime.register_occurrence_recorder(**key)
+        document = await runtime.record_occurrence(value, retention_seconds=60.0, request_notice=True)
+        identifier = document["id"]
+        get = lambda: runtime.occurrences.get(identifier, read_filter=lambda _: True)
+        await runtime.unregister_occurrence_recorder(token=first)
+        assert get()["observation_state"] == "observing"
+        await runtime.unregister_occurrence_recorder(token=second)
+        interrupted = get()
+        assert interrupted["status"] == "OPEN" and interrupted["observation_state"] == "interrupted"
+        assert interrupted["duration_status"] == "interrupted" and interrupted["duration_seconds"] is None
+        assert interrupted["ended_at"] is None and interrupted["last_observed_at"] == 10
+        assert interrupted["coverage"]["gaps"] and not interrupted["members"]["visit-1"]["closed"]
+        resumed = await runtime.register_occurrence_recorder(**key)
+        assert get() == interrupted
+        await runtime.record_occurrence(value, retention_seconds=60.0)
+        assert get() == interrupted
+        await runtime.record_occurrence(contribution('replayed', lifecycle='UPDATE', observed_at=12.0, replay=True), retention_seconds=60.0)
+        assert get()["observation_state"] == "interrupted"
+        await runtime.record_occurrence(contribution('fresh', lifecycle='UPDATE', observed_at=15.0), retention_seconds=60.0)
+        assert get()["observation_state"] == "observing" and get()["duration_seconds"] is None
+        await runtime.record_occurrence(contribution('close', lifecycle='CLOSE', observed_at=16.0), retention_seconds=60.0)
+        closed = get()
+        assert closed["status"] == "CLOSE" and closed["ended_at"] == 16
+        await runtime.unregister_occurrence_recorder(token=resumed)
+        assert get() == closed
+        assert len(runtime.occurrences.deliveries(identifier)) == 1
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('terminal', ['deleted', 'expired'])
+def test_interruption_preserves_terminal_privacy_and_other_scopes(tmp_path, terminal):
+    store = NotificationsRuntime(data_dir=tmp_path).occurrences
+    value = contribution()
+    identifier = record(store).document['id']
+    other = record(store, contribution('other', episode_id='other', scope={'camera_ids': ['front']})).document
+    store.erase(identifier, expected_revision=1, reason=terminal)
+    assert store.interrupt(value.objective_id, value.kind, value.scope) == []
+    assert store.get(identifier, read_filter=lambda _: True)['status'] == terminal
+    assert store.get(other['id'], read_filter=lambda _: True) == other
+    with pytest.raises(OccurrenceConflict, match='occurrence_unavailable'):
+        record(store, contribution('late', lifecycle='UPDATE', observed_at=15.0))
+
+
+def test_failed_interruption_publication_does_not_leave_a_live_recorder(tmp_path, monkeypatch):
+    async def scenario():
+        runtime = NotificationsRuntime(data_dir=tmp_path)
+        value = contribution()
+        key = dict(objective_id=value.objective_id, kind=value.kind, scope=value.scope)
+        token = await runtime.register_occurrence_recorder(**key)
+        first = await runtime.record_occurrence(value, retention_seconds=60.0)
+        publish = runtime._publish_occurrence
+        async def fail(*args, **kwargs):
+            raise RuntimeError('publication failed')
+        monkeypatch.setattr(runtime, '_publish_occurrence', fail)
+        with pytest.raises(RuntimeError, match='publication failed'):
+            await runtime.unregister_occurrence_recorder(token=token)
+        assert not runtime._occurrence_recorders
+        monkeypatch.setattr(runtime, '_publish_occurrence', publish)
+        token = await runtime.register_occurrence_recorder(**key)
+        await runtime.record_occurrence(contribution('resume', lifecycle='UPDATE', observed_at=15.0), retention_seconds=60.0)
+        await runtime.unregister_occurrence_recorder(token=token)
+        result = runtime.occurrences.get(first['id'], read_filter=lambda _: True)
+        assert result['observation_state'] == 'interrupted'
+        assert not runtime._occurrence_recorders
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('category', ['person', 'car'])
 def test_independent_participants_two_cameras_one_occurrence_and_one_simulated_notice(tmp_path, category):
     runtime = NotificationsRuntime(data_dir=tmp_path)

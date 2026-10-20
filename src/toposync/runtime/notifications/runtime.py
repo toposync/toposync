@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from .access import ReadFilter
 from .events import EventBroadcaster
-from .occurrences import Contribution, Enrichment, OccurrenceStore, OccurrenceChange, OccurrenceReference
+from .occurrences import Contribution, Enrichment, OccurrenceStore, OccurrenceChange, OccurrenceReference, Scope
 from .store import NotificationRecord, NotificationStore
 
 
@@ -46,6 +47,25 @@ class NotificationsRuntime:
         self.invalidate_occurrence_runtime: Callable[[str], Awaitable[None]] | None = None
         self.invalidate_occurrence_derivatives: Callable[[str], Awaitable[None]] | None = None
         self.retention_error: str | None = None
+        self._occurrence_recorders: dict[str, tuple[str, str, str]] = {}
+        self._occurrence_recorder_lock = asyncio.Lock()
+
+    async def register_occurrence_recorder(self, *, objective_id: str, kind: str, scope: Scope) -> str:
+        key = (objective_id, kind, Scope.model_validate(scope).model_dump_json())
+        async with self._occurrence_recorder_lock:
+            token = uuid.uuid4().hex
+            self._occurrence_recorders[token] = key
+            return token
+
+    async def unregister_occurrence_recorder(self, *, token: str) -> None:
+        async with self._occurrence_recorder_lock:
+            key = self._occurrence_recorders.pop(token, None)
+            if key is None:
+                return
+            if key not in self._occurrence_recorders.values():
+                identifiers = await asyncio.to_thread(self.occurrences.interrupt, key[0], key[1], Scope.model_validate_json(key[2]))
+                for identifier in identifiers:
+                    await self._publish_occurrence(identifier)
 
     async def maintain_occurrences(self) -> None:
         while True:

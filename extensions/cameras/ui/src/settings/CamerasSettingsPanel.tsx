@@ -1381,6 +1381,18 @@ function CamerasSettingsPanelContent({
                       <div><dt>{t("ext.cameras.settings.technical.identifier")}</dt><dd>{activeCamera.onvif?.device_id || t("ext.cameras.settings.technical.unknown")}</dd></div>
                       <div><dt>{t("ext.cameras.settings.technical.hardware")}</dt><dd>{activeCamera.onvif?.hardware || t("ext.cameras.settings.technical.unknown")}</dd></div>
                     </dl>
+                    <label className="field">
+                      {t("ext.cameras.settings.technical.clock_domain")}
+                      <input
+                        key={`${activeCamera.id}:${activeCamera.clock_domain}`}
+                        defaultValue={activeCamera.clock_domain}
+                        aria-describedby={`camera-clock-help-${activeCamera.id}`}
+                        onBlur={(event) => updateCamera(activeCamera.id, (camera) => ({ ...camera, clock_domain: event.target.value.trim() || `device:${camera.id}` }))}
+                      />
+                    </label>
+                    <div className="settingsDescription" id={`camera-clock-help-${activeCamera.id}`}>
+                      {t("ext.cameras.settings.technical.clock_domain_help")}
+                    </div>
                     <button className="chipButton" type="button" onClick={() => setOnvifResourcesCameraId(activeCamera.id)}>{t("ext.cameras.onvif.title")}</button>
                   </details>
                 </div>

@@ -302,10 +302,6 @@ def _assert_extensions(payload: object) -> list[str]:
             )
         remote_urls.append(remote_path)
 
-    vision_frontend = by_id["com.toposync.vision"].get("frontend")
-    if vision_frontend not in (None, {}):
-        raise RuntimeError("Vision should not expose a frontend remote in the default bundle")
-
     return sorted(remote_urls)
 
 

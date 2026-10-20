@@ -5,6 +5,8 @@ import tomllib
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,6 +34,25 @@ def test_distribution_smoke_uses_shared_frontend_builds(monkeypatch) -> None:
         ["npm", "run", "build:frontend"],
         ["npm", "run", "build:extensions"],
     ]
+
+
+def test_distribution_smoke_accepts_manifest_declared_frontends() -> None:
+    smoke = _load_distribution_smoke_script()
+    payload = [
+        {
+            "id": identifier,
+            "frontend": {"remote_entry_url": smoke.EXPECTED_FRONTEND_REMOTES[identifier]},
+        }
+        if identifier in smoke.EXPECTED_FRONTEND_REMOTES
+        else {"id": identifier}
+        for identifier in smoke.EXPECTED_EXTENSION_IDS
+    ]
+
+    assert smoke._assert_extensions(payload) == sorted(smoke.EXPECTED_FRONTEND_REMOTES.values())
+    vision = next(item for item in payload if item["id"] == "com.toposync.vision")
+    vision.pop("frontend")
+    with pytest.raises(RuntimeError, match="missing frontend metadata"):
+        smoke._assert_extensions(payload)
 
 
 def test_distribution_workflow_validates_extension_wheels() -> None:

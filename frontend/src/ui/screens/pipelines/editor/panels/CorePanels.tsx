@@ -1897,11 +1897,11 @@ export function PublishVideoConfigCard({ config, showAdvanced, onUpdateConfig }:
   const { t } = i18n.useI18n();
   const transmissionId = String((config as any).transmission_id ?? "").trim();
   const publicationEnabled = Boolean((config as any).publication_enabled ?? !transmissionId);
-  const publicationLiveViewLabel = String((config as any).publication_live_view_label ?? "").trim();
+  const publicationLiveViewLabel = String((config as any).publication_live_view_label ?? "");
   const publicationVariantId = String((config as any).publication_variant_id ?? "").trim();
   const publicationVariantLabel = String(
     (config as any).publication_variant_label ?? (config as any).publication_label ?? "",
-  ).trim();
+  );
   const publicationRoleRaw = String((config as any).publication_role ?? "custom").trim().toLowerCase();
   const publicationRole = ["main", "sub", "zoom", "custom"].includes(publicationRoleRaw) ? publicationRoleRaw : "custom";
   const publicationQualityProfileId = String((config as any).publication_quality_profile_id ?? "").trim();

@@ -166,6 +166,42 @@ def test_last_gallery_change_during_final_pipeline_read_discards_the_pending_res
     assert token not in client.app.state.pipeline_inspection.sessions
 
 
+@pytest.mark.parametrize("vector", [[1.0] + [0.0] * 15, [0.0, 1.0] + [0.0] * 14])
+def test_new_identity_sample_during_delivery_drops_old_private_visuals_without_closing_session(client, monkeypatch, vector):
+    token, gallery, _ = prepare(client)
+    configuration = client.app.state.config_store
+    original = configuration.get_pipeline
+    calls = 0
+    async def get_pipeline(name):
+        nonlocal calls
+        calls += 1
+        result = await original(name)
+        if calls == 2:
+            gallery.observe(evidence("visit", capture="new-frame", observed_at=2, vector=vector), policy())
+        return result
+    monkeypatch.setattr(configuration, "get_pipeline", get_pipeline)
+    result = client.get(f"/api/pipeline-inspection/{token}")
+    assert result.status_code == 200, result.text
+    assert result.json()["nodes"][0]["visuals"] == []
+    assert "Synthetic person" not in result.text
+    assert token in client.app.state.pipeline_inspection.sessions
+
+
+def test_stale_projection_cannot_skip_another_final_access_check(client):
+    from fastapi import HTTPException
+    from toposync.runtime.pipelines.inspection import InspectionProjectionStale
+    from toposync.runtime.pipelines.inspection_api import finalize_inspection
+    token, _, _ = prepare(client)
+    store = client.app.state.pipeline_inspection
+    def stale():
+        raise InspectionProjectionStale
+    request = SimpleNamespace(app=client.app, state=SimpleNamespace(inspection_private_checks=[stale, lambda: False]))
+    with pytest.raises(HTTPException) as rejected:
+        finalize_inspection(request, store.snapshot(token))
+    assert rejected.value.status_code == 409
+    assert token not in store.sessions
+
+
 def test_evidence_runtime_instruments_only_produced_faces_on_the_same_capture(monkeypatch):
     from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
     from toposync.runtime.pipelines.inspection import PipelineInspectionStore

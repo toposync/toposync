@@ -9,6 +9,7 @@ import json
 from fastapi import HTTPException
 
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
+from toposync.runtime.pipelines.inspection import InspectionProjectionStale
 from .api import _authorize
 
 
@@ -113,6 +114,9 @@ async def project_identity_inspection(*, request, nodes, get_store):
                         observed_at=visual.properties["observed_at"], camera_id=node.frame.get("device_id"),
                         authorize_cameras=lambda cameras: _authorize(request, cameras=cameras))
                     if current is None:
+                        latest = gallery.decision(visual.subject_id)
+                        if latest is not None and latest.revision > visual.properties["decision_revision"]:
+                            raise InspectionProjectionStale
                         return False
         return True
     policy = hashlib.sha256(json.dumps([SCOPE, revision]).encode()).hexdigest()

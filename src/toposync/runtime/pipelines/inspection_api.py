@@ -9,7 +9,7 @@ from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 
-from .inspection import InspectionSnapshot, InspectionVisual, PipelineInspectionStore, pipeline_inspection_revision
+from .inspection import InspectionProjectionStale, InspectionSnapshot, InspectionVisual, PipelineInspectionStore, pipeline_inspection_revision
 from .operators_sinks import _encode_image_bytes
 
 
@@ -63,12 +63,20 @@ def finalize_inspection(request: Request, snapshot: InspectionSnapshot) -> Inspe
     store.expire()
     if snapshot.session not in store.sessions:
         raise HTTPException(410, "inspection_session_expired")
+    stale = False
     try:
-        if any(validate() is not True for validate in getattr(request.state, "inspection_private_checks", ())):
-            raise ValueError("inspection_private_access_changed")
+        for validate in getattr(request.state, "inspection_private_checks", ()):
+            try:
+                if validate() is not True:
+                    raise ValueError("inspection_private_access_changed")
+            except InspectionProjectionStale:
+                stale = True
     except Exception as error:
         store.close(snapshot.session)
         raise HTTPException(409, "inspection_private_access_changed") from error
+    if stale:
+        snapshot = snapshot.model_copy(update={"nodes": [node.model_copy(update={"visuals": [
+            visual for visual in node.visuals if visual.access_scope == "diagnostic_private"]}) for node in snapshot.nodes]})
     now = store.clock()
     return snapshot.model_copy(update={"deliveries": [delivery.model_copy(update={"state": "expired", "frame": None,
         "expires_at": None}) if delivery.expires_at is None or delivery.expires_at <= now else delivery

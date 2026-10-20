@@ -645,6 +645,31 @@ def test_targets_expose_places_and_source_references_without_capture_credentials
     assert "private-secret" not in str(targets)
 
 
+def test_physical_area_accepts_current_panorama_references_and_rechecks_their_revision():
+    from toposync_ext_cameras.automatic import observation_preparation, observation_targets
+
+    config = configuration()
+    for element in config.compositions[0].elements[1:]:
+        element.props = {"camera_id": element.id, "panorama_mapping": {
+            "job_id": "panorama-" + element.id, "revision": 5,
+            "source_id": element.id, "status": "ready",
+        }}
+    activity = intent("vision.presence", kind="physical_area", multiple=True, association=association())
+    targets = observation_targets(configuration=config)
+    area = next(target for target in targets if target["scope"]["kind"] == "physical_area")
+    assert {source["camera_id"] for source in area["sources"]} == {"a", "b"}
+    planned = plan_observation(intent=activity, configuration=config)
+    assert "graph" in planned
+    assert "mapping_is_not_a_coverage_certificate" in planned["limitations"]
+    preparation = observation_preparation(intent=activity, configuration=config)
+    config.compositions[0].elements[1].props["panorama_mapping"]["revision"] += 1
+    assert observation_preparation(intent=activity, configuration=config) != preparation
+    config.compositions[0].elements[1].props["panorama_mapping"]["status"] = "draft"
+    area = next(target for target in observation_targets(configuration=config)
+                if target["scope"]["kind"] == "physical_area")
+    assert [source["camera_id"] for source in area["sources"]] == ["b"]
+
+
 def test_source_preparation_detects_default_removal_clock_and_mapping_changes_without_names_or_credentials():
     from copy import deepcopy
     from toposync_ext_cameras.automatic import observation_preparation, validate_observation_preparation

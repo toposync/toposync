@@ -12,6 +12,7 @@ from toposync.runtime.automatic import AutomaticScope
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 
 from .pipelines.postprocess import (
+    _camera_mapping_composition_status,
     _parse_mapping_control_point_sets_from_props,
     resolve_composition_area,
 )
@@ -65,10 +66,9 @@ def resolve_sources(scope, configuration):
             for composition in configuration.compositions
             if composition.id == scope.composition_id
             for element in composition.elements
-            if any(
-                len(item.control_points) >= 4
-                for item in _parse_mapping_control_point_sets_from_props(element.props)
-            )
+            if _camera_mapping_composition_status(
+                composition=composition, camera_id=element.props.get("camera_id")
+            )["has_mapping"]
         }
         candidates = candidates or mapped
         candidates &= mapped
@@ -114,7 +114,8 @@ def observation_preparations(*, intent, configuration):
             locators.append([camera.id, source.id, source.view_id, source.role,
                              source.origin.type, source.origin.profile_token, locations])
     mapping = [
-        [element.id, [asdict(item) for item in _parse_mapping_control_point_sets_from_props(element.props)]]
+        [element.id, element.props.get("panorama_mapping"),
+         [asdict(item) for item in _parse_mapping_control_point_sets_from_props(element.props)]]
         for composition in configuration.compositions if composition.id == intent.scope.composition_id
         for element in composition.elements if element.props.get("camera_id") in selected
     ]

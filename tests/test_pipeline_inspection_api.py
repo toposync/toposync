@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 import numpy as np
+import pytest
 
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines.inspection import PipelineInspectionStore
@@ -132,6 +133,51 @@ def test_access_revoked_while_reading_configuration_cannot_deliver_a_snapshot():
         response = client.get("/api/pipeline-inspection/" + token)
         assert response.status_code == 403
         assert token not in store.sessions
+
+
+@pytest.mark.parametrize("revoke_during_read", [False, True])
+def test_camera_policy_revocation_closes_manual_inspection_after_producer_leaves_catalog(revoke_during_read):
+    from toposync.runtime.pipelines.demands import ResourceDemandRegistry
+
+    app = FastAPI()
+    store = PipelineInspectionStore()
+    pipeline = Pipeline(name="manual", graph={
+        "schema_version": 2, "uid": "manual", "nodes": [{
+            "id": "result", "uid": "result", "operator": "core.result_input",
+            "config": {"key": "automatic.presence"},
+        }], "edges": [],
+    })
+    allowed = [True]
+    pending_read = [False]
+    demands = ResourceDemandRegistry(lambda *_: True, compiler=None)
+    demands.pipeline_allowed = lambda _: allowed[0]
+
+    async def get_pipeline(name):
+        if pending_read[0]:
+            allowed[0] = False
+        return pipeline
+
+    async def list_pipelines():
+        return []
+
+    app.state.pipeline_inspection = store
+    app.state.pipeline_demands = demands
+    app.state.config_store = SimpleNamespace(
+        get_pipeline=get_pipeline, list_pipelines=list_pipelines,
+    )
+    install_inspection_routes(app, lambda _: "owner")
+    with TestClient(app) as client:
+        token = client.post("/api/pipelines/manual/inspection").json()["session"]
+        if revoke_during_read:
+            pending_read[0] = True
+        else:
+            allowed[0] = False
+        demands.bind([])
+        result = client.get("/api/pipeline-inspection/" + token)
+        assert result.status_code == 403
+        assert result.json()["detail"] == "inspection_result_access_revoked"
+        assert token not in store.sessions
+        assert client.post("/api/pipelines/manual/inspection").status_code == 403
 
 
 def test_image_is_exact_analyzed_frame_and_authorization_is_rechecked_after_encoding(monkeypatch):

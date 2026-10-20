@@ -111,6 +111,8 @@ async def checked_inspection(request: Request, token: str | None = None, pipelin
             raise HTTPException(404, "Unknown pipeline")
         demands = getattr(request.app.state, "pipeline_demands", None)
         if demands is not None:
+            if demands.pipeline_blocked(pipeline):
+                raise HTTPException(403, "inspection_result_access_revoked")
             for key in pipeline_result_keys(pipeline):
                 if demands.is_blocked(owner, key, "inspection") or not demands.authorized(owner, key, "inspection"):
                     raise HTTPException(403, "inspection_result_access_revoked")

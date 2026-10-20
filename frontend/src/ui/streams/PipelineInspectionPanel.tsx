@@ -114,7 +114,7 @@ function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChang
   const { t } = i18n.useI18n();
   const article = useRef<HTMLElement>(null);
   const preview = useRef<HTMLDivElement>(null);
-  const [onscreen, setOnscreen] = useState(true);
+  const [onscreen, setOnscreen] = useState(false);
   const [snapshot, setSnapshot] = useState<InspectionSnapshot | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);

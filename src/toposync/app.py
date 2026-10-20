@@ -1850,7 +1850,7 @@ def create_app() -> FastAPI:
                         status_code=401, content={"detail": "Authentication required"}
                     )
 
-            if is_api:
+            if is_api and not is_public_api:
                 ext_manager: ExtensionManager | None = getattr(
                     request.app.state, "extensions", None
                 )

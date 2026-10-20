@@ -1815,6 +1815,7 @@ export function StreamTilePlayer({
   const frameRef = useRef<HTMLDivElement | null>(null);
   const playbackSessionIdRef = useRef<string | null>(null);
   const onRefreshUrlsRef = useRef(onRefreshUrls);
+  const hlsAuthRenewedRef = useRef<string | null>(null);
   const posterObjectUrlRef = useRef<string | null>(null);
   const [inspectionPaired, setInspectionPaired] = useState(false);
 
@@ -2654,6 +2655,8 @@ export function StreamTilePlayer({
       let nativeRecovering = false;
       let healthyProbeRecoveries = 0;
       const onPlaying = () => {
+        if (cancelled) return;
+        hlsAuthRenewedRef.current = null;
         setFirstFrameReady(true);
         setStatus("playing");
         setErrorText(null);
@@ -2747,6 +2750,8 @@ export function StreamTilePlayer({
       hlsPlayer = hls;
 
       const onPlaying = () => {
+        if (cancelled) return;
+        hlsAuthRenewedRef.current = null;
         setFirstFrameReady(true);
         setStatus("playing");
         setErrorText(null);
@@ -3141,6 +3146,12 @@ export function StreamTilePlayer({
 
     const refreshSignedHlsAfterAuthError = async (message: string): Promise<boolean> => {
       if (!isHlsAuthProbeErrorMessage(message)) return false;
+      if (hlsAuthRenewedRef.current === transmissionId) {
+        setStatus("error");
+        setErrorText(message);
+        return true;
+      }
+      hlsAuthRenewedRef.current = transmissionId;
       const renewalMessage = i18n.t(
         "core.ui.streams.errors.hls_signed_url_renewing",
         {},

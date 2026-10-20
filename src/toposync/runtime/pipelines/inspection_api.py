@@ -9,6 +9,7 @@ from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 
+from .demands import pipeline_result_keys
 from .inspection import InspectionProjectionStale, InspectionSnapshot, InspectionVisual, PipelineInspectionStore, pipeline_inspection_revision
 from .operators_sinks import _encode_image_bytes
 
@@ -110,8 +111,7 @@ async def checked_inspection(request: Request, token: str | None = None, pipelin
             raise HTTPException(404, "Unknown pipeline")
         demands = getattr(request.app.state, "pipeline_demands", None)
         if demands is not None:
-            for output in pipeline.graph.get("meta", {}).get("outputs", []):
-                key = output.get("key", "")
+            for key in pipeline_result_keys(pipeline):
                 if demands.is_blocked(owner, key, "inspection") or not demands.authorized(owner, key, "inspection"):
                     raise HTTPException(403, "inspection_result_access_revoked")
         revision = pipeline_inspection_revision(pipeline)

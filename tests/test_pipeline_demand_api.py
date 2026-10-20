@@ -5,6 +5,7 @@ import itertools
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import pytest
 
 from test_auth_local import _create_client, _setup_owner
 from toposync.runtime.pipelines import Artifact, Packet, SourceOperatorRuntime
@@ -60,6 +61,62 @@ def register_source(client, counters, paused, progress=None):
         produces_artifacts=["main"],
         runtime_factory=lambda _config, _deps: Source(),
     )
+
+
+@pytest.mark.parametrize("revocation", ["owner", "all", "permission"])
+def test_consumer_inspection_closes_and_cannot_reopen_after_upstream_revocation(
+    tmp_path, monkeypatch, revocation
+):
+    with _create_client(tmp_path, monkeypatch) as client:
+        owner = _setup_owner(client)["user"]["id"]
+        counters = {"started": 0, "stopped": 0}
+        register_source(client, counters, [False])
+        contract = {"type": "packet", "version": 1, "payload_keys": ["sample"], "artifacts": ["main"]}
+        graphs = {
+            "producer": build_pipeline_graph_v2(graph_uid="producer", nodes=[
+                {"id": "source", "operator": "test.leased_frame"}], edges=[], meta={"outputs": [
+                    {"key": "synthetic.frames", "name": "Frames", "node_uid": "source",
+                     "contract": contract, "production_scope": "synthetic:private"}]}),
+            "alias": build_pipeline_graph_v2(graph_uid="alias", nodes=[
+                {"id": "reference", "operator": "core.result_input",
+                 "config": {"key": "synthetic.frames", "contract": contract}}], edges=[], meta={"outputs": [
+                    {"key": "synthetic.alias", "name": "Alias", "node_uid": "reference",
+                     "contract": contract, "production_scope": "synthetic:private"}]}),
+        }
+        for name, key in [("manual", "synthetic.frames"), ("generated", "synthetic.alias")]:
+            graphs[name] = build_pipeline_graph_v2(graph_uid=name, nodes=[
+                {"id": "reference", "operator": "core.result_input", "config": {"key": key, "contract": contract}}], edges=[])
+        for name, graph in graphs.items():
+            assert client.post("/api/pipelines", json={"name": name, "enabled": False, "graph": graph}).status_code == 201
+        sessions = {}
+        for name in graphs:
+            response = client.post(f"/api/pipelines/{name}/inspection")
+            assert response.status_code == 200
+            sessions[name] = response.json()["session"]
+        registry = client.app.state.pipeline_demands
+        store = client.app.state.pipeline_inspection
+        observed = store.sessions[sessions["manual"]]
+        other_owner = store.open("manual", observed.revision, {"reference": "core.result_input"}, owner="other-owner")
+        unrelated_graph = build_pipeline_graph_v2(graph_uid="unrelated", nodes=[
+            {"id": "source", "operator": "test.leased_frame"}], edges=[])
+        assert client.post("/api/pipelines", json={"name": "unrelated", "enabled": False,
+                                                  "graph": unrelated_graph}).status_code == 201
+        unrelated = client.post("/api/pipelines/unrelated/inspection").json()["session"]
+        if revocation == "permission":
+            authorize = registry.authorize
+            monkeypatch.setattr(registry, "authorize", lambda actor, key, purpose:
+                                key != "synthetic.frames" and authorize(actor, key, purpose))
+        else:
+            assert client.post("/api/pipeline-results/synthetic.frames/revoke",
+                               json={"owner_id": owner if revocation == "owner" else "*"}).status_code == 204
+            assert not set(sessions.values()).intersection(store.sessions), "revoke must close consumers before acknowledgement"
+            assert (other_owner in store.sessions) == (revocation == "owner")
+        assert unrelated in store.sessions
+        for name, token in sessions.items():
+            assert client.get(f"/api/pipeline-inspection/{token}").status_code in (403, 404, 410)
+            assert token not in store.sessions
+            assert client.post(f"/api/pipelines/{name}/inspection").status_code == 403
+        assert counters["started"] == 0
 
 
 def test_real_api_projects_artifacts_renames_and_revokes_all_uses_before_acknowledging(

@@ -25,6 +25,13 @@ from .inspection import frame_reference
 from .templates import build_pipeline_graph_v2
 
 
+def pipeline_result_keys(pipeline: Pipeline) -> set[str]:
+    return {item["key"] for item in pipeline.graph.get("meta", {}).get("outputs", [])} | {
+        node["config"]["key"] for node in pipeline.graph.get("nodes", [])
+        if node["operator"] == "core.result_input"
+    }
+
+
 class DemandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     consumer_id: str = Field(min_length=1, max_length=128)
@@ -437,13 +444,7 @@ class ResourceDemandRegistry:
     def pipeline_blocked(self, pipeline: Pipeline) -> bool:
         if not self.pipeline_allowed(pipeline):
             return True
-        keys = [item["key"] for item in pipeline.graph.get("meta", {}).get("outputs", [])]
-        keys.extend(
-            node["config"]["key"]
-            for node in pipeline.graph.get("nodes", [])
-            if node["operator"] == "core.result_input"
-        )
-        return any(self.is_blocked("", key) for key in keys)
+        return any(self.is_blocked("", key) for key in pipeline_result_keys(pipeline))
 
     def expire(self) -> None:
         for identifier in list(self.demands):

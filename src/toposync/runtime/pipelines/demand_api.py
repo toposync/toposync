@@ -9,7 +9,7 @@ import json
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from .demands import DemandRequest
+from .demands import DemandRequest, pipeline_result_keys
 from .operators_sinks import _encode_image_bytes
 from .inspection_api import pipeline_image_encoders
 
@@ -198,14 +198,17 @@ def install_demand_routes(app: FastAPI, principal, manage) -> None:
     async def revoke_result(request: Request, key: str, body: RevokeRequest):
         manage(request)
         registry = request.app.state.pipeline_demands
+        pipelines = {pipeline.name: pipeline for pipeline in await request.app.state.config_store.list_pipelines()}
+        manage(request)
         registry.revoke(body.owner_id, key)
-        producer = registry.outputs.get(key)
         inspection = request.app.state.pipeline_inspection
         for token, session in list(inspection.sessions.items()):
+            pipeline = pipelines.get(session.pipeline)
             if (
-                producer
-                and session.pipeline == producer[0].name
+                pipeline is not None
                 and (body.owner_id == "*" or session.owner == body.owner_id)
+                and any(registry.is_blocked(session.owner, result, "inspection")
+                        for result in pipeline_result_keys(pipeline))
             ):
                 inspection.close(token)
         await request.app.state.pipelines_orchestrator._reconcile()

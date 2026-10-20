@@ -483,6 +483,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const activeImageSessionRef = useRef<ReturnType<typeof createEphemeralImageSession> | null>(null);
   const lastUserInteractionTsRef = useRef<number>(Date.now());
   const hasManualNotificationSelectionRef = useRef(false);
+  const notificationDetailsOpenRef = useRef(false);
+  const setNotificationDetailsOpen = useCallback((open: boolean) => {
+    notificationDetailsOpenRef.current = open;
+  }, []);
   const markNotificationsViewedInFlightRef = useRef<Promise<void> | null>(null);
   const notificationsFilterRef = useRef<NotificationsFilter>(notificationsRequestFilter);
   const notificationsListRequestRef = useRef(0);
@@ -1169,7 +1173,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
           const now = Date.now();
           const idle = now - lastUserInteractionTsRef.current > 12_000;
-          const allowAuto = !hasManualNotificationSelectionRef.current || idle;
+          const allowAuto = !notificationDetailsOpenRef.current && (!hasManualNotificationSelectionRef.current || idle);
           if (allowAuto) setActiveNotificationId(notif.id);
         }
       } catch (err) {
@@ -1952,6 +1956,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             setNotificationsFilter(next); setNotificationsRequestFilter(next);
           }}
           onSelectNotification={selectNotification}
+          onNotificationDetailsOpenChange={setNotificationDetailsOpen}
           onLoadMoreNotifications={loadMoreNotifications}
           onNotificationsViewed={markNotificationsAsViewed}
           api={host.api}

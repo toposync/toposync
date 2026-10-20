@@ -1,6 +1,6 @@
 import type { GeographicView } from "../geographic/GeographicMap";
 import { StreamingAvailabilityContext } from "../streams/StreamingAvailability";
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CompositionElement,
@@ -82,6 +82,7 @@ type Props = {
   onNotificationsFilterChange: React.Dispatch<React.SetStateAction<NotificationsFilter>>;
   onNotificationsSearchRefresh: () => void;
   onSelectNotification: (notificationId: string) => void;
+  onNotificationDetailsOpenChange: (open: boolean) => void;
   onLoadMoreNotifications: () => void;
   onNotificationsViewed: () => void;
   api: HostApi;
@@ -418,6 +419,7 @@ export function MainScreen({
   onNotificationsFilterChange,
   onNotificationsSearchRefresh,
   onSelectNotification,
+  onNotificationDetailsOpenChange,
   onLoadMoreNotifications,
   onNotificationsViewed,
   api,
@@ -464,6 +466,10 @@ export function MainScreen({
   const [historyAssistantId, setHistoryAssistantId] = useState<string | null>(null);
   const previousHistorySelection = useRef<string | null>(null);
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
+  useLayoutEffect(() => {
+    onNotificationDetailsOpenChange(isNotificationDetailsOpen);
+    return () => onNotificationDetailsOpenChange(false);
+  }, [isNotificationDetailsOpen, onNotificationDetailsOpenChange]);
   const [notificationImageIndex, setNotificationImageIndex] = useState(0);
   const [failedNotificationImageUrls, setFailedNotificationImageUrls] = useState<Set<string>>(() => new Set());
   const [fullscreenNotificationImageOpen, setFullscreenNotificationImageOpen] = useState(false);

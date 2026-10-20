@@ -104,6 +104,7 @@ def observation_from_packet(packet, config: AssociationConfig) -> Observation:
         policy=profile.identity_policy,
         occurrence=occurrence_key(packet) if profile.identity_policy == "recognize_here" else None,
         closed=packet.lifecycle == Lifecycle.CLOSE,
+        frame_tracks=payload.get("frame_tracks"),
     )
 
 
@@ -186,6 +187,7 @@ class AssociationRuntime(BaseOperatorRuntime):
                 "gap": record["gap"],
                 "components": record["components"],
                 "group": self.store.group_for(observation, record["entity"]),
+                "group_status": record["group_status"],
             }
             # Identity remains exclusively in the authorized gallery/review API.
             payload = {**packet.payload, "association": projection}

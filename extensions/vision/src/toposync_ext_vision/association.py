@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -88,6 +88,17 @@ class Observation(Values):
     ]
     occurrence: str | None = Field(default=None, max_length=128)
     closed: bool = False
+    frame_tracks: list[Annotated[str, Field(min_length=1, max_length=512)]] | None = Field(
+        default=None, min_length=1, max_length=128
+    )
+
+    @model_validator(mode="after")
+    def validate_frame_tracks(self):
+        if self.frame_tracks is not None and (
+            len(set(self.frame_tracks)) != len(self.frame_tracks) or self.track not in self.frame_tracks
+        ):
+            raise ValueError("frame_tracks_require_unique_members_including_this_track")
+        return self
 
     @property
     def epoch(self):
@@ -437,6 +448,7 @@ class AssociationStore:
             "reason": reason,
             "components": components,
             "revision": self.revision,
+            "group_status": "disabled" if self.config.group_distance_metres is None else "incomplete",
             "received_at": time.time(),
             "gap": reason in ("transition", "source_or_geometry_changed")
             or (self.restart and observation.local_key not in self._resumed_keys),
@@ -445,6 +457,8 @@ class AssociationStore:
 
     def group_for(self, observation: Observation, entity: str) -> dict | None:
         with self.lock:
+            if self.observations.get(observation.id, {}).get("group_status") != "complete":
+                return None
             matches = [group for group in self.groups if entity in group["members"]
                 and group["clock"] == observation.clock and group["start"] <= observation.observed_at
                 and (group["end"] is None or observation.observed_at < group["end"])]
@@ -458,11 +472,28 @@ class AssociationStore:
         last = batch[-1]
         if not last.clock or last.uncertainty is None:
             return
+        expected = set(last.frame_tracks or [])
+        # A transport flush is not proof that every track in the capture arrived.
+        if any(not item.closed for item in batch) and (
+                not expected or {item.track for item in batch if not item.closed} != expected
+                or any(set(item.frame_tracks or []) != expected for item in batch)
+                or any(not item.closed and (item.position is None or item.uncertainty is None
+                    or item.coordinate_reference != last.coordinate_reference) for item in batch)):
+            return
+        records = self._records()
+        source_latest = {(item.camera, item.source): item for item, _ in records}
         if any(observation.clock == last.clock and observation.observed_at > last.observed_at
-               for observation, _ in self._records()):
+               for observation, _ in records):
             return
         current = {}
-        for observation, record in self._records():
+        latest = {}
+        for observation, record in records:
+            source = source_latest[observation.camera, observation.source]
+            if (observation.epoch, observation.geometry) != (source.epoch, source.geometry):
+                continue
+            previous = latest.get(observation.local_key)
+            if previous is None or observation.sequence >= previous[0].sequence:
+                latest[observation.local_key] = (observation, record)
             if (
                 observation.clock == last.clock
                 and observation.observed_at == last.observed_at
@@ -472,6 +503,15 @@ class AssociationStore:
                 and observation.coordinate_reference == last.coordinate_reference
             ):
                 current[record["entity"]] = observation
+        required = {record["entity"] for observation, record in latest.values()
+                    if not observation.closed and observation.clock == last.clock
+                    and observation.coordinate_reference == last.coordinate_reference}
+        # Missing deltas do not prove that an active member left its group.
+        if not required <= current.keys():
+            return
+        for observation in batch:
+            if observation.id in self.observations:
+                self.observations[observation.id]["group_status"] = "complete"
         clusters = []
         for entity, observation in sorted(current.items()):
             for cluster in clusters:
@@ -572,7 +612,9 @@ class AssociationStore:
                     if episode["clock"] == clock and episode["end"] is None:
                         episode["end"] = max(episode["start"], latest.observed_at)
                         episode["revision"] = self.revision
-                self._update_groups([latest])
+                self._update_groups([o for o, record in records if record.get("group_status") == "complete" and
+                    (o.camera, o.source, o.epoch, o.sequence) ==
+                    (latest.camera, latest.source, latest.epoch, latest.sequence)])
             self._expire()
             self._save()
             return self.revision

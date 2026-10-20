@@ -72,6 +72,16 @@ def adapter(case):
                 },
             )
         )
+    captures = {}
+    for packet in packets:
+        capture = packet.payload["capture_evidence"]
+        key = (packet.payload["camera_id"], packet.payload["source"]["source_id"],
+               capture["capture_instance"], capture["generation"], capture["sequence"])
+        captures.setdefault(key, []).append(packet)
+    for capture_packets in captures.values():
+        tracks = sorted({packet.payload["tracklet_id"] for packet in capture_packets})
+        for packet in capture_packets:
+            packet.payload["frame_tracks"] = tracks
     prepared = case.get("prepared_context", {})
     cfg = AssociationConfig(
         scope="official",

@@ -17,6 +17,7 @@ def packet(camera="a", stamp=0, track=1, x=0, **payload):
             "camera_id": camera,
             "media": {"ts": stamp},
             "tracklet_id": str(track),
+            "frame_tracks": ["1", "2", "3"],
             "correlation_id": "episode",
             "capture_evidence": {
                 "capture_instance": camera,
@@ -57,6 +58,33 @@ def test_adapter_uses_original_provenance_and_rejects_stale_anchor():
     assert observation_from_packet(unknown, config()).uncertainty is None
     moving = replace(original, metadata={"ptz_geometry_safe": False})
     assert observation_from_packet(moving, config()).position is None
+
+
+def test_fragmented_flush_projects_abstention_until_a_complete_new_capture():
+    from toposync_ext_vision.association import AssociationStore
+    async def scenario():
+        runtime = AssociationRuntime(config().model_dump(), PipelineRuntimeDependencies())
+        runtime.store = AssociationStore(config())
+        emitted = []
+        async def emit(value):
+            emitted.append(value)
+        context = SimpleNamespace(emit=emit, inspect=lambda *a, **kw: None)
+        async def flush(stamp, tracks):
+            values = [packet("b", stamp, track, track * .7) for track in tracks]
+            await runtime._flush([(value, observation_from_packet(value, config())) for value in values], context)
+        await flush(0, (1, 2))
+        await flush(0, (3,))
+        assert all(value.payload["association"]["group_status"] == "incomplete" for value in emitted)
+        assert all(value.payload["association"]["group"] is None for value in emitted)
+        await flush(1, (1, 2, 3))
+        assert len(runtime.store.groups) == 1
+        identifier = runtime.store.groups[0]["id"]
+        assert all(value.payload["association"]["group"]["id"] == identifier for value in emitted[-3:])
+        await flush(2, (1,))
+        await flush(2, (2, 3))
+        assert all(value.payload["association"]["group_status"] == "incomplete" for value in emitted[-3:])
+        assert len(runtime.store.groups) == 1 and runtime.store.groups[0]["end"] is None
+    asyncio.run(scenario())
 
 
 def test_real_operator_batches_and_deduplicates_with_bounded_shutdown(tmp_path):

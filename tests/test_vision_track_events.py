@@ -53,6 +53,22 @@ def _packet(ts: float, tracks: list[dict[str, object]]) -> Packet:
     )
 
 
+def test_frame_cohort_survives_fanout_suppression_and_terminal_capture():
+    async def scenario():
+        runtime = _runtime({"default_interval_seconds": 10, "close_after_seconds": 20})
+        first = await runtime.process_packet(_packet(1, [_track("one"), _track("two")]), None)
+        assert len(first) == 2
+        assert all(item.payload["frame_tracks"] == ["one", "two"] for item in first)
+        assert all(len(item.payload["vision"]["tracks"]) == 1 for item in first)
+        second = await runtime.process_packet(_packet(2, [_track("one"), _track("two"), _track("three")]), None)
+        assert len(second) == 1
+        assert second[0].payload["frame_tracks"] == ["one", "three", "two"]
+        closed = runtime.close_stream(_packet(3, []))
+        assert len(closed) == 3
+        assert all(item.payload["frame_tracks"] == ["one", "three", "two"] for item in closed)
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("origin", [0.0, 100.0])
 @pytest.mark.parametrize("terminal", ["empty_frame", "idle", "disconnect"])
 def test_track_close_retains_last_observation_without_later_frame(monkeypatch, origin, terminal):

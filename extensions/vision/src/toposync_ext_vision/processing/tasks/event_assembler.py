@@ -14,7 +14,7 @@ from toposync.runtime.pipelines.spatial_history import SpatialHistory
 from ...pipelines.schemas import VisionTrackConfig
 from ..contracts import normalize_bbox01
 
-_OBSERVATION_FIELDS = ("frame_ts", "ts", "media", "source", "capture_evidence", "mapping")
+_OBSERVATION_FIELDS = ("frame_ts", "ts", "media", "source", "capture_evidence", "mapping", "frame_tracks")
 
 
 def _observation_scope(payload: dict[str, Any]) -> tuple[Any, ...]:
@@ -770,6 +770,8 @@ class TrackEventAssembler:
         )
         tracks = self._extract_tracks(packet)
         current_tracklet_ids = {item.tracklet_id for item in tracks}
+        packet = replace(packet, payload={**packet.payload,
+            "frame_tracks": sorted(current_tracklet_ids) if 0 < len(current_tracklet_ids) <= 128 else None})
         used_event_ids: set[str] = set()
         # Expire before matching: a closed identity must never be resurrected.
         outputs = self._close_expired_events(

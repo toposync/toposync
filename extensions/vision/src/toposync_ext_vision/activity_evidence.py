@@ -106,6 +106,19 @@ class ActivityEvidenceRuntime(TransformOperatorRuntime):
             group_id = "group:" + group["id"]
         key = (participant, member)
         previous = self.members.get(key)
+        if association.get("group_status") == "incomplete" and packet.lifecycle != Lifecycle.CLOSE:
+            # Missing frame members are a gap, not evidence of a membership change.
+            if previous is not None:
+                retained = previous[1]
+                self.members[key] = (previous[0], replace(retained, payload={**retained.payload,
+                    "activity_observation": {**retained.payload["activity_observation"], "gap": True}}))
+            return []
+        if previous is not None:
+            value["gap"] |= previous[1].payload["activity_observation"]["gap"]
+        elif association.get("group_status") == "complete" and packet.lifecycle != Lifecycle.CLOSE:
+            # Group membership is admitted only at the first complete capture.
+            value["gap"] |= value["started_at"] is not None and value["started_at"] < value["observed_at"]
+            value["started_at"] = value["observed_at"]
         outputs = []
         if packet.lifecycle == Lifecycle.CLOSE:
             # Closed or evicted memberships have no remaining contribution to close.
@@ -121,8 +134,7 @@ class ActivityEvidenceRuntime(TransformOperatorRuntime):
             value["started_at"] = value["observed_at"]
         elif previous is not None:
             value["episode_id"] = previous[1].payload["activity_observation"]["episode_id"]
-            if value["episode_id"] != episode:
-                value["started_at"] = previous[1].payload["activity_observation"]["started_at"]
+            value["started_at"] = previous[1].payload["activity_observation"]["started_at"]
         elif group_id is not None:
             value["episode_id"] = group_id
         if group_id is not None:

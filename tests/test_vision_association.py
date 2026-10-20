@@ -56,6 +56,7 @@ def observation(camera, track, stamp, x, *, instance="capture", **kwargs):
         geometry="map-v1",
         position_error=0.02,
         policy="recognize_here" if camera == "b" else "keep_confirmed_identity",
+        frame_tracks=["1", "2", "3"] if str(track) in {"1", "2", "3"} else [str(track)],
     )
     return Observation(**{**data, **kwargs})
 
@@ -87,6 +88,134 @@ def test_trio_permuted_local_ids_preserves_three_partitions_and_group_episodes()
         (3, 7, None),
     ]
     assert not any("identity_id" in r for r in snapshot["observations"].values())
+
+
+@pytest.mark.parametrize("parts", [((1, 2), (3,)), ((1,), (2, 3))])
+def test_fragmented_frame_does_not_split_an_established_group(parts):
+    store = AssociationStore(config())
+    store.ingest([observation("b", track, 0, (track - 1) * 0.7) for track in (1, 2, 3)])
+    original = store.groups[0].copy()
+    for part in parts:
+        store.ingest([observation("b", track, 1, (track - 1) * 0.7) for track in part])
+        assert len(store.groups) == 1
+        assert store.groups[0]["id"] == original["id"]
+        assert store.groups[0]["members"] == original["members"]
+        assert store.groups[0]["end"] is None
+
+
+def test_suppressed_member_update_is_not_evidence_of_a_group_departure():
+    store = AssociationStore(config())
+    store.ingest([observation("b", track, 0, (track - 1) * 0.7) for track in (1, 2, 3)])
+    original = store.groups[0].copy()
+    store.ingest([observation("b", track, 1, (track - 1) * 0.7) for track in (1, 2)])
+    assert len(store.groups) == 1
+    assert store.groups[0]["id"] == original["id"]
+    assert store.groups[0]["end"] is None
+    # A complete later observation, with the third member apart, does prove a split.
+    store.ingest([observation("b", track, 2, 7 if track == 3 else (track - 1) * 0.7)
+                  for track in (1, 2, 3)])
+    assert [(len(group["members"]), group["start"], group["end"])
+            for group in store.groups] == [(3, 0, 2), (2, 2, None)]
+
+
+def test_fragmented_first_frame_does_not_publish_a_transient_pair():
+    store = AssociationStore(config())
+    for part in ((1, 2), (3,)):
+        store.ingest([observation("b", track, 0, (track - 1) * 0.7) for track in part])
+        assert not store.groups
+    # A later complete capture can establish a group; old fragments cannot be republished.
+    store.ingest([observation("b", track, 1, (track - 1) * 0.7) for track in (1, 2, 3)])
+    assert [(len(group["members"]), group["start"], group["end"])
+            for group in store.groups] == [(3, 1, None)]
+
+
+def test_partial_group_evidence_is_not_projected_as_current_confirmation():
+    store = AssociationStore(config())
+    first = [observation("b", track, 0, (track - 1) * 0.7) for track in (1, 2, 3)]
+    store.ingest(first)
+    moved = observation("b", 3, 1, 7)
+    result = store.ingest([moved])
+    # The previous trio remains history, but this partial frame cannot confirm it.
+    assert len(store.groups) == 1
+    assert store.group_for(moved, result[moved.id]["entity"]) is None
+
+
+@pytest.mark.parametrize("cohort", [None, ["1", "2"], ["1", "2", "3", "4"]])
+def test_missing_or_conflicting_frame_cohort_cannot_confirm_a_group(cohort):
+    store = AssociationStore(config())
+    items = [observation("b", track, 0, track * .7) for track in (1, 2, 3)]
+    items[0] = items[0].model_copy(update={"frame_tracks": cohort})
+    result = store.ingest(items)
+    assert not store.groups
+    assert all(record["group_status"] == "incomplete" for record in result.values())
+
+
+@pytest.mark.parametrize("cohort", [["1", "1"], ["2"], [], ["1", ""], ["1"] * 129])
+def test_invalid_frame_cohort_is_rejected(cohort):
+    with pytest.raises(ValidationError):
+        observation("b", 1, 0, 0, frame_tracks=cohort)
+
+
+def test_terminal_group_closes_without_waiting_for_another_frame():
+    store = AssociationStore(config())
+    items = [observation("b", track, 0, track * .7) for track in (1, 2, 3)]
+    store.ingest(items)
+    later = [observation("b", track, 1, track * .7) for track in (1, 2, 3)]
+    store.ingest(later)
+    store.ingest([item.model_copy(update={"closed": True}) for item in later])
+    assert len(store.groups) == 1
+    assert store.groups[0]["start"] == 0
+    assert store.groups[0]["end"] == 1
+
+
+def test_human_correction_does_not_certify_a_fragmented_capture():
+    store = AssociationStore(config())
+    items = [observation("b", track, 0, track * .7) for track in (1, 2, 3)]
+    store.ingest(items[:2])
+    store.ingest(items[2:])
+    store.correct(items[0].id, None, store.revision, "tester")
+    assert not store.groups
+    assert all(record["group_status"] == "incomplete" for record in store.observations.values())
+
+
+@pytest.mark.parametrize("change", [{"instance": "new-capture"}, {"generation": 2}, {"geometry": "map-v2"}])
+@pytest.mark.parametrize("stamp", [0, 1])
+def test_retired_capture_does_not_block_a_new_complete_group(change, stamp):
+    store = AssociationStore(config())
+    store.ingest([observation("b", track, 0, track * .7) for track in (1, 2, 3)])
+    items = [observation("b", track, stamp, track * .7, **change,
+                         id=f"replacement-{track}", sequence=2) for track in (1, 2, 3)]
+    result = store.ingest(items)
+    assert all(record["group_status"] == "complete" and record["gap"] for record in result.values())
+    assert [len(group["members"]) for group in store.groups] == [3, 3]
+    assert store.groups[0]["end"] == store.groups[1]["start"] == stamp
+
+
+def test_missing_geometry_for_one_frame_member_does_not_publish_a_pair():
+    store = AssociationStore(config())
+    items = [observation("b", track, 0, track * .7) for track in (1, 2, 3)]
+    items[0] = items[0].model_copy(update={"position": None, "geometry": ""})
+    result = store.ingest(items)
+    assert not store.groups
+    assert all(record["group_status"] == "incomplete" for record in result.values())
+
+
+def test_old_member_close_after_newer_updates_does_not_rewind_groups():
+    store = AssociationStore(config())
+    first = [observation("b", track, 0, (track - 1) * 0.7) for track in (1, 2, 3)]
+    store.ingest(first)
+    store.ingest([observation("b", track, 1, (track - 1) * 0.7) for track in (1, 2)])
+    store.ingest([first[2].model_copy(update={"closed": True})])
+    store.ingest([observation("b", track, 2, (track - 1) * 0.7, frame_tracks=["1", "2"]) for track in (1, 2)])
+    groups = store.snapshot()["groups"]
+    assert [len(group["members"]) for group in groups] == [3, 2]
+    assert groups[0]["end"] is not None
+    assert groups[0]["start"] <= groups[0]["end"] <= groups[1]["start"]
+    assert groups[1]["end"] is None
+    assert groups[1]["members"] == sorted({
+        record["entity"] for record in store.observations.values()
+        if record["observation"]["track"] in {"1", "2"}
+    })
 
 
 @pytest.mark.parametrize("uncertainty,positions", [(None, True), (0, False), (0, True)])
@@ -223,8 +352,8 @@ def test_retired_capture_cannot_resume_and_duplicate_close_preserves_lifecycle()
 def test_correction_checks_entire_trajectory_and_keeps_group_times_valid():
     store = AssociationStore(config())
     first = observation("a", 1, 0, 0)
-    later = observation("a", 1, 1, 0)
-    other = observation("a", 2, 1, 1)
+    later = observation("a", 1, 1, 0, frame_tracks=["1", "2"])
+    other = observation("a", 2, 1, 1, frame_tracks=["1", "2"])
     store.ingest([first, later, other])
     with pytest.raises(AssociationConflict, match="simultaneous_local_tracks"):
         store.correct(first.id, store.observations[other.id]["entity"], store.revision, "tester")
@@ -240,7 +369,7 @@ def test_replayed_duplicates_do_not_reopen_group_episodes_after_restart(tmp_path
     path = tmp_path / "association.json"
     store = AssociationStore(config(), path)
     batches = [
-        [observation("a", track, stamp, track if stamp == 0 else track * 5) for track in (1, 2)]
+        [observation("a", track, stamp, track if stamp == 0 else track * 5, frame_tracks=["1", "2"]) for track in (1, 2)]
         for stamp in (0, 1)
     ]
     for batch in batches:

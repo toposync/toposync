@@ -199,6 +199,46 @@ def group_event(participant="person-1", stamp=1):
         "entity_activity": {"entity_id": participant, "reason": "observed"}})
 
 
+def test_incomplete_group_frame_never_splits_membership_and_close_records_gap():
+    async def scenario():
+        adapter = ActivityEvidenceRuntime()
+        original = group_event()
+        opened, = await adapter.process_packet(original, None)
+        partial = group_event(stamp=2)
+        partial.payload["association"].update(group=None, group_status="incomplete")
+        assert await adapter.process_packet(partial, None) == []
+        confirmed, = await adapter.process_packet(group_event(stamp=3), None)
+        assert confirmed.payload["activity_observation"]["episode_id"] == opened.payload["activity_observation"]["episode_id"]
+        assert confirmed.payload["activity_observation"]["gap"]
+        closed, = await adapter.process_packet(replace(partial, lifecycle=Lifecycle.CLOSE), None)
+        assert closed.payload["activity_observation"]["episode_id"] == opened.payload["activity_observation"]["episode_id"]
+        assert closed.payload["activity_observation"]["gap"]
+        assert not adapter.members
+    asyncio.run(scenario())
+
+
+def test_first_complete_individual_admission_does_not_backdate_over_a_gap():
+    async def scenario():
+        adapter = ActivityEvidenceRuntime()
+        first = group_event(stamp=1)
+        first.payload["association"].update(group=None, group_status="incomplete")
+        first.payload["subject"]["started_ts"] = 1
+        assert await adapter.process_packet(first, None) == []
+        later = group_event(stamp=2)
+        later.payload["association"].update(group=None, group_status="complete")
+        later.payload["subject"]["started_ts"] = 1
+        result, = await adapter.process_packet(later, None)
+        assert result.payload["activity_observation"]["started_at"] == 2
+        assert result.payload["activity_observation"]["gap"]
+        following = group_event(stamp=3)
+        following.payload["association"].update(group=None, group_status="complete")
+        following.payload["subject"]["started_ts"] = 1
+        result, = await adapter.process_packet(following, None)
+        assert result.payload["activity_observation"]["started_at"] == 2
+        assert result.payload["activity_observation"]["gap"]
+    asyncio.run(scenario())
+
+
 def test_group_close_duplicates_and_capacity_retain_no_pixels_or_new_time():
     async def scenario():
         adapter = ActivityEvidenceRuntime({"maximum_active_members": 1})

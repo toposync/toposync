@@ -523,6 +523,7 @@ export type InspectionVisual = {
 export type InspectionNode = {
   node_id: string;
   physical_node_id: string;
+  received_from: { physical_node_id: string; producer_epoch: string } | null;
   operator: string;
   state: "waiting" | "received" | "started" | "analyzed" | "passed" | "filtered" | "emitted" | "delivered" | "dropped" | "error" | "expired" | "closed" | "completed";
   reason: string | null;

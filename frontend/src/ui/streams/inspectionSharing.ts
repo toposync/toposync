@@ -1,7 +1,7 @@
 import type { InspectionSnapshot } from "@toposync/plugin-api";
 
 export type InspectionExecution = Pick<InspectionSnapshot["nodes"][number],
-  "node_id" | "operator" | "physical_node_id" | "producer_epoch">;
+  "node_id" | "operator" | "physical_node_id" | "producer_epoch" | "received_from">;
 
 export function sharedInspectionExecutions(flows: Array<{ name: string; label: string; nodes: InspectionExecution[] }>) {
   const executions = new Map<string, { operator: string; consumers: Array<{ pipeline: string; label: string; node: string }> }>();
@@ -14,6 +14,14 @@ export function sharedInspectionExecutions(flows: Array<{ name: string; label: s
       executions.set(key, execution);
     }
     if (!execution.consumers.some(consumer => consumer.pipeline === flow.name && consumer.node === node.node_id))
+      execution.consumers.push({ pipeline: flow.name, label: flow.label, node: node.node_id });
+  }
+  // Only link receipts to a producer already visible in the selected sessions.
+  for (const flow of flows) for (const node of flow.nodes) {
+    const origin = node.received_from;
+    if (!origin) continue;
+    const execution = executions.get(JSON.stringify([origin.physical_node_id, origin.producer_epoch]));
+    if (execution && !execution.consumers.some(consumer => consumer.pipeline === flow.name && consumer.node === node.node_id))
       execution.consumers.push({ pipeline: flow.name, label: flow.label, node: node.node_id });
   }
   return [...executions].filter(([, execution]) => new Set(execution.consumers.map(consumer => consumer.pipeline)).size > 1);

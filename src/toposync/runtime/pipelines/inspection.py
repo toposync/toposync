@@ -80,6 +80,12 @@ class InspectionVisual(BaseModel):
         return self
 
 
+class InspectionResultProducer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    physical_node_id: str = Field(min_length=1, max_length=256)
+    producer_epoch: str = Field(min_length=1, max_length=128)
+
+
 class InspectionNode(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     node_id: str = Field(max_length=128)
@@ -116,6 +122,7 @@ class InspectionNode(BaseModel):
     filtered_count: int = 0
     processing_ms: float | None = Field(default=None, ge=0)
     model_id: str | None = Field(default=None, max_length=128)
+    received_from: InspectionResultProducer | None = None
 
 
 class InspectionDelivery(BaseModel):
@@ -140,6 +147,7 @@ class InspectionChannel:
     physical_id: str
     producer_epoch: str
     occurrences: tuple[tuple[str, str, str, str, str], ...]
+    source_physical_id: str = ""
 
 
 class InspectionSnapshot(BaseModel):
@@ -422,6 +430,7 @@ class PipelineInspectionStore:
                         update={
                             "sequence": session.sequence,
                             "state": "expired",
+                            "received_from": None,
                             "reason": "sample_expired",
                             "frame": None,
                             "detections": [],
@@ -520,6 +529,7 @@ class PipelineInspectionStore:
         visuals: Any = None,
         masks: Any = None,
         processing_ms: float | None = None,
+        received_from: InspectionChannel | None = None,
     ) -> None:
         # The producer never awaits a subscriber, serializes pixels or reads disk.
         self.expire()
@@ -592,6 +602,7 @@ class PipelineInspectionStore:
                                 "image_available": False,
                                 "image_sequence": None,
                                 "motion": None,
+                                "received_from": None,
                             }
                         )
                         self._remove_image(session, key)
@@ -714,6 +725,12 @@ class PipelineInspectionStore:
                     and previous.frame == reference and state in {"passed", "emitted", "delivered"}):
                 values["processing_ms"] = previous.processing_ms
             same_producer = previous.producer_epoch == producer_epoch
+            if state == "received" and received_from and received_from.source_physical_id:
+                values["received_from"] = InspectionResultProducer(
+                    physical_node_id=received_from.source_physical_id,
+                    producer_epoch=received_from.producer_epoch)
+            elif same_producer and previous.frame == reference and state in {"started", "analyzed", "passed", "emitted", "completed"}:
+                values["received_from"] = previous.received_from
             if (state == "analyzed" and reference is not None and same_producer and previous.frame == reference
                     and previous.geometry == values.get("geometry") and previous.model_id == values["model_id"]
                     and values.get("visuals")):

@@ -201,7 +201,7 @@ class NodeExecutionContext:
     def inspect(self, state: str, packet: Packet | None = None, *, reason: str | None = None,
                 frame: Any = None, detections: Any = None, model_id: str | None = None,
                 geometry: Any = None, visuals: Any = None, masks: Any = None,
-                processing_ms: float | None = None) -> None:
+                processing_ms: float | None = None, received_from: InspectionChannel | None = None) -> None:
         if self.cancel_event.is_set() and state != "closed":
             return
         if state == "filtered":
@@ -214,7 +214,7 @@ class NodeExecutionContext:
                     operator=self.operator_id, producer_epoch=self.inspection_epoch, state=state,
                     packet=packet, reason=reason, frame=frame, detections=detections, model_id=model_id,
                     geometry=geometry, visuals=visuals, masks=masks, processing_ms=processing_ms,
-                    revision=self.inspection_revisions.get(pipeline))
+                    revision=self.inspection_revisions.get(pipeline), received_from=received_from)
         except Exception:
             # A diagnostic failure must never change functional processing.
             pass
@@ -251,7 +251,8 @@ class NodeExecutionContext:
         if result.status == QueueOperationStatus.ACCEPTED:
             self.inspect_delivery(channel, "received", result.item)
             self.inspection_filter_reason = None
-            self.inspect("received", result.item)
+            self.inspect("received", result.item, received_from=self.inspection_channels.get(channel.name)
+                if self.operator_id == "core.demand_consumer" else None)
             self.metrics.processed_packets += 1
             self.metrics.last_received_at = time.time()
             if self.stats_count_outputs_on_read and self.stats_node_occurrences:
@@ -940,7 +941,8 @@ class PipelineRuntime:
             source = self._context_by_node[edge.source_node_id]
             projection = InspectionChannel(hashlib.sha256(name.encode()).hexdigest(), source.inspection_epoch,
                 (self.dependencies.inspection_edge_occurrences or {}).get(name,
-                    ((self.compiled.name, edge.source_node_id, edge.source_port, edge.target_node_id, edge.target_port),)))
+                    ((self.compiled.name, edge.source_node_id, edge.source_port, edge.target_node_id, edge.target_port),)),
+                source.node_id)
             source.inspection_channels[name] = projection
             self._context_by_node[edge.target_node_id].inspection_channels[name] = projection
 

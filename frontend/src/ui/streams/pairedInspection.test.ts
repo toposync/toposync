@@ -25,7 +25,7 @@ function fixture(): PairedInspectionMetadata {
     presentation: { frame, image_size: [100,100], geometry },
     snapshot: { session: "session", sequence: 1, pipeline: "test", revision: "revision", dropped: 0, deliveries: [],
       alignment: "analyzed_frame_only", data_class: "diagnostic_private", access_scope: "owner", policy_revision: null, previous_sequence: null, gap: false,
-      nodes: [{ node_id: "detect", physical_node_id: "shared", producer_epoch: "runtime",
+      nodes: [{ node_id: "detect", physical_node_id: "shared", producer_epoch: "runtime", received_from: null,
       operator: "vision.detect", state: "analyzed", reason: null, sequence: 1, motion: null, image_available: true,
       image_sequence: 1, received_count: 1, produced_count: 1, filtered_count: 0, processing_ms: null,
       frame: { ...frame }, geometry: structuredClone(geometry), model_id: "detector", expires_at: 101,

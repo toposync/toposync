@@ -56,6 +56,11 @@ def test_result_reference_deliveries_preserve_producer_edges_without_exposing_de
                 snapshot = store.snapshot(tokens[name])
                 assert [node.node_id for node in snapshot.nodes] == ["reference"]
                 assert snapshot.nodes[0].received_count == 1
+                assert snapshot.nodes[0].received_from.model_dump() == {
+                    "physical_node_id": tracker.node_id, "producer_epoch": tracker.inspection_epoch}
+                assert snapshot.nodes[0].physical_node_id != tracker.node_id
+                reference.inspect("completed", packet)
+                assert store.snapshot(tokens[name]).nodes[0].received_from == snapshot.nodes[0].received_from
                 assert snapshot.deliveries == []  # Imported dependency IDs are outside this session.
             snapshot = store.snapshot(tokens["producer"])
             assert {node.node_id: node.produced_count for node in snapshot.nodes} == {"source": 1, "tracker": 1}
@@ -71,6 +76,29 @@ def test_result_reference_deliveries_preserve_producer_edges_without_exposing_de
             await bundle.stop()
 
     asyncio.run(asyncio.wait_for(scenario(), 3))
+
+
+def test_result_receipt_provenance_expires_and_does_not_survive_restart_or_failure():
+    now = [100.0]
+    store = PipelineInspectionStore(clock=lambda: now[0])
+    token = store.open("consumer", "revision", {"reference": "core.demand_consumer"})
+    arguments = dict(pipeline="consumer", revision="revision", node="reference", physical="consumer",
+        operator="core.demand_consumer", producer_epoch="consumer-first")
+    origin = InspectionChannel("edge", "producer-first", (), "producer")
+    try:
+        store.observe(**arguments, state="received", received_from=origin)
+        assert store.snapshot(token).nodes[0].received_from is not None
+        now[0] += store.maximum_age + 0.01
+        assert store.snapshot(token).nodes[0].received_from is None
+        for state in ("error", "closed", "received"):
+            store.observe(**arguments, state="received", received_from=origin)
+            store.observe(**arguments, state=state)
+            assert store.snapshot(token).nodes[0].received_from is None
+        store.observe(**arguments, state="received", received_from=origin)
+        store.observe(**dict(arguments, producer_epoch="consumer-second"), state="started")
+        assert store.snapshot(token).nodes[0].received_from is None
+    finally:
+        store.close(token)
 
 
 def test_shared_source_separates_production_queue_acceptance_receipt_and_reconciliation():

@@ -32,7 +32,9 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
       const current = previous[name];
       if (!nodes && !current || nodes && current && nodes.length === current.length && nodes.every((node, index) =>
         node.node_id === current[index].node_id && node.operator === current[index].operator
-        && node.physical_node_id === current[index].physical_node_id && node.producer_epoch === current[index].producer_epoch)) return previous;
+        && node.physical_node_id === current[index].physical_node_id && node.producer_epoch === current[index].producer_epoch
+        && node.received_from?.physical_node_id === current[index].received_from?.physical_node_id
+        && node.received_from?.producer_epoch === current[index].received_from?.producer_epoch)) return previous;
       const next = { ...previous };
       if (nodes) next[name] = nodes; else delete next[name];
       return next;
@@ -133,8 +135,8 @@ function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChang
   useEffect(() => {
     // Keep only execution identifiers offscreen so the summary cannot toggle its own visibility.
     if (error) reportExecutions(pipeline.name, null);
-    else if (snapshot) reportExecutions(pipeline.name, snapshot.nodes.map(({ node_id, operator, physical_node_id, producer_epoch }) =>
-      ({ node_id, operator, physical_node_id, producer_epoch })));
+    else if (snapshot) reportExecutions(pipeline.name, snapshot.nodes.map(({ node_id, operator, physical_node_id, producer_epoch, received_from }) =>
+      ({ node_id, operator, physical_node_id, producer_epoch, received_from })));
   }, [error, snapshot, pipeline.name, reportExecutions]);
   useEffect(() => () => reportExecutions(pipeline.name, null), [pipeline.name, reportExecutions]);
   const graph = pipeline.graph as { nodes?: Array<{ id: string; operator: string; config?: { transmission_id?: string } }> };

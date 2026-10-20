@@ -1748,6 +1748,7 @@ export function StreamTilePlayer({
   stillUrl,
   runtimeHealth,
   active,
+  inspectionActive,
   ptzEnabled,
   lowLatencyRequested,
   qualityPreference,
@@ -1790,6 +1791,7 @@ export function StreamTilePlayer({
   stillUrl: string | null;
   runtimeHealth?: StreamingRuntimeTransmissionHealth;
   active: boolean;
+  inspectionActive: boolean;
   ptzEnabled: boolean;
   lowLatencyRequested: boolean;
   qualityPreference: StreamQualityPreference;
@@ -3752,7 +3754,7 @@ export function StreamTilePlayer({
         </div>
 
 	        {controls && <div className="streamsTileOverlayActions">
-          <PipelineInspectionPanel transmissionId={transmissionId} playerElement={frameRef} onPairedChange={setInspectionPaired} enabled={active} />
+          <PipelineInspectionPanel transmissionId={transmissionId} playerElement={frameRef} onPairedChange={setInspectionPaired} enabled={inspectionActive} />
           {variantOptions.length > 0 ? (
             <div className="streamsTileVariantControl" title={currentVariantLabel}>
               <select
@@ -4466,6 +4468,7 @@ function AvailableStreamsDashboard({
                   stillUrl={stillUrl}
                   runtimeHealth={runtimeHealth}
                   active={tileActive}
+                  inspectionActive={playersActive}
                   ptzEnabled={ptzEnabled && controls}
                   lowLatencyRequested={lowLatencyRequested}
                   qualityPreference={qualityPreference}

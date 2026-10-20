@@ -29,5 +29,5 @@
 .pipelineInspectionNode { display: grid; gap: 5px; border-bottom: 1px solid var(--border, #3b4554); padding-block: 12px; overflow-wrap: anywhere; }
 .pipelineInspectionNode span, .pipelineInspectionNode small { font-size: .85rem; }
 .pipelineInspectionVisual { font-size: .85rem; }
-.pipelineInspectionGrid pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .75rem; }
+.pipelineInspectionPanel pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .75rem; }
 @media (max-width: 640px) { .pipelineInspectionGrid { grid-template-columns: minmax(0, 1fr); } }

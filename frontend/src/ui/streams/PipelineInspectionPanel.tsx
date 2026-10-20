@@ -163,6 +163,10 @@ function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChang
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [imageUrl]);
   const sources = [...new Set(snapshot?.nodes.flatMap(node => node.frame ? [`${node.frame.device_id || ""} / ${node.frame.source_id}`] : []))];
+  const nodeLabel = (id: string) => {
+    const node = snapshot?.nodes.find(value => value.node_id === id);
+    return node ? t(`core.ui.pipelines.operator_name.${node.operator}`, {}, id) : id;
+  };
   return <article className="pipelineInspectionFlow" ref={article}>
     <h3>{pipeline.display_name || pipeline.name}</h3>
     <button type="button" onClick={onRemove}>{t("inspection.remove_flow")}</button>
@@ -233,6 +237,22 @@ function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChang
           })}
         </details>
       </div>
+      {snapshot && <details className="pipelineInspectionDetails"><summary>{t("inspection.deliveries")}</summary>
+        <p>{t("inspection.delivery_limit")}</p>
+        {snapshot.deliveries.map(delivery => <article className="pipelineInspectionNode" key={`${delivery.physical_edge_id}:${delivery.source_node_id}:${delivery.source_port}:${delivery.target_node_id}:${delivery.target_port}`}>
+          <strong>{nodeLabel(delivery.source_node_id)} → {nodeLabel(delivery.target_node_id)}</strong>
+          <span>{t("inspection.delivery_counts")}: {delivery.accepted_count} / {delivery.received_count} / {delivery.rejected_count}</span>
+          <span>{t("inspection.latest_delivery")}: {t(`inspection.delivery_${delivery.expires_at === null || delivery.expires_at * 1000 <= now ? "expired" : delivery.state}`)}</span>
+          <details><summary>{t("inspection.delivery_reference")}</summary><pre>{JSON.stringify({
+            physical_edge_id: delivery.physical_edge_id, producer_epoch: delivery.producer_epoch,
+            source: { node: delivery.source_node_id, port: delivery.source_port },
+            target: { node: delivery.target_node_id, port: delivery.target_port },
+            frame: delivery.expires_at !== null && delivery.expires_at * 1000 > now ? delivery.frame : null,
+            revision: snapshot.revision,
+          }, null, 2)}</pre></details>
+        </article>)}
+        {!snapshot.deliveries.length && <p>{t("inspection.delivery_empty")}</p>}
+      </details>}
       {snapshot && snapshot.dropped > 0 ? <p>{t("inspection.reduced")}: {snapshot.dropped}</p> : null}
     {paired && publication && snapshot && target.current ? createPortal(
       <PairedInspectionVideo session={snapshot.session} nodeId={publication.id} frozen={frozen} boxes={boxes}

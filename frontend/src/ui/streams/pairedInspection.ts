@@ -93,6 +93,7 @@ export function decodePairedFrame(bytes: Uint8Array): { metadata: PairedInspecti
       || !p || !reference(p.frame) || !size(p.image_size) || p.image_size[0] * p.image_size[1] * 4 > 16_777_216
       || p.geometry !== null && !geometry(p.geometry)
       || !s || typeof s.session !== "string" || !Array.isArray(s.nodes) || s.nodes.length > 128
+      || !Array.isArray(s.deliveries) || s.deliveries.length > 128
       || !Number.isSafeInteger(s.sequence) || s.sequence < 0
       || !Number.isSafeInteger(metadata.jpeg_length) || metadata.jpeg_length < 4
       || !Array.isArray(metadata.masks) || metadata.masks.length > 4

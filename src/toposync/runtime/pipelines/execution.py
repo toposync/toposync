@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import hashlib
 import math
 import time
 import uuid
@@ -35,7 +36,7 @@ from .runtime import (
 from .runtime_info import build_graph_runtime_info
 from .stats import PipelineStatsStore
 from .telemetry import PipelineTelemetryStore, METRIC_MOTION_SCORE
-from .inspection import PipelineInspectionStore
+from .inspection import PipelineInspectionStore, InspectionChannel
 
 
 class PipelineExecutionError(RuntimeError):
@@ -69,6 +70,7 @@ class PipelineRuntimeDependencies:
     inspection_revisions: dict[str, str] = field(default_factory=dict)
     demand_registry: Any | None = None
     inspection_node_occurrences: dict[str, tuple[tuple[str, str], ...]] | None = None
+    inspection_edge_occurrences: dict[str, tuple[tuple[str, str, str, str, str], ...]] | None = None
     execution_scheduler: ExecutionScheduler | None = None
     artifact_max_bytes_per_packet: int | None = 128 * 1024 * 1024
     artifact_max_total_bytes_per_pipeline: int | None = 512 * 1024 * 1024
@@ -170,6 +172,23 @@ class NodeExecutionContext:
     inspection_filter_reason: str | None = None
     inspection_revisions: dict[str, str] = field(default_factory=dict)
     inspection_occurrences: tuple[tuple[str, str], ...] = ()
+    inspection_channels: dict[str, InspectionChannel] = field(default_factory=dict)
+
+    def inspect_delivery(self, channel: Any, state: str, packet: Packet) -> None:
+        if self.inspection_store is None or (self.cancel_event.is_set() and state != "canceled"):
+            return
+        try:
+            projection = self.inspection_channels.get(channel.name)
+            if projection is None:
+                return
+            for pipeline, source, source_port, target, target_port in projection.occurrences:
+                self.inspection_store.observe_delivery(pipeline=pipeline,
+                    revision=self.inspection_revisions.get(pipeline), channel=projection,
+                    source=source, source_port=source_port, target=target, target_port=target_port,
+                    state=state, packet=packet)
+        except Exception:
+            # Diagnostic failures cannot change channel delivery.
+            pass
 
     def inspection_active(self) -> bool:
         if self.inspection_store is None or self.cancel_event.is_set():
@@ -230,6 +249,7 @@ class NodeExecutionContext:
 
         result = await channel.get(timeout_s=timeout_s, cancel_event=self.cancel_event)
         if result.status == QueueOperationStatus.ACCEPTED:
+            self.inspect_delivery(channel, "received", result.item)
             self.inspection_filter_reason = None
             self.inspect("received", result.item)
             self.metrics.processed_packets += 1
@@ -263,6 +283,7 @@ class NodeExecutionContext:
         accepted = 0
         for channel in channels:
             result = await channel.put(packet, timeout_s=timeout_s, cancel_event=self.cancel_event)
+            self.inspect_delivery(channel, result.status.value, packet)
             if result.status == QueueOperationStatus.ACCEPTED:
                 accepted += 1
                 self.metrics.emitted_packets += 1
@@ -274,7 +295,7 @@ class NodeExecutionContext:
             elif result.status == QueueOperationStatus.CANCELED:
                 self.metrics.canceled_count += 1
         should_count_outputs = accepted > 0 or (not channels and self.stats_count_terminal_outputs_on_emit)
-        self.inspect("closed" if packet.lifecycle.value == "close" else "emitted" if accepted or not channels else "dropped", packet,
+        self.inspect("closed" if packet.lifecycle.value == "close" else "emitted", packet,
                      reason=None if accepted or not channels else "delivery_not_accepted")
         if should_count_outputs and self.stats_node_occurrences:
             now_s = time.time()
@@ -633,6 +654,7 @@ class PipelineRuntime:
             context.stats_count_terminal_outputs_on_emit = prepared.stats_count_terminal_outputs_on_emit
             context.inspection_revisions = prepared.inspection_revisions
             context.inspection_occurrences = prepared.inspection_occurrences
+            context.inspection_channels = prepared.inspection_channels
             context.pipeline_graph_limits_by_pipeline = prepared.pipeline_graph_limits_by_pipeline
             candidate._context_by_node[node] = context
         self.compiled, self.dependencies = compiled, candidate.dependencies
@@ -890,6 +912,8 @@ class PipelineRuntime:
                 inspection_store=self.dependencies.inspection_store,
                 inspection_revisions=self.dependencies.inspection_revisions,
                 inspection_occurrences=(self.dependencies.inspection_node_occurrences or {}).get(node_id, ()),
+                inspection_epoch=(self._reuse_from._context_by_node[node_id].inspection_epoch
+                                  if node_id in self._retained_nodes else uuid.uuid4().hex),
             )
             occurrences_map = self.dependencies.pipeline_stats_node_occurrences
             if occurrences_map is not None:
@@ -910,6 +934,15 @@ class PipelineRuntime:
                 context.stats_count_outputs_on_read = int(outdegree.get(node_id, 0)) == 0 and bool(node_inputs)
                 context.stats_count_terminal_outputs_on_emit = int(outdegree.get(node_id, 0)) == 0 and not bool(node_inputs)
             self._context_by_node[node_id] = context
+
+        for edge in self.compiled.edges:
+            name = f"{edge.source_node_id}.{edge.source_port}->{edge.target_node_id}.{edge.target_port}"
+            source = self._context_by_node[edge.source_node_id]
+            projection = InspectionChannel(hashlib.sha256(name.encode()).hexdigest(), source.inspection_epoch,
+                (self.dependencies.inspection_edge_occurrences or {}).get(name,
+                    ((self.compiled.name, edge.source_node_id, edge.source_port, edge.target_node_id, edge.target_port),)))
+            source.inspection_channels[name] = projection
+            self._context_by_node[edge.target_node_id].inspection_channels[name] = projection
 
 
 def _snapshot_to_dict(snapshot: ChannelMetricsSnapshot) -> dict[str, Any]:

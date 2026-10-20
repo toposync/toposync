@@ -84,7 +84,17 @@ def install_inspection_video_routes(router: APIRouter) -> None:
                 or published.expires_at is None or published.expires_at <= now
                 or selected.selected_writer_id is None
                 or not selected.selected_writer_id.endswith(":" + published.physical_node_id)):
-                raise HTTPException(409, "inspection_frame_not_paired")
+                # A filtered branch may never publish video; its diagnostics still advance.
+                await checked_inspection(request, token)
+                snapshot = await project_inspection(request, snapshot)
+                await checked_inspection(request, token)
+                snapshot = finalize_inspection(request, snapshot)
+                content = json.dumps({"detail": "inspection_frame_not_paired",
+                    "snapshot": snapshot.model_dump(mode="json")}, separators=(",", ":"), allow_nan=False).encode()
+                if len(content) > store.maximum_bytes:
+                    raise HTTPException(429, "inspection_capacity")
+                return Response(content=content, status_code=409, media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
             frame = selected.frame
             if (frame.nbytes > store.maximum_image_bytes
                 or presentation["image_size"] != [frame.shape[1], frame.shape[0]]):

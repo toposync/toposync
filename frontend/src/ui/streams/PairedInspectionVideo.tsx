@@ -130,7 +130,10 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
         const response = await inspectionRead(async signal => {
           const response = await fetch(resolveToposyncUrl(`/api/streams/inspection/${encodeURIComponent(session)}/${encodeURIComponent(nodeId)}/frame${options.current.layers.has("masks") ? "?masks=true" : ""}`),
             { credentials: "same-origin", cache: "no-store", signal });
-          if (response.status === 409 || response.status === 429) return { status: response.status, detail: (await response.json()).detail };
+          if (response.status === 409 || response.status === 429) {
+            const data = JSON.parse(new TextDecoder().decode(await readInspectionResponse(response)));
+            return { status: response.status, detail: data.detail, snapshot: data.snapshot as InspectionSnapshot | undefined };
+          }
           if (!response.ok) throw new Error("inspection_unavailable");
           return { status: response.status, frame: decodePairedFrame(await readInspectionResponse(response)) };
         }, controller.signal);
@@ -138,6 +141,12 @@ export function PairedInspectionVideo({ session, nodeId, frozen, boxes, layers, 
         if (response.status === 409 || response.status === 429) {
           if (response.status === 409 && response.detail !== "inspection_frame_not_paired")
             throw new Error("inspection_access_or_capture_changed");
+          if (response.status === 409) {
+            if (response.snapshot?.session !== session || !Array.isArray(response.snapshot.nodes)
+                || response.snapshot.nodes.length > 128 || !Array.isArray(response.snapshot.deliveries)
+                || response.snapshot.deliveries.length > 128) throw new Error("inspection_snapshot_invalid");
+            if (!options.current.frozen) options.current.onSnapshot(response.snapshot);
+          }
           emptyReads = Math.min(25, emptyReads + 1);
           if (!options.current.frozen) clear();
           setState(options.current.frozen && presented ? "paired" : "waiting"); delay = response.status === 429 || emptyReads >= 25 ? 1000 : 200;

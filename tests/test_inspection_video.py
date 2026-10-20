@@ -246,3 +246,35 @@ def test_preview_resizing_preserves_pixel_centre_geometry_and_bounded_dimensions
     point = np.asarray(result["geometry"]["to_source"]) @ np.array([
         rect["x"] * out_width, rect["y"] * out_height, 1])
     np.testing.assert_allclose(point, [(1 / sx - 1) / 2, (1 / sy - 1) / 2, 1], atol=1e-9)
+
+
+def test_unpublished_branch_still_returns_authorized_bounded_diagnostics(preview, monkeypatch):
+    session = preview.store.sessions[preview.token]
+    value = sample(1, 'main', 0)
+    value.payload['capture_evidence']['published_at'] = preview.now[0]
+    preview.store.observe(pipeline='demo', node='detect', physical='detect', operator='vision.detect',
+        producer_epoch='runtime', revision=session.revision, state='filtered', packet=value, reason='category_rejected')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('An unpublished branch must not encode pixels')
+    monkeypatch.setattr(inspection_video, '_encode_packet', forbidden)
+    response = preview.client.get(preview.url)
+    assert response.status_code == 409 and response.headers['cache-control'] == 'no-store'
+    assert len(response.content) <= preview.store.maximum_bytes
+    data = response.json()
+    assert data['detail'] == 'inspection_frame_not_paired'
+    detection = next(node for node in data['snapshot']['nodes'] if node['node_id'] == 'detect')
+    assert detection['state'] == 'filtered' and detection['reason'] == 'category_rejected'
+    assert detection['frame']['sequence'] == 1
+    preview.allowed[0] = False
+    assert preview.client.get(preview.url).status_code == 403
+    assert preview.token not in preview.store.sessions
+
+
+def test_unpublished_response_rechecks_permission_after_private_projection(preview, monkeypatch):
+    async def revoke(request, snapshot):
+        preview.allowed[0] = False
+        return snapshot
+    monkeypatch.setattr(inspection_video, 'project_inspection', revoke)
+    response = preview.client.get(preview.url)
+    assert response.status_code == 403 and 'snapshot' not in response.json()
+    assert preview.token not in preview.store.sessions

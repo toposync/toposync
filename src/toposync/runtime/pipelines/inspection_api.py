@@ -70,7 +70,9 @@ def finalize_inspection(request: Request, snapshot: InspectionSnapshot) -> Inspe
         store.close(snapshot.session)
         raise HTTPException(409, "inspection_private_access_changed") from error
     now = store.clock()
-    return snapshot.model_copy(update={"nodes": [node.model_copy(update={"visuals": [], "detections": [],
+    return snapshot.model_copy(update={"deliveries": [delivery.model_copy(update={"state": "expired", "frame": None,
+        "expires_at": None}) if delivery.expires_at is None or delivery.expires_at <= now else delivery
+        for delivery in snapshot.deliveries], "nodes": [node.model_copy(update={"visuals": [], "detections": [],
         "geometry": None, "image_available": False}) if node.expires_at is None or node.expires_at <= now else node
         for node in snapshot.nodes]})
 

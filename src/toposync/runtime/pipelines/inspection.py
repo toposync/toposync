@@ -118,6 +118,30 @@ class InspectionNode(BaseModel):
     model_id: str | None = Field(default=None, max_length=128)
 
 
+class InspectionDelivery(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    physical_edge_id: str = Field(max_length=256)
+    producer_epoch: str = Field(max_length=128)
+    source_node_id: str = Field(max_length=128)
+    source_port: str = Field(max_length=128)
+    target_node_id: str = Field(max_length=128)
+    target_port: str = Field(max_length=128)
+    state: Literal["accepted", "received", "dropped", "timeout", "canceled", "expired"]
+    sequence: int = Field(ge=0)
+    frame: dict[str, Any] | None = None
+    expires_at: float | None = None
+    accepted_count: int = 0
+    received_count: int = 0
+    rejected_count: int = 0
+
+
+@dataclass(frozen=True)
+class InspectionChannel:
+    physical_id: str
+    producer_epoch: str
+    occurrences: tuple[tuple[str, str, str, str, str], ...]
+
+
 class InspectionSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     session: str
@@ -125,6 +149,7 @@ class InspectionSnapshot(BaseModel):
     revision: str
     sequence: int
     nodes: list[InspectionNode]
+    deliveries: list[InspectionDelivery] = Field(default_factory=list, max_length=128)
     dropped: int
     alignment: Literal["analyzed_frame_only"] = "analyzed_frame_only"
     data_class: Literal["diagnostic_private"] = "diagnostic_private"
@@ -142,6 +167,8 @@ class _Session:
     expires: float
     state_bytes: int = 0
     node_sizes: dict[str, int] = field(default_factory=dict)
+    deliveries: dict[tuple[str, str, str, str], InspectionDelivery] = field(default_factory=dict)
+    delivery_sizes: dict[tuple[str, str, str, str], int] = field(default_factory=dict)
     sequence: int = 0
     dropped: int = 0
     images: dict[str, tuple[int, Any]] = field(default_factory=dict)
@@ -362,6 +389,8 @@ class PipelineInspectionStore:
             session.occurrence_ids.clear()
             session.image_bytes = 0
             session.nodes.clear()
+            session.deliveries.clear()
+            session.delivery_sizes.clear()
             session.motion_windows.clear()
             session.motion_captures.clear()
             session.last_frames.clear()
@@ -410,6 +439,58 @@ class PipelineInspectionStore:
                     session.state_bytes += size - session.node_sizes[node]
                     session.node_sizes[node] = size
                     session.changed.set()
+            for key, value in list(session.deliveries.items()):
+                if value.expires_at is not None and value.expires_at <= now:
+                    session.sequence += 1
+                    expired = value.model_copy(update={"state": "expired", "frame": None,
+                        "expires_at": None, "sequence": session.sequence})
+                    size = len(expired.model_dump_json().encode())
+                    session.state_bytes += size - session.delivery_sizes[key]
+                    session.delivery_sizes[key] = size
+                    session.deliveries[key] = expired
+                    session.changed.set()
+
+    def observe_delivery(self, *, pipeline: str, revision: str | None, channel: InspectionChannel,
+                         source: str, source_port: str, target: str, target_port: str,
+                         state: str, packet: Packet) -> None:
+        self.expire()
+        now = self.clock()
+        reference = frame_reference(packet)
+        expires = min(now + self.maximum_age, reference["published_at"] + self.maximum_age) if reference and reference["published_at"] is not None else now + self.maximum_age
+        key = (source, source_port, target, target_port)
+        for token, session in list(self.sessions.items()):
+            if (session.pipeline != pipeline or session.revision != revision
+                    or source not in session.nodes or target not in session.nodes):
+                continue
+            previous = session.deliveries.get(key)
+            if previous is None and len(session.deliveries) >= self.maximum_items:
+                session.dropped += 1
+                session.sequence += 1
+                session.changed.set()
+                continue
+            same = previous is not None and previous.producer_epoch == channel.producer_epoch and previous.physical_edge_id == channel.physical_id
+            value = InspectionDelivery(physical_edge_id=channel.physical_id, producer_epoch=channel.producer_epoch,
+                source_node_id=source, source_port=source_port, target_node_id=target, target_port=target_port,
+                state=state if expires > now else "expired", sequence=session.sequence + 1,
+                frame=reference if expires > now else None, expires_at=expires if expires > now else None,
+                accepted_count=(previous.accepted_count if same else 0) + (state == "accepted"),
+                received_count=(previous.received_count if same else 0) + (state == "received"),
+                rejected_count=(previous.rejected_count if same else 0) + (state in {"dropped", "timeout", "canceled"}))
+            size = len(value.model_dump_json().encode())
+            if session.state_bytes - session.delivery_sizes.get(key, 0) + size > self.maximum_bytes:
+                self.close(token)
+                continue
+            identifier = packet_occurrence_id(packet)
+            if identifier:
+                if identifier not in session.occurrence_ids and len(session.occurrence_ids) >= self.maximum_items:
+                    self.close(token)
+                    continue
+                session.occurrence_ids.add(identifier)
+            session.sequence += 1
+            session.state_bytes += size - session.delivery_sizes.get(key, 0)
+            session.delivery_sizes[key] = size
+            session.deliveries[key] = value
+            session.changed.set()
 
     @staticmethod
     def _remove_image(session: _Session, node: str) -> None:
@@ -652,7 +733,7 @@ class PipelineInspectionStore:
                 filtered_count=(previous.filtered_count if same_producer else 0)
                 + (state == "filtered"),
             )
-            if state in {"completed", "passed", "emitted"} and previous.frame == reference and previous.reason:
+            if state in {"completed", "passed", "emitted"} and same_producer and previous.frame == reference and previous.reason and reason is None:
                 values["reason"] = previous.reason
             if (
                 state in {"received", "started", "passed", "emitted", "delivered", "completed"}
@@ -761,6 +842,7 @@ class PipelineInspectionStore:
             revision=session.revision,
             sequence=session.sequence,
             nodes=list(session.nodes.values()),
+            deliveries=list(session.deliveries.values()),
             dropped=session.dropped,
         )
 

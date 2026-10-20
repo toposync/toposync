@@ -543,12 +543,29 @@ export type InspectionNode = {
   model_id: string | null;
 };
 
+export type InspectionDelivery = {
+  physical_edge_id: string;
+  producer_epoch: string;
+  source_node_id: string;
+  source_port: string;
+  target_node_id: string;
+  target_port: string;
+  state: "accepted" | "received" | "dropped" | "timeout" | "canceled" | "expired";
+  sequence: number;
+  frame: Record<string, unknown> | null;
+  expires_at: number | null;
+  accepted_count: number;
+  received_count: number;
+  rejected_count: number;
+};
+
 export type InspectionSnapshot = {
   session: string;
   pipeline: string;
   revision: string;
   sequence: number;
   nodes: InspectionNode[];
+  deliveries: InspectionDelivery[];
   dropped: number;
   alignment: "analyzed_frame_only";
   data_class: "diagnostic_private";

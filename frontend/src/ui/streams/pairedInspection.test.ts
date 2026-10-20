@@ -23,7 +23,7 @@ function fixture(): PairedInspectionMetadata {
   const geometry: PixelGeometry = { image_size: [100, 100], source_size: [100, 100], to_source: [[1,0,0],[0,1,0],[0,0,1]], valid_domains: [] };
   return { schema_version: 2, transport: "paired_jpeg", expires_at: 101, jpeg_length: 4, masks: [],
     presentation: { frame, image_size: [100,100], geometry },
-    snapshot: { session: "session", sequence: 1, pipeline: "test", revision: "revision", dropped: 0,
+    snapshot: { session: "session", sequence: 1, pipeline: "test", revision: "revision", dropped: 0, deliveries: [],
       alignment: "analyzed_frame_only", data_class: "diagnostic_private", access_scope: "owner", policy_revision: null, previous_sequence: null, gap: false,
       nodes: [{ node_id: "detect", physical_node_id: "shared", producer_epoch: "runtime",
       operator: "vision.detect", state: "analyzed", reason: null, sequence: 1, motion: null, image_available: true,
@@ -83,6 +83,9 @@ test("binary envelope keeps metadata and jpeg paired and rejects malformed dimen
   const value = fixture();
   assert.deepEqual(decodePairedFrame(encode(value)).metadata, value);
   assert.deepEqual([...decodePairedFrame(encode(value)).jpeg], [255,216,255,217]);
+  const overfull = fixture();
+  overfull.snapshot.deliveries = Array(129).fill({});
+  assert.throws(() => decodePairedFrame(encode(overfull)), /invalid/);
   value.presentation.image_size = [8192,8192];
   assert.throws(() => decodePairedFrame(encode(value)), /invalid/);
   assert.throws(() => decodePairedFrame(new Uint8Array(400001)), /capacity/);

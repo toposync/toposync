@@ -213,6 +213,7 @@ class PipelineBundleRuntime:
             plan=self.plan
         )
         self.dependencies.inspection_node_occurrences = _inspection_occurrences(self.plan)
+        self.dependencies.inspection_edge_occurrences = _inspection_edge_occurrences(self.report, self.plan)
         self.dependencies.pipeline_graph_limits_by_pipeline = {
             pipeline.name: dict(pipeline.limits) for pipeline in self.report.pipelines
         }
@@ -236,6 +237,7 @@ class PipelineBundleRuntime:
         dependencies = replace(dependencies or self.dependencies,
             pipeline_stats_node_occurrences=_build_bundle_stats_node_occurrences(plan=plan),
             inspection_node_occurrences=_inspection_occurrences(plan),
+            inspection_edge_occurrences=_inspection_edge_occurrences(report, plan),
             pipeline_graph_limits_by_pipeline={pipeline.name: dict(pipeline.limits) for pipeline in report.pipelines})
         try:
             await self._runtime.reconcile(plan.merged_pipeline, dependencies)
@@ -269,6 +271,17 @@ class PipelineBundleRuntime:
             "graph_info": graph_info,
             "runtime": runtime_snapshot,
         }
+
+
+def _inspection_edge_occurrences(report: CompilationReport, plan: MergedPipelinePlan) -> dict[str, tuple[tuple[str, str, str, str, str], ...]]:
+    edges = defaultdict(set)
+    for pipeline in report.pipelines:
+        for edge in pipeline.edges:
+            source = plan.occurrence_to_merged_node_id[(pipeline.name, edge.source_node_id)]
+            target = plan.occurrence_to_merged_node_id[(pipeline.name, edge.target_node_id)]
+            name = f"{source}.{edge.source_port}->{target}.{edge.target_port}"
+            edges[name].add((pipeline.name, edge.source_node_id, edge.source_port, edge.target_node_id, edge.target_port))
+    return {name: tuple(sorted(occurrences)) for name, occurrences in edges.items()}
 
 
 def _inspection_occurrences(plan: MergedPipelinePlan) -> dict[str, tuple[tuple[str, str], ...]]:

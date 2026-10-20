@@ -276,11 +276,17 @@ class PipelineBundleRuntime:
 def _inspection_edge_occurrences(report: CompilationReport, plan: MergedPipelinePlan) -> dict[str, tuple[tuple[str, str, str, str, str], ...]]:
     edges = defaultdict(set)
     for pipeline in report.pipelines:
+        origins = {node.node_id: node.origins for node in pipeline.nodes}
         for edge in pipeline.edges:
             source = plan.occurrence_to_merged_node_id[(pipeline.name, edge.source_node_id)]
             target = plan.occurrence_to_merged_node_id[(pipeline.name, edge.target_node_id)]
             name = f"{source}.{edge.source_port}->{target}.{edge.target_port}"
             edges[name].add((pipeline.name, edge.source_node_id, edge.source_port, edge.target_node_id, edge.target_port))
+            # Expanded result dependencies still belong to the original producer's graph.
+            for source_pipeline, source_node in origins[edge.source_node_id]:
+                for target_pipeline, target_node in origins[edge.target_node_id]:
+                    if source_pipeline == target_pipeline:
+                        edges[name].add((source_pipeline, source_node, edge.source_port, target_node, edge.target_port))
     return {name: tuple(sorted(occurrences)) for name, occurrences in edges.items()}
 
 

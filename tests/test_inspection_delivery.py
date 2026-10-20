@@ -16,6 +16,63 @@ from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines.inspection import PipelineInspectionStore
 
 
+def test_result_reference_deliveries_preserve_producer_edges_without_exposing_dependencies():
+    from test_pipeline_result_references import result_fixture
+    from toposync.runtime.pipelines.demands import DemandRequest, ResourceDemandRegistry
+    from toposync.runtime.pipelines.execution import PassThroughRuntime
+
+    async def scenario():
+        registry, producer, manual, automatic = result_fixture(lambda *_: PassThroughRuntime())
+        compiler = PipelineGraphCompiler(registry)
+        demands = ResourceDemandRegistry(lambda *_: True, compiler=compiler)
+        demands.bind([producer])
+        _, output, revision = demands.outputs["people.primary"]
+        for pipeline in (manual, automatic):
+            demand = demands.open("owner", DemandRequest(consumer_id=pipeline.name,
+                purpose="manual" if pipeline is manual else "automatic", result_key=output.key,
+                contract=output.contract, production_revision=revision, payload_keys=["subject"]))
+            pipeline.graph["nodes"][0]["config"]["demand_id"] = demand.id
+        store = PipelineInspectionStore()
+        tokens = {pipeline.name: store.open(pipeline.name, "revision",
+            {node["id"]: node["operator"] for node in pipeline.graph["nodes"]})
+            for pipeline in (producer, manual, automatic)}
+        bundle = PipelineBundleRuntime(compiler.compile_many([manual, automatic],
+            catalog=[producer, manual, automatic]), registry, PipelineRuntimeDependencies(
+                demand_registry=demands, inspection_store=store,
+                inspection_revisions={name: "revision" for name in tokens}))
+        contexts = bundle._runtime._context_by_node
+        source = next(context for context in contexts.values()
+            if ("producer", "source") in context.inspection_occurrences)
+        tracker = next(context for context in contexts.values()
+            if ("producer", "tracker") in context.inspection_occurrences)
+        packet = Packet.create(stream_id="synthetic", payload={"subject": {"id": "synthetic"}})
+        try:
+            assert await source.emit(packet) == 1
+            assert await tracker.read() is packet
+            assert await tracker.emit(packet) == 2
+            for name in ("manual", "automatic"):
+                reference = contexts[bundle.plan.occurrence_to_merged_node_id[name, "reference"]]
+                assert (await reference.read()).payload["subject"] == {"id": "synthetic"}
+                snapshot = store.snapshot(tokens[name])
+                assert [node.node_id for node in snapshot.nodes] == ["reference"]
+                assert snapshot.nodes[0].received_count == 1
+                assert snapshot.deliveries == []  # Imported dependency IDs are outside this session.
+            snapshot = store.snapshot(tokens["producer"])
+            assert {node.node_id: node.produced_count for node in snapshot.nodes} == {"source": 1, "tracker": 1}
+            assert len(snapshot.deliveries) == 1
+            delivery = snapshot.deliveries[0]
+            assert (delivery.source_node_id, delivery.target_node_id) == ("source", "tracker")
+            assert (delivery.accepted_count, delivery.received_count) == (1, 1)
+        finally:
+            for token in tokens.values():
+                store.close(token)
+            for identifier in list(demands.demands):
+                demands.release(identifier)
+            await bundle.stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), 3))
+
+
 def test_shared_source_separates_production_queue_acceptance_receipt_and_reconciliation():
     async def scenario():
         registry = OperatorRegistry()

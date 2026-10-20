@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { InspectionSnapshot } from "@toposync/plugin-api";
 import { resolveToposyncUrl } from "@toposync/plugin-api";
@@ -8,6 +8,7 @@ import { Icon } from "../Icon";
 import { PairedInspectionVideo } from "./PairedInspectionVideo";
 import { inspectionRead } from "./inspectionRead";
 import { inspectionSources } from "./inspectionSources";
+import { sharedInspectionExecutions, type InspectionExecution } from "./inspectionSharing";
 import { readInspectionResponse } from "./pairedInspection";
 import "./pipelineInspection.css";
 
@@ -24,7 +25,21 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(!document.hidden);
+  const [executions, setExecutions] = useState<Record<string, InspectionExecution[]>>({});
+  const reportExecutions = useCallback((name: string, nodes: InspectionExecution[] | null) => {
+    setExecutions(previous => {
+      const current = previous[name];
+      if (!nodes && !current || nodes && current && nodes.length === current.length && nodes.every((node, index) =>
+        node.node_id === current[index].node_id && node.operator === current[index].operator
+        && node.physical_node_id === current[index].physical_node_id && node.producer_epoch === current[index].producer_epoch)) return previous;
+      const next = { ...previous };
+      if (nodes) next[name] = nodes; else delete next[name];
+      return next;
+    });
+  }, []);
   const active = enabled && visible && open;
+  const shared = sharedInspectionExecutions(pipelines.filter(pipeline => selected.includes(pipeline.name))
+    .map(pipeline => ({ name: pipeline.name, label: pipeline.display_name || pipeline.name, nodes: executions[pipeline.name] || [] })));
   const configuredCameras = [...new Map(pipelines.flatMap(pipeline => inspectionSources(pipeline.graph)).map(source => [source.id, source])).values()];
   const choices = cameras.length ? pipelines.filter(pipeline => inspectionSources(pipeline.graph).some(source => cameras.includes(source.id))) : pipelines;
   useEffect(() => {
@@ -70,8 +85,18 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
           }} />{pipeline.display_name || pipeline.name}</label>)}
       </fieldset>
       {error ? <p role="alert">{t("inspection.failed")}</p> : loading ? <p role="status">{t("inspection.loading")}</p> : !pipelines.length ? <p>{t("inspection.empty")}</p> : null}
+      {active && shared.length > 0 ? <details className="pipelineInspectionSharing"><summary>{t("inspection.shared_execution")}</summary>
+        <p>{t("inspection.shared_selected")}</p>
+        <ul>{shared.map(([key, execution]) => <li key={key}>
+          <strong>{t(`core.ui.pipelines.operator_name.${execution.operator}`, {}, execution.operator)}</strong>
+          <ul>{execution.consumers.map(consumer => <li key={JSON.stringify([consumer.pipeline, consumer.node])}>
+            {consumer.label} · {consumer.node}
+          </li>)}</ul>
+        </li>)}</ul>
+      </details> : null}
       {active ? <div className="pipelineInspectionFlows">{pipelines.filter(pipeline => selected.includes(pipeline.name)).map(pipeline =>
         <InspectionFlow key={pipeline.name} pipeline={pipeline} transmissionId={transmissionId}
+          reportExecutions={reportExecutions}
           onRemove={() => { setSelected(previous => previous.filter(name => name !== pipeline.name)); if (focused === pipeline.name) setFocused(selected.find(name => name !== pipeline.name) || ""); }}
           playerElement={focused === pipeline.name ? playerElement : undefined}
           onPairedChange={focused === pipeline.name ? onPairedChange : undefined}
@@ -80,10 +105,11 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
   </>;
 }
 
-function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChange, onFocus, onRemove }: {
+function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChange, onFocus, onRemove, reportExecutions }: {
   pipeline: Pipeline; transmissionId?: string; playerElement?: React.RefObject<HTMLDivElement>;
   onPairedChange?: (active: boolean) => void; onFocus?: () => void;
   onRemove: () => void;
+  reportExecutions: (name: string, nodes: InspectionExecution[] | null) => void;
 }) {
   const { t } = i18n.useI18n();
   const article = useRef<HTMLElement>(null);
@@ -100,6 +126,13 @@ function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChang
   const [boxes, setBoxes] = useState(true);
   const [layers, setLayers] = useState<ReadonlySet<string>>(() => new Set(["pose", "tracks", "trails"]));
   const [selectedNodes, setSelectedNodes] = useState<ReadonlySet<string>>();
+  useEffect(() => {
+    // Keep only execution identifiers offscreen so the summary cannot toggle its own visibility.
+    if (error) reportExecutions(pipeline.name, null);
+    else if (snapshot) reportExecutions(pipeline.name, snapshot.nodes.map(({ node_id, operator, physical_node_id, producer_epoch }) =>
+      ({ node_id, operator, physical_node_id, producer_epoch })));
+  }, [error, snapshot, pipeline.name, reportExecutions]);
+  useEffect(() => () => reportExecutions(pipeline.name, null), [pipeline.name, reportExecutions]);
   const graph = pipeline.graph as { nodes?: Array<{ id: string; operator: string; config?: { transmission_id?: string } }> };
   const publications = graph.nodes?.filter(node => node.operator === "stream.publish_video") || [];
   const publication = publications.find(node => node.config?.transmission_id === transmissionId) || publications[0];

@@ -53,9 +53,13 @@ class RecordOccurrenceRuntime(SinkRuntime):
         try:
             result = await self.services.call("occurrences.record", contribution=value,
                 retention_seconds=float(self.config.retention_days * 86400),
-                request_notice=self.config.notice == "simulated",
+                request_notice=self.config.notice == "simulated", admit_live_update=True,
                 **({"return_change": True} if self.config.enrich else {}))
         except OccurrenceConflict as error:
+            if str(error) == "occurrence_requires_open" and (value.lifecycle == "CLOSE" or value.replay):
+                if context is not None:
+                    context.inspect("filtered", packet, reason="occurrence_not_observed")
+                return []
             if str(error) != "occurrence_unavailable":
                 raise
             # A removed episode stays removed even while its producer finishes emitting it.

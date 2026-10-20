@@ -110,6 +110,69 @@ def test_recording_does_not_hide_a_changed_message_as_a_removed_episode(tmp_path
     asyncio.run(scenario())
 
 
+def test_late_recording_admits_current_evidence_once_without_backdating(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        adapter = ActivityEvidenceRuntime()
+        values = []
+        for sequence, lifecycle in ((1, Lifecycle.OPEN), (5, Lifecycle.UPDATE),
+                                    (6, Lifecycle.UPDATE), (7, Lifecycle.CLOSE)):
+            source = event(sequence=sequence, lifecycle=lifecycle)
+            source.payload["entity_activity"]["started_at"] = 1.0
+            values.append((await adapter.process_packet(source, None))[0])
+        services = dependencies(history)
+        services.services.register("occurrences.enrichment_allowed", history.enrichment_allowed)
+        services.services.register("occurrences.enrich", history.enrich_occurrence)
+        sink = RecordOccurrenceRuntime(settings(enrich=True), services)
+        await sink.prepare(None)
+        identifier = OccurrenceStore.identifier("garage", "visit-1")
+        original = dict(values[1].payload["activity_observation"])
+        [annotation] = await sink.process_packet(values[1], None)
+        reference = annotation.payload["occurrence_reference"]
+        assert reference["evidence_id"] == original["evidence_id"]
+        assert await history.enrichment_allowed(reference, evidence=original)
+        first = history.occurrences.get(identifier, read_filter=lambda _: True)
+        assert first["started_at"] == first["admitted_at"] == 5
+        assert first["coverage"]["gaps"] is True
+        assert history.occurrences.revisions(identifier)[0]["kind"] == "ADMIT"
+        # Reconciliation replaces the consumer while the producer remains active.
+        sink = RecordOccurrenceRuntime(settings(), dependencies(history))
+        await sink.process_packet(values[1], None)
+        assert history.occurrences.get(identifier, read_filter=lambda _: True) == first
+        for value in (values[2], values[0], values[3], values[1]):
+            await sink.process_packet(value, None)
+        result = history.occurrences.get(identifier, read_filter=lambda _: True)
+        assert result["status"] == "CLOSE" and result["started_at"] == 5
+        assert result["ended_at"] == 7 and result["duration_seconds"] == 2
+        assert result["evidence"][original["evidence_id"]]["started_at"] == 1
+        assert values[1].payload["activity_observation"] == original
+        assert len(history.occurrences.deliveries(identifier)) == 1
+        assert NotificationsRuntime(data_dir=tmp_path).occurrences.get(identifier, read_filter=lambda _: True) == result
+        await history.erase_occurrence(identifier, expected_revision=result["revision"])
+        await sink.process_packet(values[1], None)
+        assert history.occurrences.get(identifier, read_filter=lambda _: True)["status"] == "deleted"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_late_recording_never_invents_an_episode_from_replay_or_close(tmp_path, terminal):
+    from types import SimpleNamespace
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        adapter = ActivityEvidenceRuntime()
+        await adapter.process_packet(event(), None)
+        value = (await adapter.process_packet(event(sequence=2,
+            lifecycle=Lifecycle.CLOSE if terminal else Lifecycle.UPDATE), None))[0]
+        if not terminal:
+            value.payload["activity_observation"]["replay"] = True
+        decisions = []
+        context = SimpleNamespace(inspect=lambda *args, **kwargs: decisions.append(kwargs["reason"]))
+        await RecordOccurrenceRuntime(settings(), dependencies(history)).process_packet(value, context)
+        assert history.occurrences.list(read_filter=lambda _: True)[0] == []
+        assert decisions == ["occurrence_not_observed"]
+    asyncio.run(scenario())
+
+
 def test_durable_result_queue_keeps_every_update_under_slow_storage(tmp_path):
     async def scenario():
         history = NotificationsRuntime(data_dir=tmp_path)
@@ -165,6 +228,72 @@ def test_durable_result_queue_keeps_every_update_under_slow_storage(tmp_path):
             await runtime.stop()
             await runtime.dependencies.execution_scheduler.shutdown()
     asyncio.run(asyncio.wait_for(scenario(), 6))
+
+
+def test_recording_joins_a_running_manual_producer_without_restarting_it(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        operators = OperatorRegistry()
+        register_builtin_operators(operators)
+        adapter, pending = ActivityEvidenceRuntime(), asyncio.Queue()
+        recorded, starts = asyncio.Event(), []
+
+        class Source(SourceOperatorRuntime):
+            async def run(self, context):
+                starts.append(True)
+                while not context.cancel_event.is_set():
+                    source = await pending.get()
+                    await context.emit((await adapter.process_packet(source, None))[0])
+
+        operators.register_operator(operator_id="test.admitted", inputs=[], outputs=[{"name": "out"}],
+            produces_payload_keys=["activity_observation"], runtime_factory=lambda *_: Source())
+        contract = ResultContract(version=1, payload_keys=["activity_observation"])
+        producer = Pipeline(name="fixture", enabled=False, graph=build_pipeline_graph_v2(
+            graph_uid="fixture", nodes=[{"id": "events", "operator": "test.admitted"}], edges=[],
+            meta={"outputs": [{"key": "fixture.events", "node_uid": "events", "contract": contract.model_dump(),
+                              "production_scope": "fixture"}]}))
+        compiler = PipelineGraphCompiler(operators)
+        demands = ResourceDemandRegistry(lambda *_: True, compiler=compiler)
+        demands.bind([producer])
+        def demand(purpose):
+            return demands.open("owner", DemandRequest(consumer_id=purpose, purpose=purpose,
+                result_key="fixture.events", contract=contract, payload_keys=contract.payload_keys,
+                production_revision=demands.outputs["fixture.events"][2]))
+        manual = demand("manual")
+        services = ServiceRegistry()
+        async def record(**kwargs):
+            result = await history.record_occurrence(**kwargs)
+            recorded.set()
+            return result
+        services.register("occurrences.record", record)
+        def compile():
+            return compiler.compile_many(demands.pipelines(), catalog=[producer])
+        runtime = PipelineBundleRuntime(compile(), operators,
+            PipelineRuntimeDependencies(services=services, demand_registry=demands))
+        await runtime.start()
+        try:
+            await pending.put(event())
+            for _ in range(100):
+                if manual.received: break
+                await asyncio.sleep(.005)
+            assert manual.received == 1
+            automatic = demand("automatic")
+            automatic.consequence = {"operator": "core.record_occurrence", "config": settings()}
+            await runtime.reconcile(compile())
+            await pending.put(event(sequence=5, lifecycle=Lifecycle.UPDATE))
+            await asyncio.wait_for(recorded.wait(), 1)
+            assert len(starts) == 1 and manual.received == 2
+            recorded.clear()
+            await pending.put(event(sequence=6, lifecycle=Lifecycle.CLOSE))
+            await asyncio.wait_for(recorded.wait(), 1)
+            result = history.occurrences.get(OccurrenceStore.identifier("garage", "visit-1"), read_filter=lambda _: True)
+            assert result["status"] == "CLOSE" and result["started_at"] == 5
+            assert result["coverage"]["gaps"] and len(history.occurrences.deliveries(result["id"])) == 1
+        finally:
+            for identifier in list(demands.demands): demands.release(identifier)
+            await runtime.stop()
+            await runtime.dependencies.execution_scheduler.shutdown()
+    asyncio.run(asyncio.wait_for(scenario(), 4))
 
 
 def test_admission_retains_observed_start_without_extending_time_at_close(tmp_path):

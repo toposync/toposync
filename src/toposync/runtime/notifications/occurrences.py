@@ -221,7 +221,8 @@ class OccurrenceStore:
             (document["id"], document["revision"], kind, now, evidence_id))
 
     def record(self, contribution: Contribution, *, retention_seconds: float,
-               request_notice: bool = False, now: float | None = None) -> OccurrenceChange:
+               request_notice: bool = False, now: float | None = None,
+               admit_live_update: bool = False) -> OccurrenceChange:
         contribution = Contribution.model_validate(contribution)
         now = time.time() if now is None else now
         # Use the same finite timestamp contract for caller-supplied test clocks and retention.
@@ -231,12 +232,13 @@ class OccurrenceStore:
         requested_delivery = None
         with self._transaction() as connection:
             document = self._load(connection, identifier)
+            admitted = document is None and admit_live_update and contribution.lifecycle == "UPDATE" and not contribution.replay
             if document and (document["status"] in {"deleted", "expired"} or now >= document["expires_at"]):
                 raise OccurrenceConflict("occurrence_unavailable")
             if not self._remember(connection, identifier, contribution):
                 return OccurrenceChange(document, False)
             if document is None:
-                if contribution.lifecycle != "OPEN":
+                if contribution.lifecycle != "OPEN" and not admitted:
                     raise OccurrenceConflict("occurrence_requires_open")
                 document = {
                     "id": identifier, "objective_id": contribution.objective_id,
@@ -253,6 +255,9 @@ class OccurrenceStore:
                     "participants": {}, "members": {}, "evidence": {}, "enrichments": [],
                     "coverage": {"continuous_video": False, "basis": "observations", "gaps": False},
                 }
+                if admitted:
+                    document["admitted_at"] = document["started_at"] = contribution.observed_at
+                    document["coverage"]["gaps"] = True
                 if request_notice and not contribution.replay:
                     requested_delivery = _digest([identifier, "simulated_notice"])
                     connection.execute("INSERT INTO occurrence_delivery VALUES (?, ?, 'requested', ?, NULL, NULL)",
@@ -298,8 +303,10 @@ class OccurrenceStore:
             if document["clock_domain"] != contribution.clock_domain:
                 document["duration_status"] = "incomparable_clocks"
             if document["duration_status"] == "observed":
-                document["started_at"] = min(document["started_at"], contribution.started_at
-                    if contribution.started_at is not None else contribution.observed_at)
+                start = contribution.started_at if contribution.started_at is not None else contribution.observed_at
+                # A late consumer cannot recover an unobserved interval from later producer updates.
+                start = max(document.get("admitted_at", 0), start)
+                document["started_at"] = min(document["started_at"], start)
                 document["last_observed_at"] = max(document["last_observed_at"], contribution.observed_at)
                 document["duration_seconds"] = document["last_observed_at"] - document["started_at"]
             else:
@@ -308,7 +315,7 @@ class OccurrenceStore:
             if all(value["closed"] for value in document["members"].values()):
                 document.update(status="CLOSE", ended_at=document["last_observed_at"] if document["duration_status"] == "observed" else None,
                     close_reason=contribution.reason)
-            self._save(connection, document, now=now, kind=contribution.lifecycle, evidence_id=contribution.evidence_id)
+            self._save(connection, document, now=now, kind="ADMIT" if admitted else contribution.lifecycle, evidence_id=contribution.evidence_id)
             return OccurrenceChange(document, True, requested_delivery)
 
     def _enrichment_document(self, connection, reference: OccurrenceReference, now: float):

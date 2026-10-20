@@ -82,9 +82,10 @@ class NotificationsRuntime:
 
     async def record_occurrence(self, contribution: Contribution, *, retention_seconds: float,
                                 request_notice: bool = False, now: float | None = None,
-                                return_change: bool = False) -> dict | OccurrenceChange:
+                                return_change: bool = False, admit_live_update: bool = False) -> dict | OccurrenceChange:
         change = await asyncio.to_thread(self.occurrences.record, contribution,
-            retention_seconds=retention_seconds, request_notice=request_notice, now=now)
+            retention_seconds=retention_seconds, request_notice=request_notice, now=now,
+            admit_live_update=admit_live_update)
         if change.changed:
             await self._publish_occurrence(change.document["id"], now=now)
         if change.requested_delivery is not None:

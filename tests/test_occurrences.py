@@ -79,6 +79,23 @@ def test_overlapping_objectives_keep_distinct_effects_and_replay_is_idempotent(t
     assert store.deliveries(replay_only.document['id']) == []
 
 
+def test_late_admission_is_explicit_atomic_and_cannot_bypass_expiry(tmp_path):
+    store = NotificationsRuntime(data_dir=tmp_path).occurrences
+    value = contribution(lifecycle='UPDATE', started_at=1.0, observed_at=10.0)
+    for changes in ({}, {'admit_live_update': True, 'replay': True}):
+        replay = changes.get('replay', False)
+        with pytest.raises(OccurrenceConflict, match='requires_open'):
+            record(store, value.model_copy(update={'replay': replay}),
+                   admit_live_update=changes.get('admit_live_update', False))
+    first = record(store, value, admit_live_update=True)
+    assert first.document['admitted_at'] == 10
+    assert not record(store, value, admit_live_update=True).changed
+    with pytest.raises(OccurrenceConflict, match='message_changed'):
+        record(store, value.model_copy(update={'observed_at': 11.0}), admit_live_update=True)
+    with pytest.raises(OccurrenceConflict, match='unavailable'):
+        store.record(value, retention_seconds=60.0, admit_live_update=True, now=1060.0)
+
+
 def test_late_enrichment_after_close_preserves_observed_time_and_does_not_repeat_notice(tmp_path):
     runtime = NotificationsRuntime(data_dir=tmp_path)
     async def scenario():

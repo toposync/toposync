@@ -12,8 +12,9 @@ import { sharedInspectionExecutions, type InspectionExecution } from "./inspecti
 import { readInspectionResponse } from "./pairedInspection";
 import "./pipelineInspection.css";
 
-export function PipelineInspectionPanel({ transmissionId, playerElement, onPairedChange, enabled = true }: {
+export function PipelineInspectionPanel({ transmissionId, playerElement, onPairedChange, enabled = true, initialPipeline }: {
   transmissionId?: string; playerElement?: React.RefObject<HTMLDivElement>; onPairedChange?: (active: boolean) => void; enabled?: boolean;
+  initialPipeline?: string;
 }) {
   const { t } = i18n.useI18n();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -40,8 +41,8 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
   const active = enabled && visible && open;
   const shared = sharedInspectionExecutions(pipelines.filter(pipeline => selected.includes(pipeline.name))
     .map(pipeline => ({ name: pipeline.name, label: pipeline.display_name || pipeline.name, nodes: executions[pipeline.name] || [] })));
-  const configuredCameras = [...new Map(pipelines.flatMap(pipeline => inspectionSources(pipeline.graph)).map(source => [source.id, source])).values()];
-  const choices = cameras.length ? pipelines.filter(pipeline => inspectionSources(pipeline.graph).some(source => cameras.includes(source.id))) : pipelines;
+  const configuredCameras = [...new Map(pipelines.flatMap(pipeline => inspectionSources(pipeline.graph, pipelines)).map(source => [source.id, source])).values()];
+  const choices = cameras.length ? pipelines.filter(pipeline => inspectionSources(pipeline.graph, pipelines).some(source => cameras.includes(source.id))) : pipelines;
   useEffect(() => {
     const changed = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", changed);
@@ -66,7 +67,10 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
     return () => document.removeEventListener("keydown", keydown);
   }, [open]);
   return <>
-    <button ref={trigger} type="button" className="iconButton streamsTileOverlayButton" title={t("inspection.open")} aria-label={t("inspection.open")} aria-expanded={open} onClick={() => setOpen(true)}><Icon name="eye" /></button>
+    <button ref={trigger} type="button" className="iconButton streamsTileOverlayButton" title={t("inspection.open")} aria-label={t("inspection.open")} aria-expanded={open} onClick={() => {
+      if (initialPipeline) { setSelected([initialPipeline]); setFocused(initialPipeline); }
+      setOpen(true);
+    }}><Icon name="eye" /></button>
     {open ? createPortal(<aside className={`pipelineInspectionPanel${selected.length > 1 ? " isMultiple" : ""}`} aria-label={t("inspection.open")}>
       <button type="button" autoFocus onClick={close}>{t("inspection.close")}</button>
       <h2>{t("inspection.open")}</h2>

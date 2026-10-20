@@ -33,6 +33,7 @@ import {
 } from "../../util/api";
 import { extractProcessingRuntimeNodeIssues, filterProcessingRuntimeIssuesForPipeline } from "../processingRuntimeHealth";
 import { PipelineStorageCard } from "./pipelines/InteractivePipelineEditor";
+import { PipelineInspectionPanel } from "../streams/PipelineInspectionPanel";
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
@@ -1148,6 +1149,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   </label>
                 </div>
                 <div className="pipelinesEditorActions">
+                  <PipelineInspectionPanel key={`inspection:${draft.name}`} initialPipeline={draft.name} />
                   <button
                     className="pillButton pillButtonPrimary"
                     type="button"

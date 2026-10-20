@@ -47,6 +47,7 @@ import { HistoryPeriodFilter } from "../notifications/HistoryPeriodFilter";
 import { resolveNotificationPeriod, type NotificationPeriod, type NotificationTimeRange } from "../../util/notificationPeriod";
 import { VisualHistoryPreparation } from "../notifications/VisualHistoryPreparation";
 import { StreamsDashboard } from "../streams/StreamsDashboard";
+import { PipelineInspectionPanel } from "../streams/PipelineInspectionPanel";
 import { navigate, replace, usePathname } from "../router";
 
 type Props = {
@@ -1252,6 +1253,7 @@ export function MainScreen({
         >
           <Icon name="diagram-project" />
         </button>
+        {!isLiveCameraRenderMode(renderMode) ? <PipelineInspectionPanel /> : null}
         {!isLiveCameraRenderMode(renderMode) ? (
           <button
             className="iconButton iconButtonPrimary"

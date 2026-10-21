@@ -1,4 +1,5 @@
 import json
+from itertools import permutations
 
 import pytest
 from pydantic import ValidationError
@@ -200,6 +201,28 @@ def test_missing_geometry_for_one_frame_member_does_not_publish_a_pair():
     assert all(record["group_status"] == "incomplete" for record in result.values())
 
 
+@pytest.mark.parametrize("identifiers", list(permutations(("entity-a", "entity-b", "entity-c"))))
+def test_group_split_follows_nearest_members_not_random_entity_identifiers(monkeypatch, identifiers):
+    from toposync_ext_vision import association
+    allocated = iter([*identifiers, "initial-group", "split-group"])
+    monkeypatch.setattr(association.uuid, "uuid4", lambda: next(allocated))
+    settings = config().model_copy(update={"group_distance_metres": 4})
+    store = AssociationStore(settings)
+    store.ingest([observation("b", track, 0, x) for track, x in enumerate((0, 1.8, 3.6), 1)])
+    items = [observation("b", track, 1, x) for track, x in enumerate((0, 1.8, 4.2), 1)]
+    records = store.ingest(items)
+    assert len(store.groups) == 2
+    assert set(store.groups[-1]["members"]) == {records[item.id]["entity"] for item in items[:2]}
+
+
+def test_equally_close_competing_group_splits_abstain():
+    store = AssociationStore(config().model_copy(update={"group_distance_metres": 3}))
+    store.ingest([observation("b", track, 0, x) for track, x in enumerate((0, 1, 2), 1)])
+    result = store.ingest([observation("b", track, 1, x) for track, x in enumerate((0, 2, 4), 1)])
+    assert len(store.groups) == 1 and store.groups[0]["end"] is None
+    assert all(record["group_status"] == "incomplete" for record in result.values())
+
+
 def test_old_member_close_after_newer_updates_does_not_rewind_groups():
     store = AssociationStore(config())
     first = [observation("b", track, 0, (track - 1) * 0.7) for track in (1, 2, 3)]
@@ -266,6 +289,18 @@ def test_correction_precedes_inference_survives_restart_and_is_revision_checked(
     assert restored.observations[next_b.id]["gap"] is True
     assert len(restored.history) == 1
     assert not list(tmp_path.glob("*.pending"))
+
+
+def test_group_capture_above_member_capacity_abstains():
+    cfg = config().model_copy(update={"max_batch": 256})
+    store = AssociationStore(cfg)
+    tracks = [str(track) for track in range(128)]
+    first = [observation("a", track, 0, track, frame_tracks=tracks) for track in range(128)]
+    store.ingest(first)
+    extra = observation("c", 999, 0, 200, frame_tracks=["999"])
+    store.ingest([extra])
+    assert store.observations[extra.id]["group_status"] == "incomplete"
+    assert store.group_for(extra, store.observations[extra.id]["entity"]) is None
 
 
 def test_duplicate_out_of_order_restart_geometry_and_policy_boundaries():

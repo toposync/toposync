@@ -9,6 +9,8 @@ import threading
 import tempfile
 import time
 import uuid
+from functools import lru_cache
+from itertools import combinations, groupby
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -507,24 +509,38 @@ class AssociationStore:
                     if not observation.closed and observation.clock == last.clock
                     and observation.coordinate_reference == last.coordinate_reference}
         # Missing deltas do not prove that an active member left its group.
-        if not required <= current.keys():
+        if not required <= current.keys() or len(current) > 128:
             return
+        distances = {frozenset((left, right)): math.dist(current[left].position, current[right].position)
+                     for left, right in combinations(current, 2)}
+        clusters = {entity: frozenset((entity,)) for entity in current}
+
+        @lru_cache(maxsize=None)
+        def compatible(members):
+            return all(distances[frozenset(pair)] <= self.config.group_distance_metres
+                       for pair in combinations(members, 2))
+
+        edges = sorted((pair for pair, distance in distances.items()
+                        if distance <= self.config.group_distance_metres), key=distances.__getitem__)
+        for _, pairs in groupby(edges, key=lambda pair: round(distances[pair], 9)):
+            merges = []
+            for left, right in pairs:
+                members = clusters[left] | clusters[right]
+                if clusters[left] == clusters[right] or not compatible(members):
+                    continue
+                touching = [group for group in merges if group & members]
+                merges = [group for group in merges if not group & members]
+                merges.append(members.union(*touching))
+            for members in merges:
+                # Equal-distance competing partitions cannot be decided by random entity IDs.
+                if not compatible(members):
+                    return
+                for entity in members:
+                    clusters[entity] = members
+        groups = {tuple(sorted(cluster)) for cluster in clusters.values() if len(cluster) > 1}
         for observation in batch:
             if observation.id in self.observations:
                 self.observations[observation.id]["group_status"] = "complete"
-        clusters = []
-        for entity, observation in sorted(current.items()):
-            for cluster in clusters:
-                if all(
-                    math.dist(observation.position, current[member].position)
-                    <= self.config.group_distance_metres
-                    for member in cluster
-                ):
-                    cluster.append(entity)
-                    break
-            else:
-                clusters.append([entity])
-        groups = {tuple(sorted(cluster)) for cluster in clusters if len(cluster) > 1}
         for episode in self.groups:
             if (
                 episode["clock"] == last.clock

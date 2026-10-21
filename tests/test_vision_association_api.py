@@ -1,4 +1,9 @@
 from functools import partial
+import asyncio
+import threading
+import time
+
+import pytest
 
 from test_identity_store import enroll, evidence, policy
 from test_vision_association import config, observation
@@ -26,6 +31,43 @@ def setup(client, cfg=None):
     return store, pipeline
 
 
+@pytest.mark.parametrize("revoke", [False, True])
+def test_review_keeps_event_loop_responsive_and_rechecks_access(client, monkeypatch, revoke):
+    store, _ = setup(client)
+    gallery = client.portal.call(partial(client.app.state.services.call, "vision.identity.store"))
+    enroll(gallery, name="Private participant")
+    gallery.register_policy(policy())
+    gallery.observe(evidence("review", observed_at=1).model_copy(update={"camera_id": "b"}), policy())
+    for stamp in range(1, 5):
+        store.ingest([observation("b", 9, stamp, 0, occurrence="review")])
+    list_identities = gallery.list_identities
+    responsive = []
+    ticked = threading.Event()
+
+    def slow_names(**kwargs):
+        values = list_identities(**kwargs)
+        time.sleep(0.2)
+        responsive.append(ticked.is_set())
+        if revoke:
+            owner = client.app.state.auth.store.get_user_by_username("owner")
+            client.app.state.auth.store.update_user(owner.id, is_disabled=True)
+        return values
+
+    async def arm():
+        asyncio.get_running_loop().call_later(0.05, ticked.set)
+
+    monkeypatch.setattr(gallery, "list_identities", slow_names)
+    client.portal.call(arm)
+    response = client.get("/api/vision/associations/test")
+    assert responsive == [True], "One name lookup per identity, with event loop available"
+    if revoke:
+        assert response.status_code == 401, response.text
+        assert "Private participant" not in response.text
+    else:
+        assert response.status_code == 200, response.text
+        assert "Private participant" in response.text
+
+
 def test_late_private_gallery_decision_enriches_authorized_history_and_is_revocable(client):
     store, _ = setup(client)
     for stamp in (0, 1):
@@ -50,6 +92,36 @@ def test_late_private_gallery_decision_enriches_authorized_history_and_is_revoca
     gallery.delete_identity(identity, expected_revision=gallery.revision)
     erased = client.get("/api/vision/associations/test")
     assert identity not in erased.text and "Synthetic participant" not in erased.text
+
+
+@pytest.mark.parametrize("change,expected", [("configuration", 409), ("gallery", 409), ("extension", 403)])
+def test_review_rejects_projection_changed_during_worker(client, monkeypatch, change, expected):
+    from toposync.runtime.extension_management import ExtensionManagementConfig, save_extension_management_config
+
+    store, pipeline = setup(client)
+    store.ingest([observation("b", 9, 1, 0, occurrence="review")])
+    gallery = client.portal.call(partial(client.app.state.services.call, "vision.identity.store"))
+    identity, _, _ = enroll(gallery, name="Private participant")
+    gallery.register_policy(policy())
+    gallery.observe(evidence("review", observed_at=1).model_copy(update={"camera_id": "b"}), policy())
+    list_identities = gallery.list_identities
+
+    def names_then_change(**kwargs):
+        values = list_identities(**kwargs)
+        if change == "configuration":
+            pipeline.graph["nodes"][0]["config"]["sources"][1]["identity_policy"] = "no_identification"
+            client.portal.call(client.app.state.config_store.replace_pipeline, pipeline.name, pipeline)
+        elif change == "gallery":
+            gallery.delete_identity(identity, expected_revision=gallery.revision)
+        else:
+            client.portal.call(save_extension_management_config, client.app.state.config_store,
+                ExtensionManagementConfig(disabled_extension_ids=["com.toposync.vision"]))
+        return values
+
+    monkeypatch.setattr(gallery, "list_identities", names_then_change)
+    response = client.get("/api/vision/associations/test")
+    assert response.status_code == expected, response.text
+    assert "Private participant" not in response.text
 
 
 def test_no_identification_never_inherits_nominal_entity_and_correction_is_cas(client):

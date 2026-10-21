@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
 import json
 import threading
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import Field
+
+from toposync.runtime.extension_management import disabled_extension_ids_from_settings
 
 from .association import AssociationConfig, AssociationConflict, AssociationStore, Values
 from .identity.api import _authorize
@@ -62,6 +65,11 @@ def create_association_router(repository, identity_store):
     async def scope_store(request, scope, write=False):
         _authorize(request, write=write)
         configuration = await request.app.state.config_store.get_config()
+        request.state.auth_context = request.app.state.auth.resolve_request(request, refresh=False)
+        if "com.toposync.vision" in disabled_extension_ids_from_settings(configuration.settings):
+            raise HTTPException(403, "Vision extension disabled")
+        request.app.state.auth.authorize(context=request.state.auth_context, action="core:extension:use",
+            resource_type="core:extension", resource_selector="com.toposync.vision")
         profiles = []
         for pipeline in configuration.pipelines:
             for node in pipeline.graph.get("nodes", []):
@@ -82,12 +90,11 @@ def create_association_router(repository, identity_store):
         except AssociationConflict as exc:
             raise HTTPException(409, str(exc)) from exc
 
-    @router.get("/{scope}")
-    async def review(scope: str, request: Request, response: Response):
-        store = await scope_store(request, scope)
-        response.headers["Cache-Control"] = "no-store"
+    def project_review(store, request):
         snapshot = store.snapshot()
         entities = {}
+        names = {}
+        identity_cameras = {}
         try:
             gallery = identity_store(create=False)
         except Exception:
@@ -120,20 +127,19 @@ def create_association_router(repository, identity_store):
                 continue
             entity["recognition_status"] = decision.status
             if decision.identity_id is not None:
-                _authorize(request, cameras=gallery.camera_ids(identity_id=decision.identity_id))
+                if decision.identity_id not in names:
+                    identity_cameras[decision.identity_id] = gallery.camera_ids(identity_id=decision.identity_id)
+                    _authorize(request, cameras=identity_cameras[decision.identity_id])
+                    names[decision.identity_id] = next(
+                        (item["name"] for item in gallery.list_identities(identity_ids={decision.identity_id})), None
+                    )
                 entity["identities"][decision.identity_id] = {
                     "evidence_observation": identifier,
                     "evidence_camera": observation["camera"],
                     "evidence_at": decision.evidence_at,
                     "decision_revision": decision.revision,
                     "provenance": decision.provenance,
-                    "name": next(
-                        (
-                            item["name"]
-                            for item in gallery.list_identities(identity_ids={decision.identity_id})
-                        ),
-                        None,
-                    ),
+                    "name": names[decision.identity_id],
                 }
         for entity in entities.values():
             if len(entity["identities"]) > 1:
@@ -144,6 +150,18 @@ def create_association_router(repository, identity_store):
         for record in snapshot["observations"].values():
             record["observation"].pop("occurrence", None)
         snapshot["entities"] = entities
+        return snapshot, gallery, gallery_revision, identity_cameras
+
+    @router.get("/{scope}")
+    async def review(scope: str, request: Request, response: Response):
+        store = await scope_store(request, scope)
+        response.headers["Cache-Control"] = "no-store"
+        snapshot, gallery, gallery_revision, identity_cameras = await asyncio.to_thread(project_review, store, request)
+        # The worker may outlive a permission, graph or gallery revision.
+        if (await scope_store(request, scope)).config != store.config:
+            raise HTTPException(409, "Association configuration changed; refresh the review")
+        for cameras in identity_cameras.values():
+            _authorize(request, cameras=cameras)
         if gallery is not None and gallery.revision != gallery_revision:
             raise HTTPException(409, "Identity gallery changed; refresh the review")
         try:

@@ -239,9 +239,19 @@ class PublishedState(VisualStateModel):
     method: Literal["local", "multimodal"] | None = None
     freshness_basis: Literal["capture", "receipt"] | None = None
     processing_status: Literal["idle", "waiting", "evaluating", "limited", "failed"] = "idle"
+    last_analysis: Observation | None = None
+    analysis_age_ms: Counter | None = None
 
     @model_validator(mode="after")
     def validate_current_value(self) -> Self:
+        if (self.last_analysis is None) != (self.analysis_age_ms is None):
+            raise ValueError("last analysis requires its measured age")
+        if self.last_analysis is not None and any(
+            getattr(self.last_analysis, field) != getattr(self, field) for field in (
+                "sensor_id", "runtime_epoch", "source_identity", "preparation_revision", "reference_revision", "model_revision",
+            )
+        ):
+            raise ValueError("last analysis must belong to this sensor execution and revisions")
         if (self.class_id is None) != (self.class_key is None):
             raise ValueError("current class identifier and key must be present together")
         if self.status in {"unknown", "unavailable"}:

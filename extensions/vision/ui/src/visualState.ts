@@ -9,10 +9,20 @@ export type VisualConfiguration = {
 };
 export type VisualDraft = { draft_id: string; revision: number; expires_at: number; configuration: VisualConfiguration };
 export type VisualModel = { model_id: string; name: string; revision: string; artifact_present: boolean };
-export type VisualPreview = { test_only: true; duration_ms: number; completed_at: number; state: {
+export type VisualSample = { capture_instance: string; generation: number; sequence: number };
+export type VisualPublishedState = {
   status: "confirmed" | "pending" | "unknown" | "unavailable"; class_id: string | null; reason: string;
-  similarity: number | null; margin: number | null; observed_at: number | null;
-} };
+  observed_at: number | null; valid_for_ms: number; runtime_epoch: string; state_version: number;
+  preparation_revision: string; reference_revision: string; model_revision: string;
+  candidate: { class_id: string; started_at: number } | null;
+  last_confirmed: { class_id: string; observed_at: number } | null;
+  analysis_age_ms: number | null;
+  last_analysis: { class_id: string | null; similarity: number | null; margin: number | null;
+    declared_confidence: number | null; reference_ids: string[]; sample: VisualSample;
+    observed_at: number; duration_ms: number; region_quality: "valid" | "unobservable" | "unavailable";
+    freshness_basis: "capture" | "receipt"; method: "local" | "multimodal"; reason: string } | null;
+};
+export type VisualPreview = { test_only: true; duration_ms: number; completed_at: number; state: VisualPublishedState };
 
 export const visualComparisonFields = ["enter_threshold", "enter_margin", "hold_threshold", "hold_margin"] as const;
 export const visualTemporalDefaults = { confirmations: 2, minimum_separation_ms: 150, maximum_gap_ms: 750,

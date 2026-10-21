@@ -20,6 +20,7 @@ from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from ..processing.runtime_backends import build_embedding_backend
 from ..registry import ModelRegistry, build_default_model_registry
 from .matching import ReferenceEmbedding, compare_references
+from .inspection import decision_visuals
 from .schemas import Observation, VisualStateConfig
 from .state import VisualStateReducer
 
@@ -195,6 +196,9 @@ class VisualStateRuntime(BaseOperatorRuntime):
         )
         self._opened = True
         await context.emit(output, timeout_s=0)
+        if context.inspection_active():
+            context.inspect("analyzed", output, reason=state.reason, model_id=self.config.model_id,
+                            visuals=decision_visuals(state))
 
     async def run(self, context):
         if self._reducer is None:
@@ -203,6 +207,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
         worker = None
         pending = active = None
         next_evaluation = 0.0
+        analysis_started = 0.0
         failed = False
         try:
             while not context.is_cancelled() and not self._closed.is_set():
@@ -238,11 +243,12 @@ class VisualStateRuntime(BaseOperatorRuntime):
                                 freshness_basis=evidence["freshness_basis"], region_quality="valid", method="local",
                                 class_id=decision.class_id, acceptance=decision.acceptance, similarity=decision.similarity,
                                 margin=decision.margin, reference_ids=decision.reference_ids, reason=decision.reason,
+                                duration_ms=min(3_600_000, max(0, round((self._clock() - analysis_started) * 1000))),
                             ))
                     except asyncio.CancelledError:
                         raise
-                    except Exception as error:
-                        context.metrics.record_error(error)
+                    except Exception:
+                        context.metrics.record_error(RuntimeError("visual_state_local_analysis_failed"))
                         if active[3] == self._token:
                             self._invalidate("local_analysis_failed")
                             pending = None
@@ -253,6 +259,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     frozen, evidence, observed, token = active
                     if (self._clock() - observed) * 1000 <= self.config.temporal.maximum_frame_age_ms and token == self._token:
                         frame = frozen.artifacts[self.config.input_artifact_name].data
+                        analysis_started = self._clock()
                         worker = asyncio.create_task(context.run_blocking(
                             self._native, self._backend.embed, frame, mode="thread_pool",
                             concurrency_key=f"vision.visual_state:{self.config.sensor_id}", max_concurrency=1,

@@ -20,6 +20,40 @@ const model = load('visualState.ts');
 const fresh = () => model.newVisualConfiguration(index => `Estado ${index}`);
 const evidence = { source_identity: 'camera:synthetic', preparation_revision: 'revision', prepared_region: true };
 
+test('rendered evidence distinguishes a retained value, candidate and historical analysis without accuracy claims', () => {
+  const react = require('react'), { renderToStaticMarkup } = require('react-dom/server');
+  const { VisualStatePreviewResult } = load('VisualStatePreviewResult.tsx', { react: { ...react, default: react } });
+  const translations = load('translations.ts').visualStateTranslations['pt-BR'];
+  const t = key => translations[`ext.vision.visualState.${key}`] ?? key;
+  const classes = [{ class_id: 'closed', label: 'Porta fechada', reference_ids: ['closed-photo'] },
+    { class_id: 'open', label: 'Porta aberta', reference_ids: ['open-photo'] }];
+  const result = { completed_at: 100, state: { status: 'pending', class_id: 'closed', reason: 'confirming',
+    runtime_epoch: 'epoch', state_version: 3, preparation_revision: 'prepare', reference_revision: 'references', model_revision: 'model',
+    candidate: { class_id: 'open', started_at: 99 }, last_confirmed: { class_id: 'closed', observed_at: 98 }, analysis_age_ms: 100,
+    last_analysis: { observed_at: 99.9, duration_ms: 20, region_quality: 'valid', freshness_basis: 'receipt', method: 'local',
+      similarity: .95, margin: .08, declared_confidence: null, reason: 'entry_match', reference_ids: ['open-photo'],
+      sample: { capture_instance: 'capture', generation: 1, sequence: 3 } } } };
+  const render = () => renderToStaticMarkup(react.createElement(VisualStatePreviewResult, { result, classes, stale: true, t }));
+  const pending = render();
+  assert.match(pending, /<strong>[^<]*Porta fechada/);
+  assert.match(pending, /Aguardando confirmação<\/dt><dd>Porta aberta/);
+  assert.match(pending, /Último estado confirmado \(histórico\)/);
+  assert.match(pending, /Fotos de referência mais próximas<\/dt><dd>Porta aberta · 1/);
+  assert.match(pending, /0\.9500/);
+  assert.match(pending, /não são precisão medida/);
+  assert.match(pending, /horário físico de captura não verificado/);
+  for (const [status, reason] of [['unknown', 'observation_expired'], ['unavailable', 'input_unobservable']]) {
+    result.state = { ...result.state, status, reason, class_id: null, candidate: null };
+    const html = render();
+    assert.doesNotMatch(html.match(/<strong>(.*?)<\/strong>/)[1], /Porta/);
+    assert.ok(html.includes(t(`reason_${reason}`)));
+    assert.match(html, /Último estado confirmado \(histórico\)/);
+  }
+  result.state.reason = 'private-description';
+  assert.doesNotMatch(render(), /private-description/);
+  assert.ok(render().includes(t('reason_other')));
+});
+
 test('decision controls require explicit thresholds and reject unstable or invalid intervals', () => {
   const config = fresh(), defaults = model.visualDecisionValues(config);
   assert.throws(() => model.applyVisualDecisionValues(config, defaults), /visual_decision_invalid/);
@@ -70,7 +104,8 @@ test('empty and catalog-default panels initialize unique identities only when ed
     const panel = load('VisualStatePanel.tsx', { react: { ...react, default: react },
       '@toposync/plugin-api': {}, './api': {}, './visualState': model, './styles': { styles: '' },
       './VisualStateModelSettings': { VisualStateModelSettings: () => null },
-      './VisualStateDecisionSettings': { VisualStateDecisionSettings: () => null } });
+      './VisualStateDecisionSettings': { VisualStateDecisionSettings: () => null },
+      './VisualStatePreviewResult': { VisualStatePreviewResult: () => null } });
     panel.VisualStatePanel({ config, replaceConfig: value => changes.push(value),
       i18n: { useI18n: () => ({ t: key => key }) },
       referenceCapture: readonly ? { available: false, reason: 'read_only' } : undefined });

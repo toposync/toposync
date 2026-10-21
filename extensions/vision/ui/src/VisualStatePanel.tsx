@@ -5,6 +5,7 @@ import { bindVisualConfiguration, newVisualClass, newVisualConfiguration, restor
 import { styles } from "./styles";
 import { VisualStateModelSettings } from "./VisualStateModelSettings";
 import { VisualStateDecisionSettings } from "./VisualStateDecisionSettings";
+import { VisualStatePreviewResult } from "./VisualStatePreviewResult";
 import type { VisualPreview } from "./visualState";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
@@ -37,7 +38,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const [pending, setPending] = useState<PendingCapture | null>(null);
   const [photo, setPhoto] = useState<{ id: string; label: string } | null>(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
-  const [preview, setPreview] = useState<{ result: VisualPreview; context: string; pipeline: string } | null>(null);
+  const [preview, setPreview] = useState<{ result: VisualPreview; classes: VisualClass[]; context: string; pipeline: string } | null>(null);
   const active = useRef<AbortController | null>(null);
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -183,15 +184,10 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
         || !classes.filter(item => item.enabled).every(item => item.reference_ids.length > 0)}
         onClick={() => void run("test", async signal => {
           const result = await testVisualState(value, inputPipeline, signal); signal.throwIfAborted();
-          setPreview({ result, context, pipeline: pipelineContext });
+          setPreview({ result, classes: structuredClone(classes), context, pipeline: pipelineContext });
         })}>{t("test_now")}</button>
-      {preview && <div role="status" className="identityInspector">
-        <strong>{t("preview_result")}: {classes.find(item => item.class_id === preview.result.state.class_id)?.label ?? t(`status_${preview.result.state.status}`)}</strong>
-        <span>{t(`status_${preview.result.state.status}`)}</span>
-        <time dateTime={new Date(preview.result.completed_at * 1000).toISOString()}>{new Date(preview.result.completed_at * 1000).toLocaleTimeString()}</time>
-        {(preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty) && <p>{t("preview_stale")}</p>}
-        <p>{t("preview_finished")}</p>
-      </div>}
+      {preview && <VisualStatePreviewResult result={preview.result} classes={preview.classes}
+        stale={preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty} t={t} />}
     </fieldset>
     {showAdvanced && <label className="identityField"><span>{t("scene_description")}</span><textarea className="input" rows={3} maxLength={2000}
       disabled={disabled} value={value.scene_description} onChange={event => changed({ ...value, scene_description: event.target.value })} /></label>}

@@ -48,5 +48,9 @@ export const styles = `
 .visualStatePanel fieldset:disabled {opacity:.7}
 .visualStatePanel summary {cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:600}
 .visualDecisionFields {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:10px}
+.visualPreviewResult {min-width:0;overflow-wrap:anywhere}
+.visualPreviewResult dl {display:grid;gap:10px;margin:10px 0}
+.visualEvidenceField dt {font-weight:600}
+.visualEvidenceField dd {margin:3px 0 0}
 @media(max-width:480px){.identityGallery .identityGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.identityGallery .identityActions button{flex:1 1 120px}.identityGallery .identityForm{padding:12px}.visualStatePanel .visualStateName{flex-basis:100%}}
 `;

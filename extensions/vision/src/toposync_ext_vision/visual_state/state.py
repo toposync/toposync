@@ -120,6 +120,8 @@ class VisualStateReducer:
                                      started_at=self._candidate.first.observed_at) if self._candidate else None,
             sample=evidence.sample if evidence else None, method=evidence.method if evidence else None,
             freshness_basis=evidence.freshness_basis if evidence else None,
+            last_analysis=self._last_seen,
+            analysis_age_ms=max(0, round((now - self._last_seen.observed_monotonic) * 1000)) if self._last_seen else None,
         )
 
     def _contradiction(self, observation: Observation) -> None:

@@ -1,4 +1,11 @@
-import type { PipelineReferenceEvidence } from "@toposync/plugin-api";
+import type { ImageMaskEditorProps, PipelineReferenceEvidence } from "@toposync/plugin-api";
+
+export type CanonicalVisualRegion = {
+  camera_id: string; source_id: string; name: string; framing: "passive";
+  reference: { artifact_id: string; revision: number; geometry_digest: string };
+  strokes: ImageMaskEditorProps["strokes"]; alignment_strokes?: ImageMaskEditorProps["strokes"];
+  maximum_side?: number; alignment_margin_pixels?: number; [key: string]: unknown;
+};
 
 export type VisualClass = { class_id: string; key: string; label: string; description: string; enabled: boolean; reference_ids: string[]; [key: string]: unknown };
 export type VisualConfiguration = {
@@ -6,6 +13,7 @@ export type VisualConfiguration = {
   region_id: string | null; use_full_image: boolean; reference_revision: string; model_revision: string;
   classes: VisualClass[]; strategy: "examples" | "fallback" | "direct"; scene_description: string;
   model_id?: string | null; [key: string]: unknown;
+  canonical_region?: CanonicalVisualRegion | null;
 };
 export type VisualDraft = { draft_id: string; revision: number; expires_at: number; configuration: VisualConfiguration };
 export type VisualModel = { model_id: string; name: string; revision: string; artifact_present: boolean };
@@ -92,9 +100,24 @@ export function bindVisualConfiguration(configuration: VisualConfiguration, evid
 
 export function restoreVisualReferences(current: VisualConfiguration, previous: VisualConfiguration): VisualConfiguration {
   return { ...current, source_identity: previous.source_identity, preparation_revision: previous.preparation_revision,
-    region_id: previous.region_id, use_full_image: previous.use_full_image,
+    region_id: previous.region_id, use_full_image: previous.use_full_image, canonical_region: previous.canonical_region ?? null,
     classes: [...current.classes.map(item => {
       const before = previous.classes.find(category => category.class_id === item.class_id);
       return before ? { ...item, reference_ids: before.reference_ids } : item;
     }), ...previous.classes.filter(item => !current.classes.some(category => category.class_id === item.class_id))] };
+}
+
+export function visualSource(pipeline: unknown): { camera_id: string; source_id: string } | null {
+  const graph = (pipeline as { graph?: { nodes?: { operator?: string; config?: Record<string, unknown> }[] } })?.graph;
+  if (!Array.isArray(graph?.nodes)) return null;
+  const sources = graph.nodes.filter(node => node?.operator === "camera.source");
+  const config = sources.length === 1 ? sources[0]?.config : null;
+  return typeof config?.camera_id === "string" && config.camera_id && typeof config.source_id === "string" && config.source_id
+    ? { camera_id: config.camera_id, source_id: config.source_id } : null;
+}
+
+export function replaceVisualRegion(configuration: VisualConfiguration, region: CanonicalVisualRegion | null, useFullImage = false): VisualConfiguration {
+  if (configuration.classes.some(category => category.reference_ids.length)) throw new Error("reference_context_changed");
+  return { ...configuration, canonical_region: region, use_full_image: useFullImage, region_id: null,
+    source_identity: null, preparation_revision: null };
 }

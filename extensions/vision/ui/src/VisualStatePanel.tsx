@@ -1,15 +1,16 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { activateModalFocus, type HostI18n, type PipelineReferenceCapture, type PipelineReferenceFrame } from "@toposync/plugin-api";
-import { captureVisualReference, createVisualDraft, readVisualDraft, testVisualState, updateVisualDraft, visualReferenceUrl } from "./api";
-import { bindVisualConfiguration, newVisualClass, newVisualConfiguration, restoreVisualReferences, visualClassesValid, type VisualClass, type VisualConfiguration, type VisualDraft } from "./visualState";
+import { activateModalFocus, type HostI18n, type HostUi, type PipelineReferenceCapture, type PipelineReferenceFrame } from "@toposync/plugin-api";
+import { captureVisualFrame, captureVisualReference, createVisualDraft, readVisualDraft, testVisualState, updateVisualDraft, visualReferenceUrl } from "./api";
+import { bindVisualConfiguration, newVisualClass, newVisualConfiguration, replaceVisualRegion, restoreVisualReferences, visualClassesValid, visualSource, type VisualClass, type VisualConfiguration, type VisualDraft } from "./visualState";
 import { styles } from "./styles";
 import { VisualStateModelSettings } from "./VisualStateModelSettings";
 import { VisualStateDecisionSettings } from "./VisualStateDecisionSettings";
 import { VisualStatePreviewResult } from "./VisualStatePreviewResult";
+import { VisualStateRegionSettings } from "./VisualStateRegionSettings";
 import type { VisualPreview } from "./visualState";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
-  referenceCapture?: PipelineReferenceCapture; showAdvanced?: boolean };
+  referenceCapture?: PipelineReferenceCapture; showAdvanced?: boolean; ui?: Pick<HostUi, "ImageMaskEditor"> };
 type PendingCapture = { draft: VisualDraft; classId: string; operationId: string; frame: PipelineReferenceFrame };
 
 function PhotoDialog({ url, label, close, t }: { url: string; label: string; close: () => void; t: (key: string) => string }) {
@@ -23,7 +24,7 @@ function PhotoDialog({ url, label, close, t }: { url: string; label: string; clo
   </div>;
 }
 
-export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture, showAdvanced }: Props) {
+export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture, showAdvanced, ui }: Props) {
   const { t: translate } = i18n.useI18n();
   const t = (key: string, parameters?: Record<string, unknown>) => translate(`ext.vision.visualState.${key}`, parameters);
   const [initial] = useState(() => newVisualConfiguration(index => t("state", { index })));
@@ -46,11 +47,14 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const captureCallback = referenceCapture?.available ? referenceCapture.capture : undefined;
   const inputPipeline = referenceCapture?.available ? referenceCapture.inputPipeline : undefined;
   const pipelineContext = JSON.stringify(inputPipeline) ?? "";
+  const source = visualSource(inputPipeline);
+  const regionCompatible = !value.canonical_region || (source?.camera_id === value.canonical_region.camera_id && source?.source_id === value.canonical_region.source_id);
+  const canCapture = Boolean(captureCallback && regionCompatible && (!value.canonical_region || inputPipeline));
   const context = JSON.stringify(config);
   useLayoutEffect(() => {
     setBusy(null); setPending(null);
     return () => { active.current?.abort(); active.current = null; };
-  }, [context, captureCallback]);
+  }, [context, captureCallback, pipelineContext]);
   useEffect(() => {
     if (!readonly && unconfigured) replaceConfig(value);
   }, [config.sensor_id, readonly]);
@@ -76,7 +80,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
         const message = String((cause as Error)?.message ?? "");
         const status = (cause as { status?: number }).status;
         setError(["reference_context_changed", "reference_region_required", "reference_capture_receipt_invalid", "reference_limit", "reference_conflict",
-          "visual_preview_busy", "visual_preview_timeout", "visual_preview_configuration_invalid", "visual_preview_input_invalid", "visual_preview_failed"].find(key => message.includes(key))
+          "visual_preview_busy", "visual_preview_timeout", "visual_preview_configuration_invalid", "visual_preview_input_invalid", "visual_preview_failed", "region_unavailable"].find(key => message.includes(key))
           ?? (status === 401 || status === 403 ? "forbidden" : status === 409 ? "reference_conflict"
             : name === "test" ? "visual_preview_failed" : status === 413 ? "reference_limit" : status === 422 ? "invalid_classes" : "request_failed"));
       }
@@ -101,9 +105,9 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     changed(result.draft.configuration);
   }
   function capture(classId: string) {
-    if (!captureCallback || !valid) return;
+    if (!captureCallback || !canCapture || !valid) return;
     void run(classId, async signal => {
-      const frame = await captureCallback(signal); signal.throwIfAborted();
+      const frame = await (value.canonical_region ? captureVisualFrame(value, inputPipeline, signal) : captureCallback(signal)); signal.throwIfAborted();
       const configuration = bindVisualConfiguration(value, frame.evidence);
       const current = await synchronize(configuration, signal);
       const candidate = { draft: current, classId, operationId: crypto.randomUUID(), frame };
@@ -120,7 +124,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     {unavailable && <p role="status">{t(unavailable)}</p>}
     {error && <div role="alert"><p>{t(error)}</p>
       {pending && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("retry", signal => upload(pending, signal))}>{t("retry_capture")}</button>}
-      {draft && !error.startsWith("visual_preview_") && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("reload", async signal => {
+      {draft && error !== "region_unavailable" && !error.startsWith("visual_preview_") && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("reload", async signal => {
         const current = await readVisualDraft(draft.draft_id, signal); signal.throwIfAborted();
         setUndo(value); draftRef.current = current; setDraft(current); changed(current.configuration);
       })}>{t("reload")}</button>}
@@ -134,9 +138,9 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     <fieldset disabled={disabled}>
       <legend>{t("region")}</legend>
       <p className="identityMuted">{t("region_help")}</p>
+      <VisualStateRegionSettings ui={ui} value={value} pipeline={inputPipeline} disabled={disabled} advanced={showAdvanced} change={changed} t={t} />
       <label><input type="checkbox" checked={value.use_full_image} disabled={hasReferences}
-        onChange={event => changed({ ...value, use_full_image: event.target.checked, region_id: null,
-          source_identity: null, preparation_revision: null })} />{t("full_image")}</label>
+        onChange={event => changed(replaceVisualRegion(value, null, event.target.checked))} />{t("full_image")}</label>
       {hasReferences && <button type="button" className="chipButton" onClick={() => mutate({ ...value, source_identity: null,
         preparation_revision: null, region_id: null, use_full_image: false, classes: classes.map(item => ({ ...item, reference_ids: [] })) })}>{t("reset_region")}</button>}
     </fieldset>
@@ -145,7 +149,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       <div className="identityToolbar">
         <label className="identityField visualStateName"><span>{t("name")}</span><input value={category.label ?? ""} maxLength={80} required
           onChange={event => updateClass(category.class_id, { label: event.target.value })} /></label>
-        <button type="button" className="chipButton" disabled={!valid || !captureCallback || category.reference_ids?.length >= 30}
+        <button type="button" className="chipButton" disabled={!valid || !canCapture || category.reference_ids?.length >= 30}
           onClick={() => capture(category.class_id)}>{t("capture")}</button>
         <button type="button" className="chipButton" disabled={classes.length <= 2} aria-label={`${t("remove_class")} ${category.label}`}
           onClick={() => mutate({ ...value, classes: classes.filter(item => item.class_id !== category.class_id) })}>{t("remove_class")}</button>
@@ -180,7 +184,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     <fieldset disabled={disabled}>
       <legend>{t("preview_title")}</legend><p className="identityMuted">{t("preview_help")}</p>
       {!inputPipeline && <p role="status">{t("preview_host_unavailable")}</p>}
-      <button type="button" className="chipButton" disabled={!inputPipeline || !valid || settingsDirty || !value.model_id || !value.comparison
+      <button type="button" className="chipButton" disabled={!inputPipeline || !regionCompatible || !valid || settingsDirty || !value.model_id || !value.comparison
         || !classes.filter(item => item.enabled).every(item => item.reference_ids.length > 0)}
         onClick={() => void run("test", async signal => {
           const result = await testVisualState(value, inputPipeline, signal); signal.throwIfAborted();

@@ -49,6 +49,7 @@ export const styles = `
 .visualStatePanel summary {cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:600}
 .visualDecisionFields {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:10px}
 .visualPreviewResult {min-width:0;overflow-wrap:anywhere}
+.visualRegionSettings {display:grid;gap:10px;min-width:0}
 .visualPreviewResult dl {display:grid;gap:10px;margin:10px 0}
 .visualEvidenceField dt {font-weight:600}
 .visualEvidenceField dd {margin:3px 0 0}

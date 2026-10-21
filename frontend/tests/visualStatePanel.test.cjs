@@ -6,9 +6,9 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 const ts = require('typescript');
 
-function load(name, modules = {}) {
+function load(name, modules = {}, globals = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../../extensions/vision/ui/src', name), 'utf8');
-  const context = { exports: {}, crypto, URLSearchParams, require: name => {
+  const context = { ...globals, exports: {}, crypto, URLSearchParams, require: name => {
     assert.ok(name in modules, `unexpected import: ${name}`); return modules[name];
   } };
   vm.runInNewContext(ts.transpileModule(source, { compilerOptions: {
@@ -105,7 +105,8 @@ test('empty and catalog-default panels initialize unique identities only when ed
       '@toposync/plugin-api': {}, './api': {}, './visualState': model, './styles': { styles: '' },
       './VisualStateModelSettings': { VisualStateModelSettings: () => null },
       './VisualStateDecisionSettings': { VisualStateDecisionSettings: () => null },
-      './VisualStatePreviewResult': { VisualStatePreviewResult: () => null } });
+      './VisualStatePreviewResult': { VisualStatePreviewResult: () => null },
+      './VisualStateRegionSettings': { VisualStateRegionSettings: () => null } });
     panel.VisualStatePanel({ config, replaceConfig: value => changes.push(value),
       i18n: { useI18n: () => ({ t: key => key }) },
       referenceCapture: readonly ? { available: false, reason: 'read_only' } : undefined });
@@ -204,4 +205,93 @@ test('reference transport retains revision, receipt, abort and operation identit
   assert.equal(calls[3].url, '/api/vision/visual-state/preview');
   assert.deepEqual(JSON.parse(calls[3].options.body).pipeline, pipeline);
   assert.equal(calls[3].options.signal, signal);
+});
+
+
+test('canonical source must be explicit and unique, and changing a region cannot silently reuse photos', () => {
+  const node = { operator: 'camera.source', config: { camera_id: 'camera', source_id: 'video' } };
+  const region = { camera_id: 'camera', source_id: 'video', name: 'Door', framing: 'passive',
+    reference: { artifact_id: 'panorama', revision: 2, geometry_digest: 'digest' },
+    strokes: [{ op: 'paint', diameter01: .1, points01: [[.5, .5]] }] };
+  assert.equal(model.visualSource(null), null);
+  assert.equal(model.visualSource({ graph: { nodes: [node, node] } }), null);
+  assert.equal(model.visualSource({ graph: { nodes: [{ ...node, config: { rtsp_url: 'test' } }] } }), null);
+  assert.equal(model.visualSource({ graph: { nodes: [node] } }).source_id, 'video');
+  const selected = model.replaceVisualRegion(fresh(), region);
+  const previous = model.bindVisualConfiguration(selected, evidence);
+  previous.classes[0].reference_ids = ['human-photo'];
+  assert.throws(() => model.replaceVisualRegion(previous, null, true), /reference_context_changed/);
+  const detached = { ...previous, classes: previous.classes.map(item => ({ ...item, reference_ids: [] })) };
+  const full = model.replaceVisualRegion(detached, null, true);
+  assert.equal(full.preparation_revision, null);
+  assert.equal(full.canonical_region, null);
+  const restored = model.restoreVisualReferences(full, previous);
+  assert.equal(restored.canonical_region.reference.revision, 2);
+  assert.equal(restored.classes[0].reference_ids[0], 'human-photo');
+  assert.equal(restored.preparation_revision, evidence.preparation_revision);
+});
+
+test('canonical capture preserves ingress and signed evidence and rejects malformed replies', async () => {
+  const supplied = { source_identity: 'camera:one:video', preparation_revision: 'a'.repeat(64),
+    sample: { capture_instance: 'decoder', generation: 0, sequence: 1 }, observed_at: 123,
+    freshness_basis: 'receipt', historical_fallback: false, prepared_region: true };
+  let current = supplied, status = 200, request;
+  const api = load('api.ts', { '@toposync/plugin-api': { resolveToposyncUrl: path => '/ingress' + path } }, {
+    fetch: async (url, options) => {
+      request = { url, options };
+      return new Response(status === 200 ? new Blob(['pixels'], { type: 'image/png' }) : JSON.stringify({ detail: 'region_unavailable' }), {
+        status, headers: { 'content-type': status === 200 ? 'image/png' : 'application/json',
+          'X-Toposync-Capture-Evidence': JSON.stringify(current), 'X-Toposync-Capture-Receipt': 'signed-receipt' } });
+    },
+  });
+  const signal = new AbortController().signal;
+  const captured = await api.captureVisualFrame(fresh(), { graph: {} }, signal);
+  assert.equal(request.url, '/ingress/api/vision/visual-state/capture-frame');
+  assert.equal(request.options.signal, signal);
+  assert.equal(captured.receipt, 'signed-receipt');
+  assert.equal(captured.evidence.preparation_revision, supplied.preparation_revision);
+  assert.deepEqual(JSON.parse(request.options.body).pipeline, { graph: {} });
+  for (const invalid of [null, { ...supplied, prepared_region: false }, { ...supplied, historical_fallback: true },
+    { ...supplied, sample: { ...supplied.sample, capture_instance: 123 } }, { ...supplied, preparation_revision: [supplied.preparation_revision] },
+    { ...supplied, sample: { ...supplied.sample, sequence: -1 } }, { ...supplied, preparation_revision: 'forged' }]) {
+    current = invalid;
+    await assert.rejects(api.captureVisualFrame(fresh(), {}, signal), /reference_capture_evidence_invalid/);
+  }
+  status = 409;
+  await assert.rejects(api.captureVisualFrame(fresh(), {}, signal), error => error.status === 409 && error.message === 'region_unavailable');
+});
+
+for (const changedContext of ['references', 'source', 'readonly']) test(`late panorama reference cannot open after ${changedContext} changes`, async () => {
+  const slots = []; let cursor = 0, dependencies, cleanup, resolve, signal;
+  const react = { createElement: (type, properties, ...children) => ({ type, properties, children }),
+    useState: initial => { const index = cursor++; if (!(index in slots)) slots[index] = initial;
+      return [slots[index], value => { slots[index] = value; }]; },
+    useRef: initial => { const index = cursor++; return slots[index] ??= { current: initial }; },
+    useLayoutEffect: (effect, next) => {
+      if (!dependencies || next.some((value, index) => value !== dependencies[index])) {
+        cleanup?.(); dependencies = next; cleanup = effect();
+      }
+    } };
+  const component = load('VisualStateRegionSettings.tsx', { react: { ...react, default: react }, './visualState': model,
+    '@toposync/plugin-api': { resolveToposyncUrl: value => value, requestJson: (_, options) => {
+      signal = options.signal; return new Promise(done => { resolve = done; });
+    } } }, { AbortController });
+  const props = { ui: { ImageMaskEditor: () => null }, value: fresh(), disabled: false, t: key => key,
+    change: () => assert.fail('a late reference cannot change configuration'),
+    pipeline: { graph: { nodes: [{ operator: 'camera.source', config: { camera_id: 'one', source_id: 'video' } }] } } };
+  const render = () => { cursor = 0; return component.VisualStateRegionSettings(props); };
+  const root = render();
+  root.children.find(child => child?.type === 'button').properties.onClick();
+  assert.equal(signal.aborted, false);
+  if (changedContext === 'references') props.value.classes[0].reference_ids = ['existing-human-photo'];
+  if (changedContext === 'source') props.pipeline.graph.nodes[0].config.source_id = 'another-stream';
+  if (changedContext === 'readonly') props.disabled = true;
+  render();
+  assert.equal(signal.aborted, true);
+  resolve({ id: 'old-reference', revision: 1, image_url: '/old.png', geometry: { model_digest: 'old', projection: 'image_plane' } });
+  await new Promise(done => setImmediate(done));
+  assert.equal(slots[0], null); // No drawing modal from the discarded request.
+  assert.equal(slots[1], false);
+  assert.equal(slots[2], false);
+  cleanup?.();
 });

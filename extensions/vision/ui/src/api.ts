@@ -1,5 +1,5 @@
 import { requestJson, resolveToposyncUrl } from "@toposync/plugin-api";
-import type { PipelineReferenceFrame } from "@toposync/plugin-api";
+import type { PipelineReferenceEvidence, PipelineReferenceFrame } from "@toposync/plugin-api";
 import type { VisualConfiguration, VisualDraft, VisualModel, VisualPreview } from "./visualState";
 export type Species = "person" | "cat" | "dog";
 export type Identity = { id: string; name: string; species: Species; references: number; occurrences: number; representative_id: string | null };
@@ -15,6 +15,34 @@ export const photoUrl = (id: string) => resolveToposyncUrl(`${base}/observations
 export const changed = () => window.dispatchEvent(new Event("toposync:identity-gallery-changed"));
 
 const visualBase = "/api/vision/visual-state/drafts";
+export async function captureVisualFrame(configuration: VisualConfiguration, pipeline: unknown, signal: AbortSignal): Promise<PipelineReferenceFrame> {
+  const response = await fetch(resolveToposyncUrl("/api/vision/visual-state/capture-frame"), {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ configuration, pipeline }), signal,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw Object.assign(new Error(body?.detail?.code ?? body?.detail ?? "request_failed"), { status: response.status });
+  }
+  let evidence: PipelineReferenceEvidence;
+  try {
+    evidence = JSON.parse(response.headers.get("X-Toposync-Capture-Evidence") ?? "null");
+    const sample = evidence?.sample;
+    if (!evidence || typeof evidence.source_identity !== "string" || !evidence.source_identity.trim()
+      || evidence.source_identity.length > 200 || typeof evidence.preparation_revision !== "string" || !/^[a-f0-9]{64}$/.test(evidence.preparation_revision)
+      || typeof sample?.capture_instance !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(sample.capture_instance)
+      || !Number.isSafeInteger(sample?.generation) || sample.generation < 0
+      || !Number.isSafeInteger(sample?.sequence) || sample.sequence <= 0
+      || !Number.isFinite(evidence.observed_at) || evidence.observed_at < 0
+      || !["capture", "receipt"].includes(evidence.freshness_basis) || evidence.historical_fallback !== false
+      || evidence.prepared_region !== true) throw new Error("invalid evidence");
+  } catch { throw new Error("reference_capture_evidence_invalid"); }
+  const blob = await response.blob();
+  signal.throwIfAborted();
+  const receipt = response.headers.get("X-Toposync-Capture-Receipt") ?? "";
+  if (!receipt || receipt.length > 4096) throw new Error("reference_capture_receipt_invalid");
+  if (blob.type !== "image/png" || blob.size === 0 || blob.size > 8 * 1024 * 1024) throw new Error("reference_capture_image_invalid");
+  return { blob, evidence, receipt };
+}
 export const readVisualModels = (signal?: AbortSignal) => requestJson<{ choices: VisualModel[] }>("/api/vision/visual-state/models", { signal });
 export const testVisualState = (configuration: VisualConfiguration, pipeline: unknown, signal: AbortSignal) => requestJson<VisualPreview>(
   "/api/vision/visual-state/preview", { method: "POST", headers: { "content-type": "application/json" },

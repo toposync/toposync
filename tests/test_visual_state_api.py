@@ -43,6 +43,56 @@ def config(evidence):
             "classes": [{"class_id": key, "key": key, "label": key} for key in ("open", "closed")]}
 
 
+@pytest.mark.parametrize("middleware_count", [0, 2])
+def test_preview_disconnect_cancels_work_through_http_middleware(monkeypatch, middleware_count):
+    import asyncio
+    from fastapi import FastAPI
+    from toposync_ext_vision.visual_state import api
+
+    async def scenario():
+        started, cancelled = asyncio.Event(), asyncio.Event()
+
+        class Runner:
+            async def run(self, **kwargs):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+        app = FastAPI()
+        for _ in range(middleware_count):
+            @app.middleware("http")
+            async def passthrough(request, call_next):
+                return await call_next(request)
+
+        app.state.config_store = app.state.services = app.state.pipeline_operator_registry = None
+        monkeypatch.setattr(api, "_authorize", lambda *args, **kwargs: "owner")
+        app.include_router(api.create_visual_reference_router(lambda: None, Runner()))
+        body = json.dumps({"configuration": config({"source_identity": "synthetic", "preparation_revision": "initial"}),
+                           "pipeline": pipeline("camera.source").model_dump(mode="json")}).encode()
+        messages = asyncio.Queue()
+        messages.put_nowait({"type": "http.request", "body": body, "more_body": False})
+
+        async def send(message):
+            pass
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/api/vision/visual-state/preview", "query_string": b"",
+                 "headers": [(b"content-type", b"application/json")], "server": ("test", 80), "client": ("test", 123)}
+        request = asyncio.create_task(app(scope, messages.get, send))
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            messages.put_nowait({"type": "http.disconnect"})
+            await asyncio.wait_for(cancelled.wait(), .5)
+            await asyncio.wait_for(request, 1)
+        finally:
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
 @pytest.fixture
 def prepared(client, monkeypatch):  # noqa: F811
     import toposync.app as app_module
@@ -69,8 +119,53 @@ def prepared(client, monkeypatch):  # noqa: F811
     evidence = json.loads(response.headers["X-Toposync-Capture-Evidence"])
     draft = client.post("/api/vision/visual-state/drafts", json=config(evidence))
     assert draft.status_code == 201, draft.text
-    return {"draft": draft.json(), "image": response.content, "evidence": evidence,
+    return {"draft": draft.json(), "image": response.content, "evidence": evidence, "pipeline": request,
             "receipt": response.headers["X-Toposync-Capture-Receipt"]}
+
+
+def test_preview_endpoint_runs_an_unsaved_draft_and_leaves_storage_unchanged(client, prepared, tmp_path, monkeypatch):  # noqa: F811
+    import asyncio
+    from dataclasses import replace
+    from toposync.runtime.pipelines.execution import BaseOperatorRuntime
+    from toposync_ext_vision.processing.runtime_backends import build_embedding_backend
+    from toposync_ext_vision.registry import ModelRegistry
+    from toposync_ext_vision.visual_state import runtime as runtime_module
+    from test_visual_state_runtime import frame
+    from test_visual_state_embeddings import model_manifest
+    from test_visual_state_preview import RealClock
+
+    draft = capture(client, prepared).json()["draft"]
+    draft = capture(client, prepared, revision=draft["revision"], operation="second", class_id="closed").json()["draft"]
+    manifest = model_manifest(tmp_path)
+    backend = build_embedding_backend(manifest)
+    configuration = {**draft["configuration"], "model_id": manifest.model_id, "model_revision": backend.revision,
+        "comparison": {"enter_threshold": .9, "enter_margin": .2, "hold_threshold": .8, "hold_margin": .1}}
+    backend.close()
+    monkeypatch.setattr(runtime_module, "build_default_model_registry", lambda: ModelRegistry([manifest]))
+
+    class Source(BaseOperatorRuntime):
+        async def run(self, context):
+            sequence = 0
+            while not context.is_cancelled():
+                sequence += 1
+                await context.emit(replace(frame(RealClock(), sequence), stream_id=configuration["source_identity"]))
+                await asyncio.sleep(.1)
+
+    registry = client.app.state.pipeline_operator_registry
+    registry._items["camera.source"] = replace(registry.get("camera.source"), runtime_factory=lambda *_: Source())
+    before = client.app.state.config_store.paths.config_path.read_bytes()
+    saved_draft = client.get(f"/api/vision/visual-state/drafts/{draft['draft_id']}").json()
+    response = client.post("/api/vision/visual-state/preview", json={"configuration": configuration,
+        "pipeline": prepared["pipeline"].model_dump(mode="json"), "duration_ms": 500})
+    assert response.status_code == 200, response.text
+    assert response.json()["test_only"] is True
+    assert response.json()["state"]["class_id"] is None  # Identical examples cannot establish a winning class.
+    assert response.json()["states"]
+    assert client.app.state.config_store.paths.config_path.read_bytes() == before
+    assert client.get(f"/api/vision/visual-state/drafts/{draft['draft_id']}").json() == saved_draft
+    client.post("/api/auth/logout")
+    assert client.post("/api/vision/visual-state/preview", json={"configuration": configuration,
+        "pipeline": prepared["pipeline"].model_dump(mode="json")}).status_code == 401
 
 
 def capture(client, prepared, *, revision=0, operation="capture", content=None, receipt=None, class_id="open"):  # noqa: F811

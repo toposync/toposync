@@ -20,6 +20,22 @@ const model = load('visualState.ts');
 const fresh = () => model.newVisualConfiguration(index => `Estado ${index}`);
 const evidence = { source_identity: 'camera:synthetic', preparation_revision: 'revision', prepared_region: true };
 
+test('decision controls require explicit thresholds and reject unstable or invalid intervals', () => {
+  const config = fresh(), defaults = model.visualDecisionValues(config);
+  assert.throws(() => model.applyVisualDecisionValues(config, defaults), /visual_decision_invalid/);
+  const fields = { ...defaults, enter_threshold: '.95', enter_margin: '.05', hold_threshold: '.9', hold_margin: '.025' };
+  const applied = model.applyVisualDecisionValues(config, fields);
+  assert.equal(applied.comparison.enter_threshold, .95);
+  assert.equal(applied.temporal.confirmations, 2);
+  assert.equal(applied.evaluation_interval_ms, 250);
+  assert.equal(applied.classes, config.classes);
+  for (const invalid of [{ hold_threshold: '.99' }, { hold_margin: '.1' }, { confirmations: '1' },
+    { confirmations: '2.5' }, { evaluation_interval_ms: '49' }, { minimum_separation_ms: '1000' },
+    { validity_ms: '100' }, { maximum_frame_age_ms: 'Infinity' }, { enter_threshold: '' }]) {
+    assert.throws(() => model.applyVisualDecisionValues(config, { ...fields, ...invalid }), /visual_decision_invalid/);
+  }
+});
+
 test('changing the model clears global and class comparison while preserving photos and temporal policy', () => {
   const config = fresh(), comparison = { enter_threshold: .9, enter_margin: .2, hold_threshold: .8, hold_margin: .1 };
   config.comparison = comparison;
@@ -53,7 +69,8 @@ test('empty and catalog-default panels initialize unique identities only when ed
     };
     const panel = load('VisualStatePanel.tsx', { react: { ...react, default: react },
       '@toposync/plugin-api': {}, './api': {}, './visualState': model, './styles': { styles: '' },
-      './VisualStateModelSettings': { VisualStateModelSettings: () => null } });
+      './VisualStateModelSettings': { VisualStateModelSettings: () => null },
+      './VisualStateDecisionSettings': { VisualStateDecisionSettings: () => null } });
     panel.VisualStatePanel({ config, replaceConfig: value => changes.push(value),
       i18n: { useI18n: () => ({ t: key => key }) },
       referenceCapture: readonly ? { available: false, reason: 'read_only' } : undefined });
@@ -147,4 +164,9 @@ test('reference transport retains revision, receipt, abort and operation identit
   await api.updateVisualDraft(draft, fresh(), signal);
   assert.equal(JSON.parse(calls[2].options.body).expected_revision, 7);
   assert.equal(calls[2].options.signal, signal);
+  const pipeline = { graph: { nodes: [{ id: 'source' }], edges: [] } };
+  await api.testVisualState(fresh(), pipeline, signal);
+  assert.equal(calls[3].url, '/api/vision/visual-state/preview');
+  assert.deepEqual(JSON.parse(calls[3].options.body).pipeline, pipeline);
+  assert.equal(calls[3].options.signal, signal);
 });

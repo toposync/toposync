@@ -31,6 +31,7 @@ class VisionExtension(BaseExtension):
         self._identity_lock = threading.Lock()
         self._association_repository = None
         self._visual_reference_store = None
+        self._visual_preview_runner = None
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -80,6 +81,7 @@ class VisionExtension(BaseExtension):
 
         app.include_router(create_identity_router(identity_store))
         from .visual_state.api import create_visual_reference_router
+        from .visual_state.preview import VisualStatePreviewRunner
         from .visual_state.store import VisualReferenceStore
 
         def visual_reference_store():
@@ -94,7 +96,8 @@ class VisionExtension(BaseExtension):
 
         if config_store is not None:
             await register_visual_reference_persistence(config_store, visual_reference_store)
-        app.include_router(create_visual_reference_router(visual_reference_store))
+        self._visual_preview_runner = VisualStatePreviewRunner()
+        app.include_router(create_visual_reference_router(visual_reference_store, self._visual_preview_runner))
         services.register("vision.visual_references", visual_reference_store)
         from .association_api import AssociationRepository, create_association_router
 
@@ -235,6 +238,8 @@ class VisionExtension(BaseExtension):
         register_extension_shutdown_callback(app, self.shutdown)
 
     async def shutdown(self) -> None:
+        if self._visual_preview_runner is not None:
+            await self._visual_preview_runner.shutdown()
         task, self._identity_maintenance_task = self._identity_maintenance_task, None
         if task is not None:
             task.cancel()

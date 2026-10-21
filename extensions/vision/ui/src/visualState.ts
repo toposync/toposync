@@ -9,6 +9,36 @@ export type VisualConfiguration = {
 };
 export type VisualDraft = { draft_id: string; revision: number; expires_at: number; configuration: VisualConfiguration };
 export type VisualModel = { model_id: string; name: string; revision: string; artifact_present: boolean };
+export type VisualPreview = { test_only: true; duration_ms: number; completed_at: number; state: {
+  status: "confirmed" | "pending" | "unknown" | "unavailable"; class_id: string | null; reason: string;
+  similarity: number | null; margin: number | null; observed_at: number | null;
+} };
+
+export const visualComparisonFields = ["enter_threshold", "enter_margin", "hold_threshold", "hold_margin"] as const;
+export const visualTemporalDefaults = { confirmations: 2, minimum_separation_ms: 150, maximum_gap_ms: 750,
+  pending_hold_ms: 500, maximum_frame_age_ms: 750, validity_ms: 2000 };
+export function visualDecisionValues(configuration: VisualConfiguration): Record<string, string> {
+  const comparison = (configuration.comparison ?? {}) as Record<string, number>;
+  const temporal = { ...visualTemporalDefaults, ...(configuration.temporal as object ?? {}) };
+  return Object.fromEntries([...visualComparisonFields.map(key => [key, String(comparison[key] ?? "")]),
+    ...Object.entries(temporal).map(([key, value]) => [key, String(value)]),
+    ["evaluation_interval_ms", String(configuration.evaluation_interval_ms ?? 250)]]);
+}
+export function applyVisualDecisionValues(configuration: VisualConfiguration, fields: Record<string, string>): VisualConfiguration {
+  const parsed = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value.trim() === "" ? NaN : Number(value)]));
+  const between = (key: string, minimum: number, maximum: number, integer = false) =>
+    Number.isFinite(parsed[key]) && parsed[key] >= minimum && parsed[key] <= maximum && (!integer || Number.isInteger(parsed[key]));
+  if (!visualComparisonFields.every(key => between(key, key.endsWith("margin") ? 0 : -1, key.endsWith("margin") ? 2 : 1))
+      || parsed.hold_threshold > parsed.enter_threshold || parsed.hold_margin > parsed.enter_margin
+      || !between("confirmations", 2, 30, true) || !between("minimum_separation_ms", 1, 60000, true)
+      || !between("evaluation_interval_ms", 50, 60000, true)
+      || !["maximum_gap_ms", "maximum_frame_age_ms", "validity_ms"].every(key => between(key, 1, 3600000, true))
+      || !between("pending_hold_ms", 0, 3600000, true) || parsed.minimum_separation_ms > parsed.maximum_gap_ms
+      || parsed.pending_hold_ms > parsed.validity_ms || parsed.maximum_frame_age_ms > parsed.validity_ms) throw new Error("visual_decision_invalid");
+  return { ...configuration, comparison: Object.fromEntries(visualComparisonFields.map(key => [key, parsed[key]])),
+    temporal: Object.fromEntries(Object.keys(visualTemporalDefaults).map(key => [key, parsed[key]])),
+    evaluation_interval_ms: parsed.evaluation_interval_ms };
+}
 
 export function selectVisualModel(configuration: VisualConfiguration, model: VisualModel): VisualConfiguration {
   if (!model.artifact_present) throw new Error("visual_model_unavailable");

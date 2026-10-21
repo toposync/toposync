@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+import asyncio
+from collections import deque
+from dataclasses import replace
+import time
+import uuid
+
+from toposync.runtime.pipelines.compiler import PipelineGraphCompiler
+from toposync.runtime.pipelines.execution import PipelineRuntime, PipelineRuntimeDependencies
+from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
+from toposync.runtime.pipelines.preview import build_preview_registry, prepare_preview_pipeline
+
+from .runtime import VisualStateRuntime
+
+
+class VisualPreviewBusy(RuntimeError):
+    pass
+
+
+class VisualStatePreviewRunner:
+    """Bounded disposable pipelines; canceled native work keeps its admission slot."""
+
+    def __init__(self):
+        self._owners = set()
+        self._tasks = set()
+        self._retirements = set()
+        self._closed = False
+
+    async def run(self, *, owner, configuration, pipeline, registry, dependencies, duration_ms=3000):
+        if self._closed or owner in self._owners or len(self._owners) >= 2:
+            raise VisualPreviewBusy("visual_preview_busy")
+        self._owners.add(owner)
+        task = asyncio.current_task()
+        self._tasks.add(task)
+        runtime = sensor = None
+        scheduler = ExecutionScheduler(thread_pool_max_workers=2)
+        try:
+            configuration.validate_activation()
+            prefix = pipeline.model_copy(deep=True)
+            preview = prepare_preview_pipeline(pipeline=prefix, registry=registry, reference_capture=True)
+            preview.name = f"visual_test_{uuid.uuid4().hex}"
+            preview_registry = build_preview_registry(registry)
+            sensor = VisualStateRuntime(configuration.model_dump(), dependencies, preview_input_pipeline=prefix)
+            preview_registry._items["vision.visual_state"] = replace(
+                registry.get("vision.visual_state"), runtime_factory=lambda *_: sensor,
+            )
+            graph = preview.graph
+            sink = next(node for node in graph["nodes"] if node["operator"] == "core.sink")
+            incoming = next(edge for edge in graph["edges"] if edge["to"]["node"] == sink["id"])
+            node_id = f"visual_test_{uuid.uuid4().hex}"
+            incoming["to"] = {"node": node_id, "port": "in"}
+            incoming["traffic"] = {"modality": "video", "semantic_class": "frame", "continuous": True}
+            graph["nodes"].append({"id": node_id, "uid": node_id, "operator": "vision.visual_state",
+                                   "config": configuration.model_dump(mode="json")})
+            graph["edges"].append({"uid": node_id, "from": {"node": node_id, "port": "out"},
+                                   "to": {"node": sink["id"], "port": "in"},
+                                   "traffic": {"modality": "data"},
+                                   "queue": {"max_items": 1, "drop_policy": "latest_only"}})
+            states = deque(maxlen=32)
+
+            async def collect(packet, *_):
+                states.append(packet.payload["visual_state"])
+
+            # Construct dependencies explicitly: no live destinations, histories, snapshots or inspection stores.
+            isolated = PipelineRuntimeDependencies(config_store=dependencies.config_store, services=dependencies.services,
+                vision_model_registry=dependencies.vision_model_registry, execution_scheduler=scheduler,
+                preview_packet_collector=collect)
+            sensor.dependencies = isolated
+            runtime = PipelineRuntime(PipelineGraphCompiler(preview_registry).compile_pipeline(preview), preview_registry, isolated)
+            async with asyncio.timeout(15):
+                await runtime.start()
+            started = time.monotonic()
+            await asyncio.sleep(duration_ms / 1000)
+            return {"test_only": True, "state": sensor._reducer.tick().model_dump(mode="json"),
+                    "states": list(states), "completed_at": time.time(), "duration_ms": round((time.monotonic() - started) * 1000)}
+        finally:
+            cleanup = asyncio.create_task(self._dispose(owner, runtime, sensor, scheduler, task))
+            cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            cleanup.result()
+            if cancelled:
+                raise asyncio.CancelledError
+
+    async def _dispose(self, owner, runtime, sensor, scheduler, task):
+        try:
+            if runtime is not None:
+                await runtime.stop()
+        finally:
+            if sensor is not None:
+                await sensor.shutdown()
+            await scheduler.shutdown()
+            self._tasks.discard(task)
+            if sensor is None or sensor.resources_released:
+                self._owners.discard(owner)
+            else:
+                retirement = asyncio.create_task(self._retire(owner, sensor))
+                self._retirements.add(retirement)
+                retirement.add_done_callback(self._retirements.discard)
+
+    async def _retire(self, owner, sensor):
+        while not sensor.resources_released:
+            await asyncio.sleep(.05)
+        self._owners.discard(owner)
+
+    async def shutdown(self):
+        self._closed = True
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        retirements = list(self._retirements)
+        for task in retirements:
+            task.cancel()
+        await asyncio.gather(*retirements, return_exceptions=True)

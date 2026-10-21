@@ -1,9 +1,11 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { activateModalFocus, type HostI18n, type PipelineReferenceCapture, type PipelineReferenceFrame } from "@toposync/plugin-api";
-import { captureVisualReference, createVisualDraft, readVisualDraft, updateVisualDraft, visualReferenceUrl } from "./api";
+import { captureVisualReference, createVisualDraft, readVisualDraft, testVisualState, updateVisualDraft, visualReferenceUrl } from "./api";
 import { bindVisualConfiguration, newVisualClass, newVisualConfiguration, restoreVisualReferences, visualClassesValid, type VisualClass, type VisualConfiguration, type VisualDraft } from "./visualState";
 import { styles } from "./styles";
 import { VisualStateModelSettings } from "./VisualStateModelSettings";
+import { VisualStateDecisionSettings } from "./VisualStateDecisionSettings";
+import type { VisualPreview } from "./visualState";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
   referenceCapture?: PipelineReferenceCapture; showAdvanced?: boolean };
@@ -34,11 +36,15 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const [undo, setUndo] = useState<VisualConfiguration | null>(null);
   const [pending, setPending] = useState<PendingCapture | null>(null);
   const [photo, setPhoto] = useState<{ id: string; label: string } | null>(null);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [preview, setPreview] = useState<{ result: VisualPreview; context: string; pipeline: string } | null>(null);
   const active = useRef<AbortController | null>(null);
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const readonly = referenceCapture?.available === false && referenceCapture.reason === "read_only";
   const captureCallback = referenceCapture?.available ? referenceCapture.capture : undefined;
+  const inputPipeline = referenceCapture?.available ? referenceCapture.inputPipeline : undefined;
+  const pipelineContext = JSON.stringify(inputPipeline) ?? "";
   const context = JSON.stringify(config);
   useLayoutEffect(() => {
     setBusy(null); setPending(null);
@@ -59,16 +65,21 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   async function run(name: string, work: (signal: AbortSignal) => Promise<void>) {
     if (readonly || active.current) return;
     const controller = new AbortController(); active.current = controller; setBusy(name); setError(null);
+    const timeout = name === "test" ? setTimeout(() => {
+      controller.abort();
+      if (active.current === controller) { active.current = null; setBusy(null); setError("visual_preview_timeout"); }
+    }, 30_000) : undefined;
     try { await work(controller.signal); }
     catch (cause) {
       if (!controller.signal.aborted) {
         const message = String((cause as Error)?.message ?? "");
         const status = (cause as { status?: number }).status;
-        setError(["reference_context_changed", "reference_region_required", "reference_capture_receipt_invalid", "reference_limit", "reference_conflict"].find(key => message.includes(key))
+        setError(["reference_context_changed", "reference_region_required", "reference_capture_receipt_invalid", "reference_limit", "reference_conflict",
+          "visual_preview_busy", "visual_preview_timeout", "visual_preview_configuration_invalid", "visual_preview_input_invalid", "visual_preview_failed"].find(key => message.includes(key))
           ?? (status === 401 || status === 403 ? "forbidden" : status === 409 ? "reference_conflict"
-            : status === 413 ? "reference_limit" : status === 422 ? "invalid_classes" : "request_failed"));
+            : name === "test" ? "visual_preview_failed" : status === 413 ? "reference_limit" : status === 422 ? "invalid_classes" : "request_failed"));
       }
-    } finally { if (active.current === controller) { active.current = null; setBusy(null); } }
+    } finally { clearTimeout(timeout); if (active.current === controller) { active.current = null; setBusy(null); } }
   }
   async function synchronize(configuration: VisualConfiguration, signal: AbortSignal): Promise<VisualDraft> {
     const previous = draftRef.current;
@@ -104,12 +115,11 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   return <section className="identityGallery visualStatePanel" aria-label={t("title")}>
     <style>{styles}</style>
     <p>{t("help")}</p>
-    <VisualStateModelSettings value={value} change={changed} disabled={disabled} t={t} />
     {!value.model_id && <p className="identityMuted">{t("model_missing")}</p>}
     {unavailable && <p role="status">{t(unavailable)}</p>}
     {error && <div role="alert"><p>{t(error)}</p>
       {pending && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("retry", signal => upload(pending, signal))}>{t("retry_capture")}</button>}
-      {draft && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("reload", async signal => {
+      {draft && !error.startsWith("visual_preview_") && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("reload", async signal => {
         const current = await readVisualDraft(draft.draft_id, signal); signal.throwIfAborted();
         setUndo(value); draftRef.current = current; setDraft(current); changed(current.configuration);
       })}>{t("reload")}</button>}
@@ -118,7 +128,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
         draftRef.current = current; setDraft(current); setPending(null); changed(current.configuration);
       })}>{t("reopen")}</button>}
     </div>}
-    {busy && <div role="status">{t("working")} <button type="button" className="chipButton" onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setPending(null); }}>{t("cancel")}</button></div>}
+    {busy && <div role="status">{t(busy === "test" ? "testing" : "working")} <button type="button" className="chipButton" onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setPending(null); }}>{t("cancel")}</button></div>}
     {!valid && <p role="alert">{t("invalid_classes")}</p>}
     <fieldset disabled={disabled}>
       <legend>{t("region")}</legend>
@@ -164,6 +174,25 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       {hasReferences && !draft && <button type="button" className="chipButton" disabled={disabled || !valid} onClick={() => void run("load", async signal => { await synchronize(value, signal); })}>{t("load_references")}</button>}
       {undo && <button type="button" className="chipButton" disabled={disabled} onClick={() => { mutate(restoreVisualReferences(value, undo), false); }}>{t("undo")}</button>}
     </div>
+    <VisualStateModelSettings value={value} change={changed} disabled={disabled} t={t} />
+    <VisualStateDecisionSettings value={value} change={changed} disabled={disabled} editing={setSettingsDirty} t={t} />
+    <fieldset disabled={disabled}>
+      <legend>{t("preview_title")}</legend><p className="identityMuted">{t("preview_help")}</p>
+      {!inputPipeline && <p role="status">{t("preview_host_unavailable")}</p>}
+      <button type="button" className="chipButton" disabled={!inputPipeline || !valid || settingsDirty || !value.model_id || !value.comparison
+        || !classes.filter(item => item.enabled).every(item => item.reference_ids.length > 0)}
+        onClick={() => void run("test", async signal => {
+          const result = await testVisualState(value, inputPipeline, signal); signal.throwIfAborted();
+          setPreview({ result, context, pipeline: pipelineContext });
+        })}>{t("test_now")}</button>
+      {preview && <div role="status" className="identityInspector">
+        <strong>{t("preview_result")}: {classes.find(item => item.class_id === preview.result.state.class_id)?.label ?? t(`status_${preview.result.state.status}`)}</strong>
+        <span>{t(`status_${preview.result.state.status}`)}</span>
+        <time dateTime={new Date(preview.result.completed_at * 1000).toISOString()}>{new Date(preview.result.completed_at * 1000).toLocaleTimeString()}</time>
+        {(preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty) && <p>{t("preview_stale")}</p>}
+        <p>{t("preview_finished")}</p>
+      </div>}
+    </fieldset>
     {showAdvanced && <label className="identityField"><span>{t("scene_description")}</span><textarea className="input" rows={3} maxLength={2000}
       disabled={disabled} value={value.scene_description} onChange={event => changed({ ...value, scene_description: event.target.value })} /></label>}
     {photo && draft && <PhotoDialog url={visualReferenceUrl(draft.draft_id, photo.id, false)} label={photo.label} close={closePhoto} t={t} />}

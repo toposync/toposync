@@ -56,5 +56,5 @@ export function usePipelineReferenceCapture(
     }
     return active.current.session.capture(signal);
   }, [revision]);
-  return request ? { available: true, capture } : { available: false, reason };
+  return request ? { available: true, capture, inputPipeline: structuredClone(request.pipeline) } : { available: false, reason };
 }

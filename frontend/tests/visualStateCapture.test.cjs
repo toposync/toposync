@@ -10,7 +10,7 @@ const compile = source => ts.transpileModule(source, { compilerOptions: {
   module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
 } }).outputText;
 function load(file, modules = {}, globals = {}) {
-  const context = { exports: {}, AbortController, DOMException, ...globals,
+  const context = { exports: {}, AbortController, DOMException, structuredClone, ...globals,
     require(name) { assert.ok(name in modules, `unexpected import: ${name}`); return modules[name]; } };
   vm.runInNewContext(compile(fs.readFileSync(path.join(__dirname, file), 'utf8')), context);
   return context.exports;
@@ -111,6 +111,9 @@ test('panel hook cancels on revision, readonly and unmount, including Strict Mod
   }
   const request = resolve().request;
   const first = render(request, 'first');
+  assert.deepEqual(plain(first.inputPipeline), plain(request.pipeline));
+  first.inputPipeline.graph.nodes[0].config.camera_id = 'mutated-by-extension';
+  assert.equal(request.pipeline.graph.nodes[0].config.camera_id, 'actual-camera');
   const result = first.capture(), rejected = assert.rejects(result, { name: 'AbortError' });
   const second = render(request, 'second');
   assert.equal(requests[0].signal.aborted, true);

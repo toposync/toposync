@@ -28,6 +28,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
     """One local inference plus one latest frame; decision expiry never waits for either."""
 
     def __init__(self, config, dependencies, *, backend_factory=build_embedding_backend,
+                 preview_input_pipeline=None,
                  clock: Callable[[], float] = time.monotonic, unix_clock: Callable[[], float] = time.time):
         self.config = VisualStateConfig.model_validate(config)
         self.dependencies = dependencies
@@ -38,6 +39,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self._native_lock = threading.Lock()
         self._closed = threading.Event()
         self._prefix = None
+        self._preview_input_pipeline = preview_input_pipeline.model_copy(deep=True) if preview_input_pipeline is not None else None
         self._reducer = None
         self._instance = None
         self._retired_instances = set()
@@ -91,20 +93,25 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self.config.validate_activation()
         if self.config.strategy != "examples":
             raise ValueError("multimodal visual sensor execution is not available yet")
-        if self.dependencies.config_store is None or self.dependencies.services is None:
+        if self.dependencies.services is None:
             raise ValueError("visual sensor requires local configuration and private references")
-        occurrences = context.stats_node_occurrences or ((context.pipeline_name, context.node_id),)
-        if len(occurrences) != 1:
-            raise ValueError("visual sensors cannot share runtime state across pipeline nodes")
-        pipeline_name, node_id = occurrences[0]
-        pipeline = await self.dependencies.config_store.get_pipeline(pipeline_name)
-        if pipeline is None or pipeline.processing_server_id != "local":
-            raise ValueError("visual sensor requires a saved local pipeline")
-        nodes = [node for node in pipeline.graph["nodes"] if node["id"] == node_id]
-        if (len(nodes) != 1 or nodes[0]["operator"] != "vision.visual_state"
-                or VisualStateConfig.model_validate(nodes[0]["config"]) != self.config):
-            raise ValueError("visual sensor configuration changed before execution")
-        self._prefix = reference_input_pipeline(pipeline, node_id)
+        if self._preview_input_pipeline is not None:
+            self._prefix = self._preview_input_pipeline
+        else:
+            if self.dependencies.config_store is None:
+                raise ValueError("visual sensor requires local configuration and private references")
+            occurrences = context.stats_node_occurrences or ((context.pipeline_name, context.node_id),)
+            if len(occurrences) != 1:
+                raise ValueError("visual sensors cannot share runtime state across pipeline nodes")
+            pipeline_name, node_id = occurrences[0]
+            pipeline = await self.dependencies.config_store.get_pipeline(pipeline_name)
+            if pipeline is None or pipeline.processing_server_id != "local":
+                raise ValueError("visual sensor requires a saved local pipeline")
+            nodes = [node for node in pipeline.graph["nodes"] if node["id"] == node_id]
+            if (len(nodes) != 1 or nodes[0]["operator"] != "vision.visual_state"
+                    or VisualStateConfig.model_validate(nodes[0]["config"]) != self.config):
+                raise ValueError("visual sensor configuration changed before execution")
+            self._prefix = reference_input_pipeline(pipeline, node_id)
         if reference_preparation_revision(self._prefix) != self.config.preparation_revision:
             raise ValueError("visual sensor preparation changed; capture compatible references")
         if self.config.region_id is not None and not any(
@@ -269,3 +276,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
                 self._close_backend()
             finally:
                 self._native_lock.release()
+
+    @property
+    def resources_released(self):
+        return self._closed.is_set() and not self._native_lock.locked()

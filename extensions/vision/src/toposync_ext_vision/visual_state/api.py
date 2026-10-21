@@ -8,12 +8,16 @@ from typing import Callable
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from PIL import Image
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from toposync.runtime.auth import AuthContext, AuthRuntime
+from toposync.runtime.config_store import Pipeline
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.preview import PipelinePreviewError
 
 from ..processing.runtime_backends.embedding import embedding_model_revision
 from ..registry import build_default_model_registry
+from .preview import VisualPreviewBusy, VisualStatePreviewRunner
 from .schemas import Counter, Identifier, ReferenceEvidence, VisualStateConfig, VisualStateModel
 from .store import ReferenceConflict, ReferenceLimit, VisualReferenceStore
 
@@ -21,6 +25,12 @@ from .store import ReferenceConflict, ReferenceLimit, VisualReferenceStore
 class DraftUpdate(VisualStateModel):
     expected_revision: Counter
     configuration: VisualStateConfig
+
+
+class VisualPreviewRequest(VisualStateModel):
+    configuration: VisualStateConfig
+    pipeline: Pipeline
+    duration_ms: int = Field(default=3000, strict=True, ge=500, le=10_000)
 
 
 def _authorize(request: Request, *, write: bool = False) -> str:
@@ -52,9 +62,47 @@ def _storage_errors():
         raise HTTPException(503, detail={"code": "reference_storage_unavailable"}) from error
 
 
-def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]) -> APIRouter:
+def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore], preview_runner: VisualStatePreviewRunner) -> APIRouter:
     router = APIRouter(prefix="/api/vision/visual-state")
     uploads = asyncio.Semaphore(2)
+
+    @router.post("/preview")
+    async def preview(request: Request, body: VisualPreviewRequest):
+        owner = _authorize(request, write=True)
+        dependencies = PipelineRuntimeDependencies(config_store=request.app.state.config_store,
+                                                   services=request.app.state.services)
+
+        async def disconnected():
+            # The body is already parsed; polling is_disconnected loses events through HTTP middleware.
+            while (await request.receive())["type"] != "http.disconnect":
+                pass
+
+        task = asyncio.create_task(preview_runner.run(owner=owner, configuration=body.configuration,
+            pipeline=body.pipeline, registry=request.app.state.pipeline_operator_registry,
+            dependencies=dependencies, duration_ms=body.duration_ms))
+        disconnect = asyncio.create_task(disconnected())
+        try:
+            done, _ = await asyncio.wait({task, disconnect}, return_when=asyncio.FIRST_COMPLETED)
+            if disconnect in done:
+                raise HTTPException(499, detail="visual_preview_cancelled")
+            try:
+                return task.result()
+            except VisualPreviewBusy as error:
+                raise HTTPException(429, detail="visual_preview_busy") from error
+            except PipelinePreviewError as error:
+                raise HTTPException(409, detail={"code": "visual_preview_input_invalid", "reason": error.code}) from error
+            except ReferenceConflict as error:
+                raise HTTPException(409, detail="reference_conflict") from error
+            except ValueError as error:
+                raise HTTPException(422, detail="visual_preview_configuration_invalid") from error
+            except TimeoutError as error:
+                raise HTTPException(504, detail="visual_preview_timeout") from error
+            except Exception as error:
+                raise HTTPException(503, detail="visual_preview_failed") from error
+        finally:
+            task.cancel()
+            disconnect.cancel()
+            await asyncio.gather(task, disconnect, return_exceptions=True)
 
     @router.get("/models")
     def models(request: Request):

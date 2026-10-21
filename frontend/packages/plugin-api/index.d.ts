@@ -225,7 +225,9 @@ export type PipelineReferenceEvidence = {
 export type PipelineReferenceFrame = { blob: Blob; evidence: PipelineReferenceEvidence; receipt: string };
 
 export type PipelineReferenceCapture =
-  | { available: true; capture: (signal?: AbortSignal) => Promise<PipelineReferenceFrame> }
+  | { available: true; capture: (signal?: AbortSignal) => Promise<PipelineReferenceFrame>;
+      /** Optional upstream graph snapshot for isolated extension tests; never includes downstream destinations. */
+      inputPipeline?: unknown }
   | { available: false; reason: "read_only" | "remote_execution" | "invalid_graph" | "no_camera_source" | "no_camera_selected" | "no_pipeline_name" };
 
 export type PipelineOperatorPanel = {

@@ -46,5 +46,7 @@ export const styles = `
 .visualReferenceDialog {max-width:min(900px,95vw)}
 .visualReferenceDialog > img {display:block;max-width:100%;max-height:70vh;object-fit:contain;margin:auto}
 .visualStatePanel fieldset:disabled {opacity:.7}
+.visualStatePanel summary {cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:600}
+.visualDecisionFields {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:10px}
 @media(max-width:480px){.identityGallery .identityGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.identityGallery .identityActions button{flex:1 1 120px}.identityGallery .identityForm{padding:12px}.visualStatePanel .visualStateName{flex-basis:100%}}
 `;

@@ -5,12 +5,12 @@ export const styles = `
 .identityGallery .identityToolbar {display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .identityGallery .identityToolbar input:not([type=checkbox]):not([type=radio]) {flex:1;min-width:150px}
 .identityGallery input:not([type=checkbox]):not([type=radio]),.identityGallery select {box-sizing:border-box;width:100%;min-height:44px;border:1px solid var(--borderStrong);border-radius:8px;padding:8px 12px;background:var(--panel);color:var(--text);font:inherit}
-.identityGallery button {min-height:44px;white-space:normal;overflow-wrap:anywhere}
+.identityGallery button {min-height:44px;height:auto;white-space:normal;overflow-wrap:anywhere}
 .identityGallery fieldset {border:0;padding:0;margin:0;display:grid;gap:14px;min-width:0}
 .identityGallery label {display:flex;align-items:center;justify-content:flex-start;gap:8px;line-height:1.5}
 .identityGallery .identityField {display:grid;gap:6px}
 .identityGallery input[type=checkbox],.identityGallery input[type=radio] {width:20px;height:20px;flex-shrink:0;accent-color:var(--accent)}
-.identityGallery :focus-visible {outline:2px solid var(--accent);outline-offset:3px}
+.identityGallery :focus-visible {outline:2px solid var(--color-action-background);outline-offset:3px}
 .identityGallery .identityGrid {display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px}
 .identityGallery .identityTile {border:1px solid var(--border);border-radius:10px;padding:10px;display:grid;gap:8px;text-align:left;background:var(--panel);color:var(--text);min-width:0}
 .identityGallery .identityTile:has(> .identityGroupDetails[open]) {grid-column:1 / -1}
@@ -34,5 +34,5 @@ export const styles = `
 .identityGallery .identityChoice {border:1px solid var(--border);border-radius:8px;padding:8px;min-height:48px;cursor:pointer}
 .identityGallery .identityChoice.isSelected {border-color:var(--accent)}
 .identityGallery .identityChoice .identityPortrait {width:48px;height:48px}
-@media(max-width:480px){.identityGallery .identityGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.identityGallery .identityActions button{flex:1}.identityGallery .identityForm{padding:12px}}
+@media(max-width:480px){.identityGallery .identityGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.identityGallery .identityActions button{flex:1 1 120px}.identityGallery .identityForm{padding:12px}}
 `;

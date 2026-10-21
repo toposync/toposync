@@ -8,17 +8,34 @@ from test_identity_store import curate, enroll, evidence, policy
 from test_occurrences import contribution, enrichment
 
 
+def saved_policy(client, value):
+    config = client.portal.call(client.app.state.config_store.get_config).model_copy(deep=True)
+    for intent in config.settings.core['automatic']['intents']:
+        intent['condition']['resource_parameters']['policies'] = [value.model_dump()]
+    client.portal.call(partial(client.app.state.config_store.save_config, config))
+
+
 def trio(client, *, third_camera='camera'):
     history = client.app.state.notifications
     gallery = client.portal.call(partial(client.app.state.services.call, 'vision.identity.store'))
     gallery.register_policy(policy())
+    config = client.portal.call(client.app.state.config_store.get_config)
+    config.settings.core['automatic'] = {'enabled': False, 'intents': [{
+        'id': 'presence_garage', 'name': 'Saved recognition', 'capability': 'vision.recognition',
+        'scope': {'kind': 'camera', 'camera_ids': ['camera']}, 'requested': False,
+        'consents': ['recognition'], 'condition': {'resource_parameters': {'policies': [policy().model_dump()]}}}]}
+    from copy import deepcopy
+    second = deepcopy(config.settings.core['automatic']['intents'][0])
+    second['id'] = 'second'
+    config.settings.core['automatic']['intents'].append(second)
+    client.portal.call(partial(client.app.state.config_store.save_config, config))
     vectors = [[1.0] + [0.0] * 15, [0.0, 1.0] + [0.0] * 14]
     identities = [enroll(gallery, name=f'Synthetic person {index}', event=f'enrollment-{index}', vector=vector)[0]
                   for index, vector in enumerate(vectors)]
     sources = []
     for index in range(3):
         camera = third_camera if index == 2 else 'camera'
-        value = contribution(f'open-{index}', camera_id=camera, camera_name=camera.title(), source_id=camera + ':source',
+        value = contribution(f'open-{index}', objective_id='presence_garage', camera_id=camera, camera_name=camera.title(), source_id=camera + ':source',
             scope={'camera_ids': sorted({'camera', third_camera}), 'area_ids': ['garage'] if third_camera != 'camera' else []}, participant_id=f'person-{index}', member_id=f'visit-{index}')
         sources.append(value)
         document = client.portal.call(partial(history.record_occurrence, value, retention_seconds=3600.0, request_notice=True))
@@ -37,6 +54,44 @@ def trio(client, *, third_camera='camera'):
             message_id=f'recognition-{index}', evidence_id=f'open-{index}', participant_id=f'person-{index}',
             kind='recognition', text=None, status='observed', identity_occurrence_id=sample.occurrence_id)))
     return history, gallery, document, identities
+
+
+@pytest.mark.parametrize('change', ['restart', 'remove', 'disable', 'recalibrate', 'revoke'])
+def test_history_uses_current_saved_policy_without_new_capture(client, change):
+    history, gallery, document, identities = trio(client)
+    gallery._policies.clear()
+    config = client.portal.call(client.app.state.config_store.get_config)
+    state = config.settings.core['automatic']
+    if change == 'remove':
+        state['intents'] = []
+    elif change == 'revoke':
+        state['denied_features'] = {'camera': ['recognition']}
+    elif change in {'disable', 'recalibrate'}:
+        profile = state['intents'][0]['condition']['resource_parameters']['policies'][0]
+        profile['automatic_enabled' if change == 'disable' else 'calibration_revision'] = False if change == 'disable' else 'new'
+    client.portal.call(partial(client.app.state.config_store.save_config, config))
+    # A late producer cannot restore authorization removed from saved configuration.
+    if change != 'restart':
+        gallery.register_policy(policy())
+    projected = client.get('/api/activity/' + document['id']).json()['occurrence']['participants']
+    assert projected['person-0']['identification']['status'] == ('recognized' if change == 'restart' else 'unknown')
+    if change == 'restart':
+        assert projected['person-0']['identification']['name'] == 'Synthetic person 0'
+        assert gallery._policies == {}
+
+
+def test_changed_configuration_during_history_projection_withholds_names(client, monkeypatch):
+    history, gallery, document, identities = trio(client)
+    original = gallery.activity_participants
+    def project(*args, **kwargs):
+        result = original(*args, **kwargs)
+        config = client.portal.call(client.app.state.config_store.get_config)
+        config.settings.core['automatic']['intents'] = []
+        client.portal.call(partial(client.app.state.config_store.save_config, config))
+        return result
+    monkeypatch.setattr(gallery, 'activity_participants', project)
+    projected = client.get('/api/activity/' + document['id']).json()['occurrence']['participants']
+    assert all(value['identification']['status'] == 'unavailable' for value in projected.values())
 
 
 def test_closed_trio_resolves_two_names_and_one_anonymous_in_detail_and_manifest(client):
@@ -164,6 +219,7 @@ def test_nominal_history_revalidates_private_owner_after_slow_search(client):
 def test_nominal_history_does_not_use_stale_recognition_policy(client):
     _, gallery, _, identities = trio(client)
     gallery.register_policy(policy(automatic=False))
+    saved_policy(client, policy(automatic=False))
     response = client.get(f'/api/vision/identities/{identities[0]}/notifications', params={'association': 'recognized'})
     assert response.status_code == 200 and response.json()['notifications'] == []
 
@@ -392,6 +448,7 @@ def test_marker_cannot_borrow_another_participants_identity_or_stale_policy(clie
     projected = gallery.activity_participants(altered, authorize_cameras=lambda _: None)
     assert projected['person-0'] == {'status': 'unknown'}
     gallery.register_policy(policy(automatic=False))
+    saved_policy(client, policy(automatic=False))
     response = client.get('/api/activity/' + document['id'])
     assert 'Synthetic person' not in response.text and identities[0] not in response.text
 
@@ -405,3 +462,28 @@ def test_disabled_extension_does_not_resolve_private_names(client):
     assert response.status_code == 200, response.text
     assert 'Synthetic person' not in response.text and identities[0] not in response.text
     assert all(item['identification'] == {'status': 'unavailable'} for item in response.json()['occurrence']['participants'].values())
+
+
+def test_manual_history_policy_follows_only_its_enrichment_branch():
+    from toposync.runtime.config_store import AppConfig, Pipeline
+    from toposync_ext_vision.identity.api import activity_policies
+    profile = {'enabled': True, 'policies': [policy().model_dump()]}
+    nodes = [
+        {'id': 'a', 'operator': 'core.record_occurrence', 'config': {'objective_id': 'a'}},
+        {'id': 'b', 'operator': 'core.record_occurrence', 'config': {'objective_id': 'b'}},
+        {'id': 'recognize_a', 'operator': 'vision.recognize_identity', 'config': profile},
+        {'id': 'recognize_b', 'operator': 'vision.recognize_identity', 'config': profile},
+        {'id': 'disconnected', 'operator': 'vision.recognize_identity', 'config': profile},
+    ]
+    edge = lambda a, b: {'from': {'node': a, 'port': 'out'}, 'to': {'node': b, 'port': 'in'}}
+    config = AppConfig(pipelines=[Pipeline(name='manual', enabled=False, graph={
+        'schema_version': 2, 'nodes': nodes, 'edges': [edge('a', 'recognize_a'), edge('b', 'recognize_b'), edge('recognize_a', 'a')],
+    })])
+    document = {'objective_id': 'a', 'scope': {'camera_ids': ['camera']}}
+    assert len(activity_policies(config, document)) == 1
+    config.pipelines[0].graph['edges'] = [edge('b', 'recognize_b')]
+    assert activity_policies(config, document) == {}
+    # Different calibration on a connected branch fails closed; unrelated branches do not.
+    nodes[-1]['config'] = {'enabled': True, 'policies': [policy(automatic=False).model_dump()]}
+    config.pipelines[0].graph['edges'] = [edge('a', 'recognize_a'), edge('a', 'disconnected')]
+    assert activity_policies(config, document) == {}

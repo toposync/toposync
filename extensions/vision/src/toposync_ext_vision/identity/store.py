@@ -437,7 +437,7 @@ class IdentityStore:
                 return None
             return self._validated_decision(current, observed_at=observed_at, max_age_seconds=max_age_seconds)
 
-    def _validated_decision(self, current, *, observed_at, max_age_seconds):
+    def _validated_decision(self, current, *, observed_at, max_age_seconds, policies=None):
         with self._lock:
             if current.gallery_revision != self.revision:
                 return None
@@ -448,7 +448,7 @@ class IdentityStore:
                 row = self._connection.execute(
                     "SELECT species FROM occurrence WHERE id=?", (current.occurrence_id,)
                 ).fetchone()
-                policy = self._policies.get((row["species"], current.embedding_space))
+                policy = (self._policies if policies is None else policies).get((row["species"], current.embedding_space))
                 if (
                     policy is None
                     or not policy.automatic_enabled
@@ -460,7 +460,7 @@ class IdentityStore:
                     return None
             return current
 
-    def activity_participants(self, document: dict, *, authorize_cameras: Callable[[set[str]], bool | None]) -> dict:
+    def activity_participants(self, document: dict, *, authorize_cameras: Callable[[set[str]], bool | None], policies=None) -> dict:
         """Resolve current names only through retained captures owned by this activity."""
         result = {key: {"status": "unknown"} for key in document["participants"]}
         with self._lock:
@@ -496,7 +496,7 @@ class IdentityStore:
                         current = RecognitionDecision.model_validate(self._open(saved['decision']))
                         if current.provenance == 'human' or current.identity_id != saved['identity_id']:
                             continue
-                        current = self._validated_decision(current, observed_at=item['observed_at'], max_age_seconds=0)
+                        current = self._validated_decision(current, observed_at=item['observed_at'], max_age_seconds=0, policies=policies)
                     else:
                         continue
                     if current is not None and current.reason == 'identity_conflict':

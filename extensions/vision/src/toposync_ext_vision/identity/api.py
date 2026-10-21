@@ -185,6 +185,50 @@ async def identity_history_selection(*, request: Request, get_store: Callable[[]
     return {"scope": scope, "notification_ids": identifiers}
 
 
+def activity_policies(config, document):
+    """Resolve saved authorization independently of running producers or queued evidence."""
+    from .pipelines import RecognizeIdentityConfig
+
+    automatic = config.settings.core.get("automatic", {})
+    profiles = []
+    for intent in automatic.get("intents", []):
+        if intent["id"] != document["objective_id"]:
+            continue
+        denied = automatic.get("denied_features", {})
+        if (intent["capability"] == "vision.recognition" and "recognition" in intent.get("consents", [])
+                and not any("recognition" in denied.get(camera, []) for camera in ["*", *document["scope"]["camera_ids"]])):
+            profiles.append({"enabled": True, **intent.get("condition", {}).get("resource_parameters", {})})
+    for pipeline in config.pipelines:
+        if pipeline.graph.get("meta", {}).get("automatic", {}).get("intent_id"):
+            continue
+        nodes = {node['id']: node for node in pipeline.graph.get("nodes", [])}
+        roots = {key for key, node in nodes.items() if node.get("operator") == "core.record_occurrence"
+                 and node.get("config", {}).get("objective_id") == document["objective_id"]}
+        pending, reached = list(roots), set()
+        while pending:
+            key = pending.pop()
+            if key in reached:
+                continue
+            reached.add(key)
+            node = nodes[key]
+            if node.get("operator") == "core.record_occurrence" and key not in roots:
+                continue
+            if node.get("operator") == "vision.recognize_identity":
+                profiles.append(node.get("config", {}))
+            pending.extend(edge['to']['node'] for edge in pipeline.graph.get('edges', [])
+                           if edge['from']['node'] == key and edge['to']['node'] in nodes)
+    policies = {}
+    conflicts = set()
+    for values in profiles:
+        profile = RecognizeIdentityConfig.model_validate(values)
+        for policy in profile.policies:
+            key = (policy.species, policy.embedding_space)
+            if not profile.enabled or not policy.automatic_enabled or (key in policies and policies[key] != policy):
+                conflicts.add(key)
+            policies[key] = policy
+    return {key: value for key, value in policies.items() if key not in conflicts}
+
+
 async def activity_projection(*, request: Request, document: dict, get_store: Callable) -> dict:
     from toposync.runtime.extension_management import disabled_extension_ids_from_settings
 
@@ -203,6 +247,8 @@ async def activity_projection(*, request: Request, document: dict, get_store: Ca
 
     if await disabled():
         return unavailable("unavailable")
+    config = (await request.app.state.config_store.get_config()).model_copy(deep=True)
+    policies = activity_policies(config, document)
 
     def project():
         try:
@@ -220,14 +266,14 @@ async def activity_projection(*, request: Request, document: dict, get_store: Ca
                         raise
                     return False
             with gallery._lock:
-                return {"participants": gallery.activity_participants(document, authorize_cameras=allowed),
+                return {"participants": gallery.activity_participants(document, authorize_cameras=allowed, policies=policies),
                         "private_evidence": gallery.activity_artifacts(document)}
         except HTTPException as exc:
             if exc.status_code not in (401, 403):
                 raise
             return unavailable("restricted")
     result = await asyncio.to_thread(project)
-    if await disabled():
+    if await disabled() or await request.app.state.config_store.get_config() != config:
         return unavailable("unavailable")
     try:
         authorize()

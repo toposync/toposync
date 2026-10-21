@@ -47,6 +47,32 @@ def test_retention_maintenance_failure_is_visible_without_exposing_internal_exce
         assert response.json()['maintenance_error'] == 'occurrence_retention_unavailable'
 
 
+def test_notification_updates_do_not_retransmit_the_activity_evidence_history(activity):
+    import json
+    client, document = activity
+    history = client.app.state.notifications
+    original = client.get('/api/notifications').json()['notifications'][0]
+    for index in range(1, 31):
+        client.portal.call(partial(history.record_occurrence, contribution(f'frame-{index}',
+            lifecycle='UPDATE', observed_at=10 + index, frame_sequence=index + 1), retention_seconds=60.0))
+    queue = history.broadcaster.subscribe()
+    try:
+        client.portal.call(partial(history.enrich_occurrence, enrichment(document['id'])))
+        event = queue.get_nowait()
+    finally:
+        history.broadcaster.unsubscribe(queue)
+    public = client.get('/api/notifications').json()['notifications'][0]
+    for notification in (public, event['notification']):
+        summary = notification['payload']['data']['occurrence']
+        assert 'evidence' not in summary and 'enrichments' not in summary
+        assert summary['participants'] == document['participants']
+        assert summary['expires_at'] == document['expires_at']
+        assert len(json.dumps(notification)) < len(json.dumps(original)) + 512
+    detail = client.get('/api/activity/' + document['id']).json()['occurrence']
+    assert len(detail['evidence']) == 31 and len(detail['enrichments']) == 1
+    assert len(history.store.get(public['id']).payload['data']['occurrence']['evidence']) == 31
+
+
 def test_renaming_labels_preserves_occurrence_evidence_links_and_delivery(activity):
     client, document = activity
     history = client.app.state.notifications

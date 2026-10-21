@@ -26,6 +26,15 @@ def _iso(ts: float) -> str:
 
 def _to_public(rec: NotificationRecord) -> dict[str, Any]:
     image_url = f"/files/{rec.image_path}" if rec.image_path else None
+    payload = rec.payload
+    if payload.get("source") == "occurrences":
+        data = payload.get("data")
+        document = data.get("occurrence") if isinstance(data, dict) else None
+        if isinstance(document, dict):
+            # Cards need a summary; authorized detail endpoints own the growing evidence history.
+            payload = {**payload, "data": {**data, "occurrence": {
+                key: value for key, value in document.items() if key not in {"evidence", "enrichments"}
+            }}}
     return {
         "id": rec.id,
         "type": rec.type,
@@ -35,7 +44,7 @@ def _to_public(rec: NotificationRecord) -> dict[str, Any]:
         "createdAt": _iso(rec.created_at),
         "updatedAt": _iso(rec.updated_at),
         "priority": rec.priority_bucket,
-        "payload": rec.payload,
+        "payload": payload,
     }
 
 

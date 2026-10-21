@@ -107,7 +107,7 @@ class _NumericMetricSeries:
         self._sums = array("d", [0.0] * self.bucket_count)
         self._mins = array("d", [0.0] * self.bucket_count)
         self._maxs = array("d", [0.0] * self.bucket_count)
-        self._hist = array("I", [0] * (self.bucket_count * self.spec.histogram_bins))
+        self._hist = array("I", [0]) * (self.bucket_count * self.spec.histogram_bins)
 
     def _bucket_number(self, now_s: float) -> int:
         return int(float(now_s) // float(self.spec.bucket_seconds))

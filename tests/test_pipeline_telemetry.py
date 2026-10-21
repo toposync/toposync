@@ -100,6 +100,23 @@ class _TelemetrySinkRuntime(SinkRuntime):
         return []
 
 
+def test_first_numeric_sample_has_bounded_allocation_peak() -> None:
+    import tracemalloc
+
+    store = PipelineTelemetryStore(metric_specs=[NumericMetricSpec(metric_id="test.score", histogram_bins=100)])
+    tracemalloc.start()
+    try:
+        assert store.observe_numeric("pipe", "node", "test.score", 0.25, now_s=100.0)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # Three days of minute buckets fit without a second, temporary list of counters.
+    assert peak < 3 * 1024 * 1024
+    snapshot = store.snapshot_numeric_metric("pipe", "node", "test.score", now_s=100.0)
+    assert snapshot["total_count"] == 1
+    assert sum(snapshot["histogram_bins"]) == 1
+
+
 def test_pipeline_telemetry_store_applies_sampling_and_window_rollover() -> None:
     store = PipelineTelemetryStore(
         metric_specs=[

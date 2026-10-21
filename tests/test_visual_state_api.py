@@ -11,6 +11,31 @@ from test_visual_state_capture import packet, pipeline
 from toposync.runtime.pipelines.capture_receipts import CaptureReceipts
 
 
+def test_models_report_declared_revisions_without_opening_weights_or_reference_storage(client, tmp_path, monkeypatch):  # noqa: F811
+    from toposync_ext_vision.processing.runtime_backends.embedding import embedding_model_revision
+    from toposync_ext_vision.processing.runtime_backends import onnxruntime_backend
+    from toposync_ext_vision.registry import ModelRegistry
+    from toposync_ext_vision.visual_state import api
+    from test_visual_state_embeddings import model_manifest
+
+    manifest = model_manifest(tmp_path)
+    missing = manifest.model_copy(update={"model_id": "test.missing", "artifact_path": str(tmp_path / "missing.onnx")})
+    incompatible = manifest.model_copy(update={"model_id": "test.other", "postprocess": manifest.postprocess.model_copy(update={"embedding_dimension": None})})
+    monkeypatch.setattr(api, "build_default_model_registry", lambda: ModelRegistry([manifest, missing, incompatible]))
+    monkeypatch.setattr(onnxruntime_backend, "_import_onnxruntime", lambda: pytest.fail("catalog must not initialize inference"))
+    response = client.get("/api/vision/visual-state/models")
+    assert response.status_code == 200, response.text
+    choices = response.json()["choices"]
+    assert choices == [
+        {"model_id": manifest.model_id, "name": manifest.display_name, "revision": embedding_model_revision(manifest), "artifact_present": True},
+        {"model_id": missing.model_id, "name": missing.display_name, "revision": embedding_model_revision(missing), "artifact_present": False},
+    ]
+    assert not (client.app.state.config_store.paths.data_dir / "visual-references").exists()
+    assert str(tmp_path) not in response.text
+    client.post("/api/auth/logout")
+    assert client.get("/api/vision/visual-state/models").status_code == 401
+
+
 def config(evidence):
     return {"sensor_id": "sensor", "source_identity": evidence["source_identity"],
             "use_full_image": True, "preparation_revision": evidence["preparation_revision"],

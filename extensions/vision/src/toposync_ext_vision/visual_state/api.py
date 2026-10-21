@@ -12,6 +12,8 @@ from pydantic import ValidationError
 
 from toposync.runtime.auth import AuthContext, AuthRuntime
 
+from ..processing.runtime_backends.embedding import embedding_model_revision
+from ..registry import build_default_model_registry
 from .schemas import Counter, Identifier, ReferenceEvidence, VisualStateConfig, VisualStateModel
 from .store import ReferenceConflict, ReferenceLimit, VisualReferenceStore
 
@@ -53,6 +55,23 @@ def _storage_errors():
 def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]) -> APIRouter:
     router = APIRouter(prefix="/api/vision/visual-state")
     uploads = asyncio.Semaphore(2)
+
+    @router.get("/models")
+    def models(request: Request):
+        _authorize(request)
+        choices = []
+        for manifest in build_default_model_registry().list_manifests(task="embedding"):
+            try:
+                revision = embedding_model_revision(manifest)
+            except ValueError:
+                continue
+            try:
+                present = manifest.resolve_artifact_path().is_file()
+            except OSError:
+                present = False
+            choices.append({"model_id": manifest.model_id, "name": manifest.display_name,
+                            "revision": revision, "artifact_present": present})
+        return {"choices": choices}
 
     @router.post("/drafts", status_code=201)
     def create_draft(request: Request, configuration: VisualStateConfig):

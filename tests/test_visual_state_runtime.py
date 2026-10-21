@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import hashlib
 import logging
 import threading
@@ -464,5 +465,129 @@ def test_compiled_pipeline_uses_real_onnx_and_emits_expiry_without_input(tmp_pat
             await runtime.stop()
             await sensor.dependencies.execution_scheduler.shutdown()
             store.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("change", ["configuration", "preparation"])
+def test_reconfiguration_retires_pending_inference_without_releasing_its_slot(tmp_path, change):
+    async def run():
+        entered, release = threading.Event(), threading.Event()
+        backends, sensors, outputs = [], [], []
+        inputs = asyncio.Queue()
+
+        class Backend:
+            def __init__(self, manifest):
+                self.delegate = build_embedding_backend(manifest)
+                self.revision = self.delegate.revision
+                self.block = self.closed = False
+                self.calls = 0
+                backends.append(self)
+
+            def embed(self, image):
+                self.calls += 1
+                if self.block:
+                    entered.set()
+                    assert release.wait(10)
+                return self.delegate.embed(image)
+
+            def close(self):
+                self.closed = True
+                self.delegate.close()
+
+        seed, _, clock, store, saved = await harness(tmp_path)
+
+        class Source(BaseOperatorRuntime):
+            async def run(self, context):
+                while not context.is_cancelled():
+                    await context.emit(await inputs.get())
+
+        class Sink(SinkRuntime):
+            async def process_packet(self, packet, context):
+                outputs.append(packet.payload["visual_state"])
+                return []
+
+        def factory(config, dependencies):
+            sensor = VisualStateRuntime(config, dependencies, backend_factory=Backend, clock=clock, unix_clock=clock.unix)
+            sensors.append(sensor)
+            return sensor
+
+        registry = OperatorRegistry()
+        registry.register_operator(operator_id="camera.source", inputs=[], outputs=[{"name": "out"}],
+                                   output_modalities=["video"], runtime_factory=lambda *_: Source())
+        registry.register_operator(operator_id="test.states", inputs=[{"name": "in"}], outputs=[],
+                                   input_modalities=["data"], runtime_factory=lambda *_: Sink())
+        register_visual_state_operator(registry)
+        registry._items["vision.visual_state"] = replace(registry.get("vision.visual_state"), runtime_factory=factory)
+        saved.graph = build_pipeline_graph_v2(graph_uid="sensor", nodes=[*saved.graph["nodes"],
+            {"id": "sink", "operator": "test.states", "config": {}}], edges=[*saved.graph["edges"],
+            {"from": {"node": "state", "port": "out"}, "to": {"node": "sink", "port": "in"}}])
+        host = seed.dependencies.config_store
+        await host.replace_pipeline("sensor", saved)
+        compiler = PipelineGraphCompiler(registry)
+        runtime = PipelineRuntime(compiler.compile_pipeline(saved), registry, seed.dependencies)
+        try:
+            await runtime.start()
+            for sequence in (1, 2):
+                clock.now += .26
+                await inputs.put(frame(clock, sequence))
+                await until(lambda: sensors[0]._reducer._last_seen is not None
+                            and sensors[0]._reducer._last_seen.sample.sequence == sequence)
+            await until(lambda: outputs[-1]["class_key"] == "red")
+            backends[0].block = True
+            clock.now += .26
+            await inputs.put(frame(clock, 3, "blue"))
+            await until(entered.is_set)
+            semaphore = seed.dependencies.execution_scheduler._semaphores["vision.visual_state:sensor"]
+
+            for revision in range(1, 4):
+                configuration = sensors[-1].config.model_copy(update={"reference_revision": f"references-{revision}"})
+                if change == "preparation":
+                    saved.graph["nodes"][0]["config"] = {"camera_id": f"synthetic-{revision}"}
+                    preparation = reference_preparation_revision(reference_input_pipeline(saved, "state"))
+                    configuration = configuration.model_copy(update={
+                        "preparation_revision": preparation,
+                        "classes": tuple(category.model_copy(update={"reference_ids": ()}) for category in configuration.classes),
+                    })
+                    draft = store.create_draft(configuration)
+                    for color in ("red", "blue"):
+                        draft, _ = store.capture(draft.draft_id, color, image_bytes(color), ReferenceEvidence(
+                            source_identity=configuration.source_identity, preparation_revision=preparation,
+                            sample={"capture_instance": "capture", "generation": 0, "sequence": revision},
+                            observed_at=clock.unix(), freshness_basis="receipt",
+                        ), operation_id=color, expected_revision=draft.revision)
+                    configuration = draft.configuration
+                saved.graph["nodes"][1]["config"] = configuration.model_dump(mode="json")
+                await host.replace_pipeline("sensor", saved)
+                previous = sensors[-1]
+                await runtime.reconcile(compiler.compile_pipeline(saved))
+                current = sensors[-1]
+                assert current is not previous and previous._closed.is_set()
+                await until(lambda: outputs[-1]["runtime_epoch"] == current._reducer.runtime_epoch)
+                assert outputs[-1]["class_id"] is None
+                assert semaphore._value == 0 and not backends[0].closed
+                assert len(runtime._tasks) == 3
+                assert sum(task.get_name().startswith("pipeline[sensor].") for task in asyncio.all_tasks()) == 3
+                await inputs.put(frame(clock, revision + 3, "blue"))
+                await until(lambda: current._last_sample == (0, revision + 3))
+                assert backends[-1].calls == 2  # Only reference initialization; inference still owns the shared slot.
+                assert all(backend.closed for backend in backends[1:-1])
+
+            publication_count = len(outputs)
+            release.set()
+            await until(lambda: backends[0].closed and current._reducer._last_seen is not None)
+            assert current._reducer.snapshot().status == "pending"
+            clock.now += .26
+            await inputs.put(frame(clock, 7, "blue"))
+            await until(lambda: outputs[-1]["class_key"] == "blue")
+            assert all(item["runtime_epoch"] == current._reducer.runtime_epoch for item in outputs[publication_count:])
+            assert all(backend.calls == 2 for backend in backends[1:-1])
+            assert backends[0].calls == 5 and backends[-1].calls == 4
+        finally:
+            release.set()
+            await runtime.stop()
+            await seed.dependencies.execution_scheduler.shutdown()
+            store.close()
+        assert all(backend.closed for backend in backends)
 
     asyncio.run(run())

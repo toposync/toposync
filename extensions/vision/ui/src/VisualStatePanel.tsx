@@ -3,6 +3,7 @@ import { activateModalFocus, type HostI18n, type PipelineReferenceCapture, type 
 import { captureVisualReference, createVisualDraft, readVisualDraft, updateVisualDraft, visualReferenceUrl } from "./api";
 import { bindVisualConfiguration, newVisualClass, newVisualConfiguration, restoreVisualReferences, visualClassesValid, type VisualClass, type VisualConfiguration, type VisualDraft } from "./visualState";
 import { styles } from "./styles";
+import { VisualStateModelSettings } from "./VisualStateModelSettings";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
   referenceCapture?: PipelineReferenceCapture; showAdvanced?: boolean };
@@ -103,6 +104,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   return <section className="identityGallery visualStatePanel" aria-label={t("title")}>
     <style>{styles}</style>
     <p>{t("help")}</p>
+    <VisualStateModelSettings value={value} change={changed} disabled={disabled} t={t} />
     {!value.model_id && <p className="identityMuted">{t("model_missing")}</p>}
     {unavailable && <p role="status">{t(unavailable)}</p>}
     {error && <div role="alert"><p>{t(error)}</p>

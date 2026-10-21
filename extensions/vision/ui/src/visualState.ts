@@ -8,6 +8,14 @@ export type VisualConfiguration = {
   model_id?: string | null; [key: string]: unknown;
 };
 export type VisualDraft = { draft_id: string; revision: number; expires_at: number; configuration: VisualConfiguration };
+export type VisualModel = { model_id: string; name: string; revision: string; artifact_present: boolean };
+
+export function selectVisualModel(configuration: VisualConfiguration, model: VisualModel): VisualConfiguration {
+  if (!model.artifact_present) throw new Error("visual_model_unavailable");
+  if (configuration.model_id === model.model_id && configuration.model_revision === model.revision) return configuration;
+  return { ...configuration, model_id: model.model_id, model_revision: model.revision, comparison: null,
+    classes: configuration.classes.map(category => ({ ...category, comparison: null })) };
+}
 
 export function newVisualClass(existing: VisualClass[], label: string): VisualClass {
   let index = existing.length + 1;

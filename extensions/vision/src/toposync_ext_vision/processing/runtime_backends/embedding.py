@@ -9,23 +9,35 @@ from ...registry.manifests import ModelManifest
 from .onnxruntime_backend import _OnnxRuntimeSessionBackend, prepare_onnx_input
 
 
+def embedding_model_revision(manifest: ModelManifest) -> str:
+    """Describe the declared vector space without opening weights or starting native inference."""
+    if manifest.task != "embedding" or manifest.runtime != "onnxruntime" or manifest.postprocess.type != "image_embedding":
+        raise ValueError("image embeddings require the image_embedding ONNX Runtime contract")
+    if manifest.artifact_format != "onnx" or manifest.input.dtype != "float32" or manifest.input.layout != "nchw":
+        raise ValueError("image embeddings require ONNX with float32 NCHW input")
+    if manifest.postprocess.embedding_dimension is None or not manifest.postprocess.output_name:
+        raise ValueError("image embeddings require an explicit output name and dimension")
+    normalization = manifest.input.normalization
+    if (len(normalization.mean) != 3 or len(normalization.std) != 3
+            or not np.isfinite([*normalization.mean, *normalization.std]).all()
+            or min(normalization.std) < 1e-6 or manifest.input.rescale_factor <= 0):
+        raise ValueError("image embeddings require finite three-channel normalization with positive scale")
+    if len(manifest.sha256) != 64 or any(character not in "0123456789abcdef" for character in manifest.sha256):
+        raise ValueError("image embeddings require a pinned SHA-256 digest")
+    return hashlib.sha256(json.dumps({
+        "contract": "image_embedding_v1",
+        "artifact": manifest.sha256, "input": manifest.input.model_dump(),
+        "postprocess": manifest.postprocess.model_dump(),
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 class OnnxRuntimeEmbeddingBackend(_OnnxRuntimeSessionBackend):
     """One persistent session for fixed-shape image vectors; inputs are BGR uint8."""
 
     def __init__(self, manifest: ModelManifest) -> None:
         manifest = manifest.model_copy(deep=True)
-        if manifest.artifact_format != "onnx" or manifest.input.dtype != "float32" or manifest.input.layout != "nchw":
-            raise ValueError("image embeddings require ONNX with float32 NCHW input")
+        self.revision = embedding_model_revision(manifest)
         dimension = manifest.postprocess.embedding_dimension
-        if dimension is None or not manifest.postprocess.output_name:
-            raise ValueError("image embeddings require an explicit output name and dimension")
-        normalization = manifest.input.normalization
-        if (len(normalization.mean) != 3 or len(normalization.std) != 3
-                or not np.isfinite([*normalization.mean, *normalization.std]).all()
-                or min(normalization.std) < 1e-6 or manifest.input.rescale_factor <= 0):
-            raise ValueError("image embeddings require finite three-channel normalization with positive scale")
-        if len(manifest.sha256) != 64 or any(character not in "0123456789abcdef" for character in manifest.sha256):
-            raise ValueError("image embeddings require a pinned SHA-256 digest")
         path = manifest.resolve_artifact_path()
         maximum_bytes = 512 * 1024 * 1024
         if not 0 < path.stat().st_size <= maximum_bytes:
@@ -44,11 +56,6 @@ class OnnxRuntimeEmbeddingBackend(_OnnxRuntimeSessionBackend):
                 or outputs[0].type != "tensor(float)" or outputs[0].shape != [1, dimension]):
             raise ValueError("embedding output must match the declared vector shape")
         self.dimension = dimension
-        self.revision = hashlib.sha256(json.dumps({
-            "contract": "image_embedding_v1",
-            "artifact": manifest.sha256, "input": manifest.input.model_dump(),
-            "postprocess": manifest.postprocess.model_dump(),
-        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
     def embed(self, frame: np.ndarray) -> np.ndarray:
         session = self._session

@@ -20,6 +20,27 @@ const model = load('visualState.ts');
 const fresh = () => model.newVisualConfiguration(index => `Estado ${index}`);
 const evidence = { source_identity: 'camera:synthetic', preparation_revision: 'revision', prepared_region: true };
 
+test('changing the model clears global and class comparison while preserving photos and temporal policy', () => {
+  const config = fresh(), comparison = { enter_threshold: .9, enter_margin: .2, hold_threshold: .8, hold_margin: .1 };
+  config.comparison = comparison;
+  config.temporal = { confirmations: 3 };
+  config.classes[0].comparison = comparison;
+  config.classes[0].reference_ids = ['photo'];
+  const choice = { model_id: 'model', revision: 'revision', artifact_present: true };
+  const changed = model.selectVisualModel(config, choice);
+  assert.equal(changed.model_id, choice.model_id);
+  assert.equal(changed.model_revision, choice.revision);
+  assert.equal(changed.comparison, null);
+  assert.equal(changed.classes[0].comparison, null);
+  assert.equal(changed.classes[0].reference_ids[0], 'photo');
+  assert.equal(changed.temporal, config.temporal);
+  assert.equal(config.comparison, comparison);
+  assert.equal(model.selectVisualModel(changed, choice), changed);
+  assert.throws(() => model.selectVisualModel(config, { ...choice, artifact_present: false }), /unavailable/);
+  const recalibrated = { ...changed, comparison };
+  assert.equal(model.selectVisualModel(recalibrated, { ...choice, revision: 'new' }).comparison, null);
+});
+
 test('empty and catalog-default panels initialize unique identities only when editable', () => {
   const identities = new Set();
   for (const readonly of [true, false]) for (const config of [{}, { sensor_id: 'unconfigured', classes: [] }]) {
@@ -31,7 +52,8 @@ test('empty and catalog-default panels initialize unique identities only when ed
       useEffect: callback => effects.push(callback), useLayoutEffect: callback => effects.push(callback),
     };
     const panel = load('VisualStatePanel.tsx', { react: { ...react, default: react },
-      '@toposync/plugin-api': {}, './api': {}, './visualState': model, './styles': { styles: '' } });
+      '@toposync/plugin-api': {}, './api': {}, './visualState': model, './styles': { styles: '' },
+      './VisualStateModelSettings': { VisualStateModelSettings: () => null } });
     panel.VisualStatePanel({ config, replaceConfig: value => changes.push(value),
       i18n: { useI18n: () => ({ t: key => key }) },
       referenceCapture: readonly ? { available: false, reason: 'read_only' } : undefined });

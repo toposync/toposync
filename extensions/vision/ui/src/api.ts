@@ -1,6 +1,6 @@
 import { requestJson, resolveToposyncUrl } from "@toposync/plugin-api";
 import type { PipelineReferenceFrame } from "@toposync/plugin-api";
-import type { VisualConfiguration, VisualDraft } from "./visualState";
+import type { VisualConfiguration, VisualDraft, VisualModel } from "./visualState";
 export type Species = "person" | "cat" | "dog";
 export type Identity = { id: string; name: string; species: Species; references: number; occurrences: number; representative_id: string | null };
 export type GalleryData = { identities: Identity[]; revision: number; permissions: { curate: boolean; history: boolean } };
@@ -15,6 +15,7 @@ export const photoUrl = (id: string) => resolveToposyncUrl(`${base}/observations
 export const changed = () => window.dispatchEvent(new Event("toposync:identity-gallery-changed"));
 
 const visualBase = "/api/vision/visual-state/drafts";
+export const readVisualModels = (signal?: AbortSignal) => requestJson<{ choices: VisualModel[] }>("/api/vision/visual-state/models", { signal });
 export const createVisualDraft = (configuration: VisualConfiguration, signal?: AbortSignal) => requestJson<VisualDraft>(visualBase,
   { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(configuration), signal });
 export const updateVisualDraft = (draft: VisualDraft, configuration: VisualConfiguration, signal?: AbortSignal) => requestJson<VisualDraft>(`${visualBase}/${encodeURIComponent(draft.draft_id)}`,

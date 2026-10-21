@@ -7,6 +7,7 @@ import pytest
 
 from toposync_ext_vision.processing.runtime_backends import build_embedding_backend, prepare_onnx_input
 from toposync_ext_vision.processing.runtime_backends import onnxruntime_backend
+from toposync_ext_vision.processing.runtime_backends.embedding import embedding_model_revision
 from toposync_ext_vision.registry.manifests import ModelManifest
 
 
@@ -35,7 +36,9 @@ def model_manifest(tmp_path, values=(3.0, 4.0), *, output_shape=None):
 
 
 def test_persistent_session_normalizes_vectors_and_close_releases_it(tmp_path):
-    backend = build_embedding_backend(model_manifest(tmp_path))
+    manifest = model_manifest(tmp_path)
+    backend = build_embedding_backend(manifest)
+    assert backend.revision == embedding_model_revision(manifest)
     session = backend._session
     frame = np.ones((3, 7, 3), dtype=np.uint8)
     for _ in range(3):
@@ -51,6 +54,14 @@ def test_persistent_session_normalizes_vectors_and_close_releases_it(tmp_path):
     assert backend._session is None
     with pytest.raises(RuntimeError, match="closed"):
         backend.embed(frame)
+
+
+def test_declared_revision_tracks_weights_and_preparation_but_not_name_or_location(tmp_path):
+    manifest = model_manifest(tmp_path)
+    revision = embedding_model_revision(manifest)
+    assert embedding_model_revision(manifest.model_copy(update={"display_name": "Renamed", "artifact_path": "missing"})) == revision
+    assert embedding_model_revision(manifest.model_copy(update={"sha256": "0" * 64})) != revision
+    assert embedding_model_revision(manifest.model_copy(update={"input": manifest.input.model_copy(update={"resize_mode": "stretch"})})) != revision
 
 
 def test_digest_checked_before_runtime_and_verified_bytes_loaded(tmp_path, monkeypatch):

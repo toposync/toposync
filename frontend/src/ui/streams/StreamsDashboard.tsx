@@ -3987,33 +3987,29 @@ function AvailableStreamsDashboard({
   useEffect(() => {
     if (!tabVisible || !isActive) return;
     let cancelled = false;
-    let firstLoadPending = true;
 
-    const loadLiveViews = async (isFirstLoad: boolean) => {
-      const shouldSetLoading = firstLoadPending || isFirstLoad;
-      if (shouldSetLoading) setLoading(true);
+    const loadLiveViews = async () => {
+      // Refresh in place so returning to the tab preserves player and inspection state.
       liveViewsRequestRef.current?.abort();
       const controller = new AbortController();
       liveViewsRequestRef.current = controller;
       try {
         const payload = await listStreamingCameraLiveViews({ signal: controller.signal });
         if (cancelled || controller.signal.aborted) return;
-        firstLoadPending = false;
         setLiveViews(Array.isArray(payload) ? payload : []);
         setError(null);
       } catch (loadError) {
         if (cancelled || isAbortError(loadError)) return;
-        firstLoadPending = false;
         setError(asErrorMessage(loadError));
       } finally {
         if (liveViewsRequestRef.current === controller) liveViewsRequestRef.current = null;
-        if (!cancelled && !controller.signal.aborted && shouldSetLoading) setLoading(false);
+        if (!cancelled && !controller.signal.aborted) setLoading(false);
       }
     };
 
-    void loadLiveViews(true);
+    void loadLiveViews();
     const intervalId = window.setInterval(() => {
-      void loadLiveViews(false);
+      void loadLiveViews();
     }, TRANSMISSIONS_REFRESH_MS);
 
     return () => {

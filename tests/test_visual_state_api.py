@@ -145,6 +145,53 @@ def test_expired_drafts_do_not_permanently_exhaust_capacity(client, prepared):  
     assert replacement.json()["draft_id"] != prepared["draft"]["draft_id"]
 
 
+def test_saved_pipeline_reopens_private_photos_after_draft_expiry(client, prepared):  # noqa: F811
+    from toposync_ext_vision.visual_state.schemas import VisualStateConfig
+    from test_visual_state_persistence import pipeline as saved_pipeline
+
+    # Catalog-only fixture: this exercises persistence, never a sensor runtime.
+    client.app.state.pipeline_operator_registry.register_operator(
+        operator_id="vision.visual_state", config_model=VisualStateConfig, inputs=[], outputs=[],
+        defaults=config(prepared["evidence"]),
+    )
+    captured = capture(client, prepared).json()
+    request = saved_pipeline(captured["draft"]["configuration"]).model_dump(mode="json")
+    response = client.post("/api/pipelines", json=request)
+    assert response.status_code == 201, response.text
+    reference_id = captured["reference"]["reference_id"]
+    copied = client.post("/api/pipelines/sensor/duplicate")
+    assert copied.status_code == 201, copied.text
+    assert client.delete("/api/pipelines/sensor").status_code == 200
+    store = client.portal.call(client.app.state.services.call, "vision.visual_references")
+    store._clock = lambda: captured["draft"]["expires_at"] + 86401
+    assert store.collect() == 0
+    restored = client.get(f"/api/pipelines/{copied.json()['name']}")
+    assert restored.status_code == 200, restored.text
+    reopened = client.post("/api/vision/visual-state/drafts", json=restored.json()["graph"]["nodes"][0]["config"])
+    assert reopened.status_code == 201, reopened.text
+    draft_id = reopened.json()["draft_id"]
+    image = client.get(f"/api/vision/visual-state/drafts/{draft_id}/references/{reference_id}/image")
+    assert image.status_code == 200 and image.headers["cache-control"] == "private, no-store"
+    client.post("/api/auth/logout")
+    assert client.get(f"/api/vision/visual-state/drafts/{draft_id}/references/{reference_id}/image").status_code == 401
+
+
+def test_saving_missing_reference_returns_actionable_error_without_partial_pipeline(client, prepared):  # noqa: F811
+    from toposync_ext_vision.visual_state.schemas import VisualStateConfig
+    from test_visual_state_persistence import pipeline as saved_pipeline
+
+    client.app.state.pipeline_operator_registry.register_operator(
+        operator_id="vision.visual_state", config_model=VisualStateConfig, inputs=[], outputs=[],
+        defaults=config(prepared["evidence"]),
+    )
+    configuration = config(prepared["evidence"])
+    configuration["classes"][0]["reference_ids"] = ["missing"]
+    response = client.post("/api/pipelines", json=saved_pipeline(configuration).model_dump(mode="json"))
+    assert response.status_code == 400, response.text
+    assert "restore or recapture" in response.json()["detail"]
+    assert client.get("/api/pipelines/sensor").status_code == 404
+
+
 def test_signed_invalid_image_is_still_decoded_and_rejected(client, prepared):  # noqa: F811
     owner = client.get("/api/auth/status").json()["user"]["id"]
     invalid = b"not a PNG"

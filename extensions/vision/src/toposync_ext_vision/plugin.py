@@ -90,6 +90,10 @@ class VisionExtension(BaseExtension):
                     self._visual_reference_store = VisualReferenceStore(Path(configured_data_dir) / "visual-references", scope="installation")
                 return self._visual_reference_store
 
+        from .visual_state.persistence import register_visual_reference_persistence
+
+        if config_store is not None:
+            await register_visual_reference_persistence(config_store, visual_reference_store)
         app.include_router(create_visual_reference_router(visual_reference_store))
         services.register("vision.visual_references", visual_reference_store)
         from .association_api import AssociationRepository, create_association_router

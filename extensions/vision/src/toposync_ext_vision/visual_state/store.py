@@ -352,6 +352,42 @@ class VisualReferenceStore:
                 raise ReferenceConflict("configuration pin revision changed")
             self._connection.execute("DELETE FROM configuration_pin WHERE owner_id=?", (owner_id,))
 
+    def reserve_pipeline_configurations(
+        self, configurations: dict[str, dict], *, validate_owners: set[str],
+    ) -> None:
+        """Reserve a complete snapshot atomically before the host writes its file.
+
+        Startup/reload protects existing identifiers even in incomplete restorations.
+        Changed operator configurations must pass normal reference validation.
+        """
+        with self._transaction():
+            for owner_id, raw in configurations.items():
+                TypeAdapter(Identifier).validate_python(owner_id)
+                if owner_id in validate_owners:
+                    configuration = VisualStateConfig.model_validate(raw)
+                    references = self._check_configuration(configuration)
+                else:
+                    categories = raw.get("classes", [])
+                    references = []
+                    for category in categories if isinstance(categories, (list, tuple)) else []:
+                        identifiers = category.get("reference_ids", []) if isinstance(category, dict) else []
+                        for reference_id in identifiers if isinstance(identifiers, (list, tuple)) else []:
+                            if isinstance(reference_id, str) and self._connection.execute(
+                                "SELECT 1 FROM reference WHERE id=?", (reference_id,),
+                            ).fetchone():
+                                references.append(reference_id)
+                if not references:
+                    continue
+                serialized = json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False)
+                self._connection.execute(
+                    "INSERT INTO configuration_pin VALUES (?,1,?) "
+                    "ON CONFLICT(owner_id) DO UPDATE SET revision=revision+1,configuration=excluded.configuration "
+                    "WHERE configuration<>excluded.configuration", (owner_id, serialized),
+                )
+                # shortcut: retain superseded pins until authoritative post-save retention reconciliation exists.
+                self._connection.executemany("INSERT OR IGNORE INTO pinned_reference VALUES (?,?)",
+                                             [(owner_id, reference_id) for reference_id in references])
+
     def collect(self, *, retention_seconds: int = 86400, limit: int = 100) -> int:
         if type(retention_seconds) is not int or retention_seconds < 1 or type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("collection requires positive retention and a bounded batch")

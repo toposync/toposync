@@ -444,6 +444,38 @@ class ConfigStore:
             str, Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
         ] = {}
         self._pipeline_activation_validator: Callable[[Pipeline, AppConfig], Awaitable[None]] | None = None
+        self._pipeline_resource_guards: dict[
+            str, Callable[[list[Pipeline] | None, list[Pipeline]], Awaitable[None]]
+        ] = {}
+
+    async def register_pipeline_resource_guard(
+        self, owner: str,
+        callback: Callable[[list[Pipeline] | None, list[Pipeline]], Awaitable[None]],
+    ) -> None:
+        """Protect extension resources before persistence, including disabled graphs.
+
+        Callbacks run under the configuration lock and must not reenter this store.
+        They may reserve resources, never release them: a later guard or file write
+        can fail. A None previous snapshot means startup or external-file reload;
+        preserve available resources without requiring them all to be restored yet.
+        """
+        await self.load()
+        async with self._lock:
+            if owner in self._pipeline_resource_guards:
+                raise ValueError("Pipeline resource guard already registered")
+            assert self._config is not None
+            await callback(None, [pipeline.model_copy(deep=True) for pipeline in self._config.pipelines])
+            self._pipeline_resource_guards[owner] = callback
+
+    async def _protect_pipeline_resources(self, config: AppConfig, *, loading: bool = False) -> None:
+        previous = None if loading or self._config is None else self._config.pipelines
+        if previous == config.pipelines:
+            return
+        for callback in self._pipeline_resource_guards.values():
+            await callback(
+                None if previous is None else [pipeline.model_copy(deep=True) for pipeline in previous],
+                [pipeline.model_copy(deep=True) for pipeline in config.pipelines],
+            )
 
     def register_pipeline_activation_validator(
         self, callback: Callable[[Pipeline, AppConfig], Awaitable[None]]
@@ -495,6 +527,11 @@ class ConfigStore:
         return self._paths
 
     async def _persist_locked(self, cfg: AppConfig) -> AppConfig:
+        if self._pipeline_resource_guards and (self._config is None or self._config.pipelines != cfg.pipelines):
+            expected_stamp = await asyncio.to_thread(_path_stamp, self._paths.config_path)
+            await self._protect_pipeline_resources(cfg)
+            if await asyncio.to_thread(_path_stamp, self._paths.config_path) != expected_stamp:
+                raise PipelineAlreadyExistsError("Configuration changed while preserving pipeline resources; review it again")
         stamp = await asyncio.to_thread(
             _atomic_write_json, self._paths.config_path, cfg.model_dump()
         )
@@ -543,6 +580,10 @@ class ConfigStore:
                 await self._persist_locked(cfg)
                 return cfg
 
+            # Resource failures are not corrupt JSON and must never quarantine the file.
+            await self._protect_pipeline_resources(cfg, loading=True)
+            if self._pipeline_resource_guards and await asyncio.to_thread(_path_stamp, self._paths.config_path) != current_stamp:
+                raise PipelineAlreadyExistsError("Configuration changed while preserving pipeline resources; review it again")
             self._config = cfg
             self._config_stamp = current_stamp
             return cfg

@@ -43,6 +43,23 @@ Upload the unmodified PNG to `POST /drafts/{draft_id}/captures` with query param
 
 All reference routes require the installation owner, extension access and pipeline read/write permission as appropriate. Owners share the installation reference store; these routes do not grant member access through camera-specific permissions. Images live under the private `visual-references` data directory, outside generic `/files` serving. `GET /drafts/{draft_id}/references/{reference_id}/image` only serves references linked to the active draft, defaults to a 160-pixel thumbnail, and sends `Cache-Control: private, no-store`; `thumbnail=false` returns the normalized original.
 
+### Persistence
+
+Saving a pipeline reserves its visual-state references before the configuration
+file is written, including disabled pipelines and bulk configuration saves.
+Changed sensor configurations must reference intact images with compatible
+classes, source and preparation. A failed write preserves both the previous and
+newly reserved images.
+
+Startup and external configuration reload protect available references even when
+a restoration is incomplete. This does not validate or repair missing images;
+reopening an incomplete gallery reports an error. Expired drafts can be collected
+without deleting saved references. Superseded pipeline references are currently
+retained conservatively, including after pipeline deletion, and continue to count
+toward storage limits. Automatic retention reconciliation and consistent backup
+and restore are still pending. The runtime operator is not yet registered in the
+public catalog; these storage guarantees do not constitute a working sensor.
+
 ## Dependencies
 
 - The default `toposync` application bundle includes the first-party ONNX Runtime CPU stack.

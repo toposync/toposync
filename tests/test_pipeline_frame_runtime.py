@@ -11,6 +11,7 @@ import pytest
 
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines import (
     Artifact,
     Lifecycle,
@@ -173,7 +174,6 @@ def test_runtime_respects_bounded_channels_and_drop_control() -> None:
         )
 
         graph = {
-            "schema_version": 1,
             "nodes": [
                 {"id": "source", "operator": "core.synthetic_source", "config": {"rate_hz": 220.0}},
                 {"id": "fps", "operator": "core.fps_reducer", "config": {"target_fps": 60.0}},
@@ -194,6 +194,7 @@ def test_runtime_respects_bounded_channels_and_drop_control() -> None:
                 },
             ],
         }
+        graph = build_pipeline_graph_v2(graph_uid="stage4_drop_control", nodes=graph["nodes"], edges=graph["edges"])
         pipeline = Pipeline(name="stage4_drop_control", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)
@@ -238,7 +239,6 @@ def test_throttle_and_debounce_preserve_open_and_close_packets() -> None:
         )
 
         graph = {
-            "schema_version": 1,
             "nodes": [
                 {
                     "id": "source",
@@ -269,6 +269,7 @@ def test_throttle_and_debounce_preserve_open_and_close_packets() -> None:
                 {"from": {"node": "debounce", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
         }
+        graph = build_pipeline_graph_v2(graph_uid="stage4_lifecycle_flow", nodes=graph["nodes"], edges=graph["edges"])
         pipeline = Pipeline(name="stage4_lifecycle_flow", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry)

@@ -16,6 +16,7 @@ export type AiProfileConfig = {
   name: string;
   provider_id: string;
   model: string;
+  budget_group_id: string | null;
   fallback_profile_ids: string[];
   capabilities: string[];
   timeout_seconds: number;
@@ -34,11 +35,14 @@ export type AiLimitSettings = {
   requests_per_month: number | null;
 };
 
+export type AiBudgetGroupConfig = { id: string; name: string; limits: AiLimitSettings };
+
 export type AiExtensionSettings = {
   default_profile_id: string;
   providers: AiProviderConfig[];
   profiles: AiProfileConfig[];
   limits: AiLimitSettings;
+  budget_groups: AiBudgetGroupConfig[];
   model_catalog_version: string;
   jev?: OllayaConnectionSettings | null;
 };
@@ -115,6 +119,10 @@ export type ProviderTestResponse = {
 };
 
 export type UsageSnapshot = {
+  available: boolean;
+  error: string;
+  persistent: boolean;
+  budget_groups: Record<string, Record<string, number>>;
   profiles: Record<string, Record<string, number>>;
   raw_counters: Record<string, number>;
 };

@@ -60,6 +60,7 @@ const HARD_DEFAULTS: AiExtensionSettings = {
       name: "Qwen3.8 27B MLX local",
       provider_id: DEFAULT_OLLAMA_PROVIDER_ID,
       model: DEFAULT_OLLAMA_MODEL,
+      budget_group_id: null,
       fallback_profile_ids: ["local_qwen3_vl_lighter"],
       capabilities: ["vision", "structured_json", "bbox", "boolean_filter"],
       timeout_seconds: 60,
@@ -74,6 +75,7 @@ const HARD_DEFAULTS: AiExtensionSettings = {
       name: "Qwen3-VL 8B local",
       provider_id: DEFAULT_OLLAMA_PROVIDER_ID,
       model: "qwen3-vl:8b",
+      budget_group_id: null,
       fallback_profile_ids: [],
       capabilities: ["vision", "structured_json", "bbox", "boolean_filter"],
       timeout_seconds: 60,
@@ -91,6 +93,7 @@ const HARD_DEFAULTS: AiExtensionSettings = {
     requests_per_day: 2000,
     requests_per_month: null,
   },
+  budget_groups: [],
   model_catalog_version: "builtin-2026-05-02",
 };
 
@@ -247,6 +250,7 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
       name: t("ext.ai.settings.cloud_profile_name", { provider: providerKindLabel(kind) }, `${providerKindLabel(kind)} vision`),
       provider_id: id,
       model: defaultCloudModel(kind),
+      budget_group_id: null,
       fallback_profile_ids: [],
       capabilities: ["vision", "structured_json", "bbox", "boolean_filter"],
       timeout_seconds: 60,
@@ -278,6 +282,7 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
       name: t("ext.ai.settings.new_profile_name", {}, "New AI profile"),
       provider_id: ollamaProvider.id,
       model: DEFAULT_OLLAMA_MODEL,
+      budget_group_id: null,
       fallback_profile_ids: [],
     });
     patch({ profiles: [...profiles, profile] });
@@ -904,6 +909,9 @@ function normalizeSettings(raw: Record<string, unknown>, defaults: AiExtensionSe
     providers: ensureOllamaProvider(providers),
     profiles: ensureDefaultProfiles(profiles),
     limits: normalizeLimits(isRecord(raw.limits) ? raw.limits : base.limits),
+    budget_groups: (Array.isArray(raw.budget_groups) ? raw.budget_groups : base.budget_groups ?? [])
+      .filter(isRecord).map(group => ({ id: asString(group.id, ""), name: asString(group.name, ""),
+        limits: normalizeLimits(isRecord(group.limits) ? group.limits : {}) })),
     model_catalog_version: asString(raw.model_catalog_version, base.model_catalog_version),
     jev: isRecord(raw.jev) ? {
       enabled: raw.jev.enabled === true,
@@ -943,6 +951,7 @@ function normalizeProfile(value: Record<string, unknown>): AiProfileConfig {
     name: asString(value.name, "AI profile"),
     provider_id: asString(value.provider_id, DEFAULT_OLLAMA_PROVIDER_ID),
     model: asString(value.model, DEFAULT_OLLAMA_MODEL),
+    budget_group_id: asString(value.budget_group_id, "") || null,
     fallback_profile_ids: Array.isArray(value.fallback_profile_ids) ? value.fallback_profile_ids.map((item) => asString(item, "")).filter(Boolean) : [],
     capabilities: Array.isArray(value.capabilities)
       ? value.capabilities.map((item) => asString(item, "")).filter(Boolean)

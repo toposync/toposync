@@ -155,7 +155,10 @@ class AiRouter:
             if not self._provider_allows_image(provider):
                 attempts.append(self._attempt_not_allowed(profile=profile, provider=provider))
                 continue
-            allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits)
+            budget_group = settings.budget_group_by_id(profile.budget_group_id)
+            members = [item.id for item in settings.profiles if item.budget_group_id == profile.budget_group_id]
+            allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits,
+                budget_group=budget_group, budget_group_profile_ids=members)
             if not allowed:
                 attempts.append(
                     AiAttempt(
@@ -168,7 +171,7 @@ class AiRouter:
                     )
                 )
                 continue
-            async with self._limiter.slot(profile_id=profile.id, limits=settings.limits):
+            async with self._limiter.slot(profile_id=profile.id, limits=settings.limits, budget_group=budget_group):
                 started = time.monotonic()
                 try:
                     provider_runtime = build_provider(provider, profile)
@@ -202,11 +205,14 @@ class AiRouter:
         if (provider.kind != "ollama" or not provider.local
                 or urlparse(provider.host).hostname not in {"localhost", "127.0.0.1", "::1"}):
             raise AiProviderError("Assistant currently requires a local Ollama profile")
-        allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits)
+        budget_group = settings.budget_group_by_id(profile.budget_group_id)
+        members = [item.id for item in settings.profiles if item.budget_group_id == profile.budget_group_id]
+        allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits,
+            budget_group=budget_group, budget_group_profile_ids=members)
         if not allowed:
             raise AiProviderError(reason)
         async with asyncio.timeout(min(float(profile.timeout_seconds), 120.0)):
-            async with self._limiter.slot(profile_id=profile.id, limits=settings.limits):
+            async with self._limiter.slot(profile_id=profile.id, limits=settings.limits, budget_group=budget_group):
                 return await OllamaProvider(provider, profile).generate_json(messages=messages)
 
     async def list_ollama_models(self, *, host: str | None = None) -> list[dict[str, Any]]:
@@ -314,7 +320,8 @@ class AiRouter:
 
     async def usage_snapshot(self) -> dict[str, Any]:
         settings = await self.settings()
-        return await self._limiter.snapshot(profile_ids=[profile.id for profile in settings.profiles])
+        return await self._limiter.snapshot(profile_ids=[profile.id for profile in settings.profiles],
+            budget_group_ids=[group.id for group in settings.budget_groups])
 
     @staticmethod
     def _resolve_profiles(

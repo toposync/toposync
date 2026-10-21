@@ -79,8 +79,8 @@
   --color-danger: #ef4444;
   --color-info: #3b82f6;
 
-  --color-focus-ring-outer: rgba(59, 130, 246, 0.35);
-  --color-focus-ring-inner: rgba(14, 165, 164, 0.25);
+  --color-focus-ring-outer: var(--color-action-background);
+  --color-focus-ring-inner: var(--color-surface-solid);
 
   --color-accent-background-soft: rgba(14, 165, 164, 0.1);
   --color-accent-background-soft-2: rgba(59, 130, 246, 0.08);

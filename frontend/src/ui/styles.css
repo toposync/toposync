@@ -828,19 +828,20 @@ video {
 .processingServerForm {
   margin-top: 10px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
 .processingServerEndpointRow {
   display: grid;
-  grid-template-columns: 110px 1fr 110px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
   gap: 10px;
   align-items: end;
 }
 
 .processingServerAuthRow {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 10px;
   align-items: end;
 }
@@ -1085,6 +1086,8 @@ video {
 
 .pipelinesLabel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 6px;
   font-size: 13px;
   color: var(--muted);
@@ -7013,6 +7016,7 @@ video {
 
 .compositionCreateRow .input {
   flex: 1;
+  min-width: 0;
 }
 
 .compositionList {
@@ -7029,18 +7033,26 @@ video {
 
 .compositionMain {
   flex: 1;
+  min-width: 0;
+}
+
+.compositionMain .input {
+  width: 100%;
 }
 
 .compositionActions {
   display: flex;
+  flex-shrink: 0;
   gap: 8px;
   align-items: center;
 }
 
 .compositionSelectButton {
   flex: 1;
-  height: 40px;
-  padding: 0 12px;
+  min-width: 0;
+  min-height: var(--control-height-m);
+  height: auto;
+  padding: 8px 12px;
   border-radius: 14px;
   border: 1px solid var(--border);
   background:
@@ -7078,13 +7090,13 @@ video {
 .compositionName {
   font-weight: 650;
   font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .compositionBadge {
-  color: rgba(251, 191, 36, 0.92);
+  flex-shrink: 0;
+  color: var(--color-text-primary);
 }
 
 .compositionsSettingsPanel {
@@ -8490,6 +8502,8 @@ select {
   gap: var(--space-2) var(--space-3);
 }
 
+.pipelinesProvisionActions .pillButton,
+.pipelinesProvisionLinks .pillButton,
 :is(.formGrid, .formSection, .pipelineInspectionPanel) :is(.chipButton, .primaryButton) {
   justify-self: start;
   min-height: var(--control-height-m);

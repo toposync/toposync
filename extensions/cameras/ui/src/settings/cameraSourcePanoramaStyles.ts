@@ -16,7 +16,7 @@ export const cameraSourcePanoramaStyles = `
 .sourcePanorama button, .sourcePanorama a.chipButton, .sourcePanorama summary { min-width: 44px; min-height: 44px; box-sizing: border-box; }
 .sourcePanorama button, .sourcePanorama a.chipButton { white-space: normal; }
 .sourcePanorama a.chipButton { display: inline-flex; justify-content: center; align-items: center; text-decoration: none; }
-.sourcePanorama :focus-visible { outline: 3px solid var(--color-accent-teal); outline-offset: 3px; }
+.sourcePanorama :focus-visible { outline: 3px solid var(--color-action-background); outline-offset: 3px; }
 .sourcePanorama button[aria-pressed=true] { border-color: var(--color-accent-border); background: var(--color-accent-background-strong); }
 .sourcePanorama .primaryButton { color: var(--color-text-primary); background: var(--color-accent-background-strong); border-color: var(--color-accent-border); }
 .sourcePanoramaEmpty { display: grid; justify-items: center; text-align: center; gap: var(--space-3); padding: var(--space-8) var(--space-4); }
@@ -88,7 +88,7 @@ export const cameraSourcePanoramaStyles = `
 .sourcePanoramaSelection { position: absolute; box-sizing: border-box; border: 2px solid var(--color-surface-solid); box-shadow: 0 0 0 1px var(--color-text-primary), inset 0 0 0 1px var(--color-text-primary); }
 .sourcePanoramaHandle { position: absolute; transform: translate(-50%, -50%) scale(var(--viewport-inverse-scale, 1)); width: 44px; height: 44px; padding: 0; border: 0; background: transparent; z-index: 2; }
 .sourcePanoramaHandle::after { content: ''; position: absolute; inset: 15px; background: var(--color-surface-solid); border: 1px solid var(--color-text-primary); border-radius: 2px; }
-.sourcePanoramaHandle:focus-visible { outline-offset: -4px; background: var(--color-accent-background-strong); }
+.sourcePanoramaHandle:focus-visible { outline-offset: -4px; background: var(--color-surface-solid); }
 .sourcePanoramaFirstCorner { position: absolute; transform: translate(-50%, -50%) scale(var(--viewport-inverse-scale, 1)); width: 16px; height: 16px; border: 3px solid var(--color-surface-solid); outline: 1px solid var(--color-text-primary); border-radius: 50%; pointer-events: none; }
 @media (max-width: 600px) {
   .sourcePanoramaDialog { width: calc(100vw - 8px); max-height: calc(100dvh - 8px); border-radius: var(--radius-control); }

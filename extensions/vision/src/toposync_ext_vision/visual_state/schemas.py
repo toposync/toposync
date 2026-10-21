@@ -131,6 +131,35 @@ class SampleIdentity(VisualStateModel):
     sequence: Counter
 
 
+class ReferenceEvidence(VisualStateModel):
+    source_identity: Name
+    preparation_revision: Revision
+    sample: SampleIdentity
+    observed_at: Timestamp
+    freshness_basis: Literal["capture", "receipt"]
+    historical_fallback: Literal[False] = False
+
+
+class StoredReference(VisualStateModel):
+    reference_id: Identifier
+    class_id: Identifier
+    sha256: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    width: int = Field(strict=True, gt=0)
+    height: int = Field(strict=True, gt=0)
+    size_bytes: int = Field(strict=True, gt=0)
+    created_at: Timestamp
+    evidence: ReferenceEvidence
+    label_origin: Literal["human", "multimodal"] = "human"
+    status: Literal["confirmed", "suggestion"] = "confirmed"
+
+
+class ReferenceDraft(VisualStateModel):
+    draft_id: Identifier
+    revision: Counter
+    expires_at: Timestamp
+    configuration: VisualStateConfig
+
+
 class Observation(VisualStateModel):
     sensor_id: Identifier
     runtime_epoch: Identifier

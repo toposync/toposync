@@ -152,3 +152,19 @@ def test_revisions_cannot_change_inside_one_runtime_epoch_and_restart_fences_are
     with pytest.raises(ToposyncApiError):
         receiver.apply(snapshot(server="another_server"), started=1, received=1)
     assert len(receiver._retired_servers) == 128
+
+
+@pytest.mark.parametrize("patch", [
+    {"enabled": "true"}, {"kind": []}, {"kind": "switch"}, {"name": 3}, {"name": "x" * 81},
+    {"on_class_ids": []}, {"off_class_ids": ["open"]}, {"on_class_ids": ["open", "open"]},
+    {"on_class_ids": ["missing"]}, {"off_class_ids": [False]}, {"on_class_ids": "open"},
+])
+def test_invalid_publication_mapping_is_rejected_atomically(patch):
+    receiver = VisualStateReceiver()
+    receiver.apply(snapshot(), started=1, received=1)
+    payload = snapshot(2, 2)
+    payload["states"][0]["home_assistant"] = {"enabled": True, "kind": "binary", "name": "Porta",
+                                              "on_class_ids": ["open"], "off_class_ids": ["closed"], **patch}
+    with pytest.raises(ToposyncApiError):
+        receiver.apply(payload, started=1, received=1)
+    assert receiver.snapshot_version == 1

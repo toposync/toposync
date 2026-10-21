@@ -37,6 +37,20 @@ def test_configuration_round_trip_and_stable_identity(configuration: dict) -> No
         renamed.sensor_id = "changed"
 
 
+def test_home_assistant_publication_is_opt_in_and_maps_immutable_class_identifiers(configuration):
+    assert not VisualStateConfig.model_validate(configuration).home_assistant.enabled
+    configuration["home_assistant"] = {"enabled": True, "kind": "binary", "name": " Porta ",
+                                       "on_class_ids": ["b"], "off_class_ids": ["a"]}
+    result = VisualStateConfig.model_validate(configuration)
+    assert result.home_assistant.name == "Porta" and result.home_assistant.on_class_ids == ("b",)
+    assert VisualStateConfig.model_validate_json(result.model_dump_json()) == result
+    for patch in ({"enabled": "true"}, {"kind": "switch"}, {"name": "x" * 81},
+                  {"on_class_ids": []}, {"off_class_ids": ["b"]}, {"on_class_ids": ["missing"]},
+                  {"on_class_ids": ["b", "b"]}, {"off_class_ids": [False]}):
+        with pytest.raises(ValidationError):
+            VisualStateConfig.model_validate({**configuration, "home_assistant": {**configuration["home_assistant"], **patch}})
+
+
 @pytest.mark.parametrize("change", [
     lambda data: data.update(sensor_id="../escape"),
     lambda data: data.update(preparation_revision=""),

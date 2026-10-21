@@ -23,7 +23,7 @@ from .frontend import async_setup_frontend, async_unload_frontend
 from .manifest import ToposyncManifestCache
 from .coordinator import ToposyncVisualStateCoordinator
 
-PLATFORMS = [Platform.CAMERA]
+PLATFORMS = [Platform.CAMERA, Platform.SENSOR, Platform.BINARY_SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

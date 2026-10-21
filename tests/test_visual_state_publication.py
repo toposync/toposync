@@ -142,6 +142,21 @@ def test_service_account_sees_only_granted_result_identity_and_revocation_is_imm
     assert client.get("/api/vision/visual-state/states").json()["states"] == []
 
 
+def test_endpoint_passes_explicit_publication_to_receiver_and_defaults_to_disabled(client, monkeypatch):  # noqa: F811
+    from test_home_assistant_visual_state_receiver import VisualStateReceiver
+
+    saved = configured()
+    serve_pipelines(client, monkeypatch, [saved])
+    payload = client.get("/api/vision/visual-state/states").json()
+    receiver = VisualStateReceiver()
+    row = receiver.apply(payload, started=1, received=1)["door"]
+    assert row["home_assistant"]["enabled"] is False
+    mapping = {"enabled": True, "kind": "binary", "name": "Porta", "on_class_ids": ["open"], "off_class_ids": ["closed"]}
+    saved.graph["nodes"][0]["config"]["home_assistant"] = mapping
+    payload = client.get("/api/vision/visual-state/states").json()
+    assert receiver.apply(payload, started=2, received=2)["door"]["home_assistant"] == mapping
+
+
 def test_duplicate_identity_never_selects_one_pipeline_and_remote_capability_is_explicit(client, monkeypatch):  # noqa: F811
     pipelines = [configured(), configured(name="duplicate")]
     serve_pipelines(client, monkeypatch, pipelines)

@@ -180,7 +180,8 @@ def test_setup_and_unload_wire_one_coordinator_and_keep_camera_data(tmp_path, mo
             data = hass.data["toposync"]["isolated"]
             coordinator = data["visual_state_coordinator"]
             assert coordinator.data["door"]["state"]["class_id"] == "closed"
-            assert data["manifest"]["cameras"][0]["id"] == "preserved" and forwarded == ["camera"]
+            assert data["manifest"]["cameras"][0]["id"] == "preserved"
+            assert forwarded == ["camera", "sensor", "binary_sensor"]
             assert await integration.async_unload_entry(hass, entry)
             for callback in callbacks:
                 await callback()

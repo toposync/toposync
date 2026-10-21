@@ -95,7 +95,51 @@ runtime epochs per configured sensor; exceeding either bound fails closed until
 the integration is reloaded. No stale fence is silently evicted. Removed sensor
 histories are released with the latest complete inventory.
 
-The coordinator has been exercised with Home Assistant 2026.10.2 in an isolated
-environment, including a loopback HTTP timeout. Native visual sensor entities,
-mapping configuration and a complete Home Assistant installation trial are
-separate delivery steps. These checks do not qualify physical alarm use.
+### Native visual sensor entities
+
+Publication is opt-in per `vision.visual_state` operator. Its `home_assistant`
+configuration defaults to disabled. For example:
+
+```json
+{
+  "enabled": true,
+  "kind": "binary",
+  "name": "Garage door",
+  "on_class_ids": ["open-class-id"],
+  "off_class_ids": ["closed-class-id"]
+}
+```
+
+Use immutable class identifiers in the mapping, not labels or class order.
+Binary publication requires at least one explicit class on each side; the sets
+must be disjoint. Other classes remain unknown. For enumerated sensors use
+`kind: "enum"`; enabled class keys become the options and current value. Labels
+remain available as metadata. Unknown and unavailable are reserved states and
+cannot be class keys. The visual configuration panel for publication is a
+separate delivery step; existing textual configuration preserves these fields.
+
+Both platforms discover additions from the same coordinator, including when
+the initial inventory is empty. Identity includes the integration entry,
+sensor identifier and entity kind. Renaming a sensor or class does not change
+the entity identity. No value is restored from history at startup. Local expiry
+changes an entity to unknown without waiting for another response; transport
+failure, removal, lost permission or disabled publication makes it unavailable.
+
+Previously created entities remain unavailable on removal or a change of kind.
+They can recover with the same identity when restored; neither the registry nor
+history is deleted automatically. After permanently changing the kind, the old
+entity can be removed through the usual Home Assistant registry controls.
+No sensor invokes Home Assistant services or interprets pipeline lifecycle
+events as a boolean value. Reconfirmation timestamps and sample counters are
+kept out of entity attributes to avoid a recorder change on every observation.
+
+A complete isolated Home Assistant installation trial and field qualification
+remain separate requirements. These checks do not qualify physical alarm use.
+
+The entity and coordinator tests run against the official Home Assistant
+2026.10.2 Linux image, with networking disabled. A native macOS ARM validation
+environment reproduced an interpreter exit crash with an `orjson.Fragment` in
+a reference cycle, independently of this integration. Do not treat functional
+assertions followed by that crash as a passing test run; use the Linux image
+for this validation. No serialization or garbage-collection workaround is
+installed by Toposync.

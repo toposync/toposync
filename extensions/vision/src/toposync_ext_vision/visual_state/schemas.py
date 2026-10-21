@@ -89,6 +89,23 @@ class SuggestionPolicy(VisualStateModel):
     retention_days: int = Field(default=7, strict=True, ge=1, le=30)
 
 
+class HomeAssistantPublication(VisualStateModel):
+    enabled: bool = Field(default=False, strict=True)
+    kind: Literal["enum", "binary"] = "enum"
+    name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=80)] = ""
+    on_class_ids: tuple[Identifier, ...] = Field(default=(), max_length=32)
+    off_class_ids: tuple[Identifier, ...] = Field(default=(), max_length=32)
+
+    @model_validator(mode="after")
+    def validate_mapping(self) -> Self:
+        identifiers = (*self.on_class_ids, *self.off_class_ids)
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("binary class mappings must be unique and disjoint")
+        if self.enabled and self.kind == "binary" and (not self.on_class_ids or not self.off_class_ids):
+            raise ValueError("binary publication requires explicit on and off classes")
+        return self
+
+
 class VisualStateConfig(VisualStateModel):
     schema_version: Literal[1] = 1
     sensor_id: Identifier
@@ -114,6 +131,7 @@ class VisualStateConfig(VisualStateModel):
     ai_references_per_class: int = Field(default=2, strict=True, ge=1, le=30)
     ai_limits: VisualAiLimits = Field(default_factory=VisualAiLimits)
     suggestions: SuggestionPolicy = Field(default_factory=SuggestionPolicy)
+    home_assistant: HomeAssistantPublication = Field(default_factory=HomeAssistantPublication)
 
     @model_validator(mode="after")
     def validate_configuration(self) -> Self:
@@ -133,6 +151,9 @@ class VisualStateConfig(VisualStateModel):
             raise ValueError("class identifiers must be unique")
         if len({item.key for item in self.classes}) != len(self.classes):
             raise ValueError("class keys must be unique")
+        mapped = set(self.home_assistant.on_class_ids) | set(self.home_assistant.off_class_ids)
+        if not mapped <= {item.class_id for item in self.classes}:
+            raise ValueError("Home Assistant mappings must reference existing classes")
         references = [reference for item in self.classes for reference in item.reference_ids]
         if references and self.source_identity is None:
             raise ValueError("references require a verified source and preparation")

@@ -128,6 +128,7 @@ def create_visual_state_publication_router(publication: VisualStatePublication):
                                      "state": publication.unavailable("duplicate_sensor_identity")}
                 continue
             result[sensor_id] = {"sensor_id": sensor_id, "pipeline_name": pipeline.name, "node_id": node_id,
+                "home_assistant": configuration.home_assistant.model_dump(mode="json"),
                 "classes": [{"class_id": item.class_id, "key": item.key, "label": item.label, "enabled": item.enabled}
                             for item in configuration.classes], "state": publication.read(pipeline, node_id, configuration)}
         publication.version += 1

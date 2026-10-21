@@ -46,6 +46,20 @@ def _validate_row(row):
         _require(category["class_id"] not in identifiers and category["key"] not in keys)
         identifiers.add(category["class_id"])
         keys.add(category["key"])
+        _require(category["key"] not in {"unknown", "unavailable"})
+    publication = row.get("home_assistant")
+    if publication is not None:
+        _require(isinstance(publication, dict) and type(publication.get("enabled")) is bool
+                 and isinstance(publication.get("kind"), str) and publication["kind"] in {"enum", "binary"}
+                 and isinstance(publication.get("name"), str) and len(publication["name"]) <= 80)
+        mapped = []
+        for key in ("on_class_ids", "off_class_ids"):
+            values = publication.get(key)
+            _require(isinstance(values, list) and len(values) <= 32 and all(_identifier(value) for value in values))
+            mapped.extend(values)
+        _require(len(mapped) == len(set(mapped)) and set(mapped) <= identifiers)
+        _require(not publication["enabled"] or publication["kind"] != "binary"
+                 or bool(publication["on_class_ids"] and publication["off_class_ids"]))
     status, epoch, version = state.get("status"), state.get("runtime_epoch"), state.get("state_version")
     _require(isinstance(status, str) and status in {"confirmed", "pending", "unknown", "unavailable"}
              and isinstance(state.get("reason"), str) and 0 < len(state["reason"]) <= 160)

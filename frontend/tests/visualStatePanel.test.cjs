@@ -106,6 +106,8 @@ test('empty and catalog-default panels initialize unique identities only when ed
       './VisualStateModelSettings': { VisualStateModelSettings: () => null },
       './VisualStateDecisionSettings': { VisualStateDecisionSettings: () => null },
       './VisualStateAiSettings': { VisualStateAiSettings: () => null },
+      './VisualPublicationSettings': { VisualPublicationSettings: () => null },
+      './visualPublication': load('visualPublication.ts'),
       './visualStateAi': load('visualStateAi.ts'),
       './VisualSuggestionReview': { VisualStateSuggestions: () => null },
       './visualStateSuggestions': load('visualStateSuggestions.ts'),

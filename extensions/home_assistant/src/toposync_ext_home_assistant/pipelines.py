@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, SinkRuntime
-from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
 
@@ -495,6 +495,14 @@ class HomeAssistantBooleanStateRuntime(SinkRuntime):
         return attrs
 
 
+def boolean_state_diagnostics(config, context):
+    return [OperatorDiagnostic(severity="warning", code="home_assistant_visual_state_incompatible",
+        message="This boolean publisher does not preserve visual sensor uncertainty and observation expiry.",
+        suggestion="Configure native Home Assistant publication on the visual sensor. This lifecycle path is not qualified for visual alarms.",
+        details={"upstream_node_id": node["node_id"], "visual_state_qualified": False})
+        for node in context.get("upstream_nodes", []) if node.get("operator_id") == "vision.visual_state"]
+
+
 def register_home_assistant_pipeline_operators(registry: OperatorRegistry) -> None:
     from .speech import register_speech_operator
 
@@ -529,4 +537,5 @@ def register_home_assistant_pipeline_operators(registry: OperatorRegistry) -> No
             "aliases": ["Home Assistant", "boolean", "binary sensor", "input boolean"],
         },
         runtime_factory=lambda config, deps: HomeAssistantBooleanStateRuntime(config, deps),
+        diagnostics_factory=boolean_state_diagnostics,
     )

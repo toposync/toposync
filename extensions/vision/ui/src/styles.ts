@@ -51,6 +51,11 @@ export const styles = `
 .visualStatePanel summary {cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:600}
 .visualDecisionFields {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:10px}
 .visualPreviewResult {min-width:0;overflow-wrap:anywhere}
+.visualPublicationSettings {min-width:0;overflow-wrap:anywhere}
+.visualPublicationRows {display:grid;gap:8px;margin:12px 0}
+.visualPublicationRow {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)}
+.visualPublicationRow select {box-sizing:border-box;max-width:100%;min-width:0;width:100%}
+.visualPublicationRow:has(select) {grid-template-columns:minmax(0,1fr)}
 .visualAiLimits {max-width:100%;overflow-x:auto}
 .visualStatePanel details {min-width:0}
 .visualAiLimits table {border-collapse:collapse;text-align:left}

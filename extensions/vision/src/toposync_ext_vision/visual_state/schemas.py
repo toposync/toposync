@@ -154,6 +154,11 @@ class VisualStateConfig(VisualStateModel):
         mapped = set(self.home_assistant.on_class_ids) | set(self.home_assistant.off_class_ids)
         if not mapped <= {item.class_id for item in self.classes}:
             raise ValueError("Home Assistant mappings must reference existing classes")
+        publication = self.home_assistant
+        if publication.enabled and publication.kind == "binary":
+            active = {item.class_id for item in self.classes if item.enabled}
+            if not active.intersection(publication.on_class_ids) or not active.intersection(publication.off_class_ids):
+                raise ValueError("binary publication requires enabled classes on both sides")
         references = [reference for item in self.classes for reference in item.reference_ids]
         if references and self.source_identity is None:
             raise ValueError("references require a verified source and preparation")

@@ -111,12 +111,26 @@ configuration defaults to disabled. For example:
 ```
 
 Use immutable class identifiers in the mapping, not labels or class order.
-Binary publication requires at least one explicit class on each side; the sets
+Binary publication requires at least one enabled class on each side; the sets
 must be disjoint. Other classes remain unknown. For enumerated sensors use
 `kind: "enum"`; enabled class keys become the options and current value. Labels
 remain available as metadata. Unknown and unavailable are reserved states and
-cannot be class keys. The visual configuration panel for publication is a
-separate delivery step; existing textual configuration preserves these fields.
+cannot be class keys.
+
+In the visual sensor panel, expand **Home Assistant publication → Preview and
+mapping**. Choose named states or binary, inspect the preview, and explicitly
+map each binary class. Enable publication, apply its settings, then save the
+pipeline. Saving alone keeps the previously applied publication settings.
+New unmapped classes remain unknown. Unmap a class and apply before removing it;
+textual configuration with dangling class identifiers is rejected. Renaming
+does not change the mapping. Both sides need an enabled class before binary
+publication can be enabled.
+
+The legacy boolean publisher and `input_boolean` do not preserve unknown states
+and observation expiry. Connecting a visual sensor to the legacy publisher
+produces a qualification warning, including through intermediate operators.
+Use native publication for visual sensors. This warning does not change the
+legacy publisher's behavior or qualify a sensor for physical alarm use.
 
 Both platforms discover additions from the same coordinator, including when
 the initial inventory is empty. Identity includes the integration entry,

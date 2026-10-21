@@ -60,6 +60,10 @@ def _validate_row(row):
         _require(len(mapped) == len(set(mapped)) and set(mapped) <= identifiers)
         _require(not publication["enabled"] or publication["kind"] != "binary"
                  or bool(publication["on_class_ids"] and publication["off_class_ids"]))
+        if publication["enabled"] and publication["kind"] == "binary":
+            active = {category["class_id"] for category in classes if category["enabled"]}
+            _require(bool(active.intersection(publication["on_class_ids"]))
+                     and bool(active.intersection(publication["off_class_ids"])))
     status, epoch, version = state.get("status"), state.get("runtime_epoch"), state.get("state_version")
     _require(isinstance(status, str) and status in {"confirmed", "pending", "unknown", "unavailable"}
              and isinstance(state.get("reason"), str) and 0 < len(state["reason"]) <= 160)

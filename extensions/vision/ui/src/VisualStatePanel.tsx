@@ -12,6 +12,8 @@ import { visualTestReady } from "./visualStateAi";
 import { VisualStateSuggestions } from "./VisualSuggestionReview";
 import { restoreApprovedSuggestion, type VisualSuggestion, type VisualSuggestions } from "./visualStateSuggestions";
 import type { VisualPreview } from "./visualState";
+import { VisualPublicationSettings } from "./VisualPublicationSettings";
+import { publicationClassSide, publicationIssue, visualPublication } from "./visualPublication";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
   referenceCapture?: PipelineReferenceCapture; showAdvanced?: boolean; ui?: Pick<HostUi, "ImageMaskEditor"> };
@@ -50,6 +52,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const [suggestionSettingsDirty, setSuggestionSettingsDirty] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [aiSettingsDirty, setAiSettingsDirty] = useState(false);
+  const [publicationSettingsDirty, setPublicationSettingsDirty] = useState(false);
   const [aiReady, setAiReady] = useState(false);
   const [preview, setPreview] = useState<{ result: VisualPreview; classes: VisualClass[]; context: string; pipeline: string } | null>(null);
   const active = useRef<AbortController | null>(null);
@@ -74,10 +77,16 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
 
   const classes = Array.isArray(value.classes) ? value.classes : [];
   const valid = classes.every(item => item && typeof item === "object") && visualClassesValid(classes);
+  const publication = visualPublication(value);
+  const publicationValid = !publicationIssue({ ...value, classes }, publication);
   const disabled = readonly || busy !== null || pendingReview !== null;
   const changed = (next: VisualConfiguration) => { setError(null); replaceConfig(next); };
-  const updateClass = (classId: string, patch: Partial<VisualClass>) => changed({ ...value,
-    classes: classes.map(item => item.class_id === classId ? { ...item, ...patch } : item) });
+  const updateClass = (classId: string, patch: Partial<VisualClass>) => {
+    if (patch.enabled === false && publication.enabled && publicationClassSide(publication, classId) !== "unknown") {
+      setError("publication_class_in_use"); return;
+    }
+    changed({ ...value, classes: classes.map(item => item.class_id === classId ? { ...item, ...patch } : item) });
+  };
 
   async function run(name: string, work: (signal: AbortSignal) => Promise<void>) {
     if (readonly || active.current) return;
@@ -204,9 +213,10 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
           onChange={event => updateClass(category.class_id, { label: event.target.value })} /></label>
         <button type="button" className="chipButton" disabled={!valid || !canCapture || category.reference_ids?.length >= 30}
           onClick={() => capture(category.class_id)}>{t("capture")}</button>
-        <button type="button" className="chipButton" disabled={classes.length <= 2} aria-label={`${t("remove_class")} ${category.label}`}
+        <button type="button" className="chipButton" disabled={classes.length <= 2 || publicationClassSide(publication, category.class_id) !== "unknown"} aria-label={`${t("remove_class")} ${category.label}`}
           onClick={() => mutate({ ...value, classes: classes.filter(item => item.class_id !== category.class_id) })}>{t("remove_class")}</button>
       </div>
+      {publicationClassSide(publication, category.class_id) !== "unknown" && <p className="identityMuted">{t("publication_class_in_use")}</p>}
       <label className="identityField"><span>{t("description")}</span><textarea className="input" rows={2} maxLength={1000}
         value={category.description ?? ""} onChange={event => updateClass(category.class_id, { description: event.target.value })} placeholder={t("description_hint")} /></label>
       <div className="visualStatePhotos" aria-label={`${t("references")} ${category.label}`}>
@@ -232,7 +242,8 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       {hasReferences && !draft && <button type="button" className="chipButton" disabled={disabled || !valid} onClick={() => void run("load", async signal => { await synchronize(value, signal); })}>{t("load_references")}</button>}
       {undo && <button type="button" className="chipButton" disabled={disabled} onClick={() => { mutate(restoreVisualReferences(value, undo), false); }}>{t("undo")}</button>}
     </div>
-    <VisualStateSuggestions value={value} change={changed} disabled={disabled || !valid || settingsDirty || aiSettingsDirty}
+    <VisualPublicationSettings value={{ ...value, classes }} change={changed} disabled={disabled || !valid} editing={setPublicationSettingsDirty} t={t} />
+    <VisualStateSuggestions value={value} change={changed} disabled={disabled || !valid || settingsDirty || aiSettingsDirty || publicationSettingsDirty || !publicationValid}
       stale={suggestions?.context !== context || suggestions?.draftId !== draft?.draft_id} advanced={showAdvanced}
       editing={setSuggestionSettingsDirty} data={suggestions?.data ?? null} draftId={suggestions?.draftId ?? null}
       offset={suggestions?.offset ?? 0} refresh={refreshSuggestions} review={review}
@@ -243,14 +254,14 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     <fieldset disabled={disabled}>
       <legend>{t("preview_title")}</legend><p className="identityMuted">{t("preview_help")}</p>
       {!inputPipeline && <p role="status">{t("preview_host_unavailable")}</p>}
-      <button type="button" className="chipButton" disabled={!inputPipeline || !regionCompatible || !valid || settingsDirty || aiSettingsDirty || suggestionSettingsDirty
+      <button type="button" className="chipButton" disabled={!inputPipeline || !regionCompatible || !valid || settingsDirty || aiSettingsDirty || suggestionSettingsDirty || publicationSettingsDirty || !publicationValid
         || !visualTestReady(value) || (value.strategy !== "examples" && !aiReady)}
         onClick={() => void run("test", async signal => {
           const result = await testVisualState(value, inputPipeline, signal); signal.throwIfAborted();
           setPreview({ result, classes: structuredClone(classes), context, pipeline: pipelineContext });
         })}>{t("test_now")}</button>
       {preview && <VisualStatePreviewResult result={preview.result} classes={preview.classes}
-        stale={preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty || aiSettingsDirty || suggestionSettingsDirty} t={t} />}
+        stale={preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty || aiSettingsDirty || suggestionSettingsDirty || publicationSettingsDirty} t={t} />}
     </fieldset>
     {photo && <PhotoDialog url={photo.url} label={photo.label} close={closePhoto} t={t} />}
   </section>;

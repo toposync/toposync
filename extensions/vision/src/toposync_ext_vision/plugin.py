@@ -32,9 +32,11 @@ class VisionExtension(BaseExtension):
         self._association_repository = None
         self._visual_reference_store = None
         self._visual_preview_runner = None
+        self._visual_state_publication = None
 
     def capabilities(self) -> dict[str, Any]:
         return {
+            "visual_states": {"schema_version": 1, "endpoint": "/api/vision/visual-state/states", "remote_states": False},
             "auth": {
                 "action": "core:extension:use",
                 "resource_type": "core:extension",
@@ -99,6 +101,11 @@ class VisionExtension(BaseExtension):
         self._visual_preview_runner = VisualStatePreviewRunner()
         app.include_router(create_visual_reference_router(visual_reference_store, self._visual_preview_runner))
         services.register("vision.visual_references", visual_reference_store)
+        from .visual_state.publication import VisualStatePublication, create_visual_state_publication_router
+
+        self._visual_state_publication = VisualStatePublication()
+        services.register("vision.visual_states", lambda: self._visual_state_publication)
+        app.include_router(create_visual_state_publication_router(self._visual_state_publication))
         from .association_api import AssociationRepository, create_association_router
 
         def association_repository():
@@ -238,6 +245,8 @@ class VisionExtension(BaseExtension):
         register_extension_shutdown_callback(app, self.shutdown)
 
     async def shutdown(self) -> None:
+        if self._visual_state_publication is not None:
+            self._visual_state_publication.close()
         if self._visual_preview_runner is not None:
             await self._visual_preview_runner.shutdown()
         task, self._identity_maintenance_task = self._identity_maintenance_task, None

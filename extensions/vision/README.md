@@ -36,7 +36,44 @@ does not prove physical camera latency or synchronized remote clocks.
 
 ## Visual reference API
 
-The visual sensor foundation exposes `/api/vision/visual-state/drafts` for creating and reading draft class configurations. `PUT /drafts/{draft_id}` requires the current `expected_revision`; removing a reference from the configuration is a logical removal, and reattaching its identifier supports undo while the draft remains valid. Drafts expire after one hour. The experimental operator has a class gallery; local activation also requires an explicit image embedding manifest, its verified revision, and calibrated comparison parameters. No model or accuracy threshold is selected implicitly. Multimodal fallback and direct analysis are not yet executable.
+The visual sensor foundation exposes `/api/vision/visual-state/drafts` for creating and reading draft class configurations. `PUT /drafts/{draft_id}` requires the current `expected_revision`; removing a reference from the configuration is a logical removal, and reattaching its identifier supports undo while the draft remains valid. Drafts expire after one hour. The experimental operator has a class gallery; local activation also requires an explicit image embedding manifest, its verified revision, and calibrated comparison parameters. No model or accuracy threshold is selected implicitly. Multimodal fallback and direct analysis require a compatible AI profile, explicit image permissions and available budgets; latency and physical accuracy still require qualification.
+
+## Visual state consumers
+
+`GET /api/vision/visual-state/states` reads the current local runtimes without capturing
+images, running inference or renewing observations. It requires extension access
+(`core:extension:use`, `com.toposync.vision`) and filters each sensor using
+`core:pipeline_results:read` on the `core:pipeline_result` selector
+`visual_state:<sensor_id>`. Existing result revocations also apply. A service account
+can receive individual state grants without access to reference images or pipeline
+configuration. No grants are added automatically.
+
+The private, non-cacheable response contains `schema_version: 1`, `server_epoch`,
+an increasing `snapshot_version`, `capabilities` (`local_states: true`,
+`remote_states: false`) and `states`. Each entry identifies the sensor, pipeline and
+node, lists class identifiers/keys/labels/enabled flags, and contains a `state`.
+The state includes runtime epoch/version, status, current class identifier/key,
+reason, observation and confirmation times, remaining `valid_for_ms`, sample
+identity, method, freshness basis and preparation/reference/model revisions.
+It excludes pixels, reference identifiers, descriptions and provider responses.
+
+Remaining validity is calculated from the runtime's monotonic clock on every read.
+An expired observation becomes unknown with no current class; a stopped or disabled
+pipeline is unavailable. A changed configuration or upstream preparation cannot
+expose the previous runtime's value. Duplicate sensor identities produce one
+unavailable entry instead of selecting a pipeline. Removed nodes disappear from the
+inventory. Remote pipelines are explicitly unavailable with
+`remote_server_unsupported`; this endpoint does not proxy them. Previews never register
+as published sensors. Non-running entries have null runtime epoch/version.
+
+Consumers must reject reordered snapshots, reset on a changed server/runtime epoch,
+subtract request duration from the remaining validity, and expire locally even if
+the next request never completes. Repeating a snapshot must never extend its sample's
+deadline. Absence, unknown and unavailable must not be converted to a negative class.
+The Home Assistant client reports a missing endpoint (HTTP 404/405) as unsupported,
+distinct from an empty inventory, authentication failure or transient server failure.
+Entity coordination and receiver expiration are separate integration requirements;
+this API alone does not certify them or qualify alarm use.
 
 Reference capture uses the host preview endpoint with `purpose: "reference"`. It accepts a restricted local camera path, preserves privacy controls, and returns PNG pixels, capture evidence and an opaque receipt. The receipt binds the exact bytes, authenticated user and preparation to the server process for 60 seconds. Restarting the process invalidates pending receipts. Receipt timing does not certify physical camera exposure or PTZ pose.
 

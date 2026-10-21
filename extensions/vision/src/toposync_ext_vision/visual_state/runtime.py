@@ -60,6 +60,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self._token = 0
         self._last_publication = None
         self._opened = False
+        self._release_publication = None
 
     def _native(self, function, *arguments):
         with self._native_lock:
@@ -161,6 +162,19 @@ class VisualStateRuntime(BaseOperatorRuntime):
             await self.shutdown()
             raise
         self._reducer = VisualStateReducer(self.config, runtime_epoch=uuid.uuid4().hex, clock=self._clock)
+        if self._preview_input_pipeline is None and "vision.visual_states" in self.dependencies.services.list_ids():
+            try:
+                publication = await self.dependencies.services.call("vision.visual_states")
+
+                def snapshot():
+                    if self._closed.is_set() or context.is_cancelled():
+                        return None
+                    return self._reducer.tick()
+
+                self._release_publication = publication.register(pipeline_name, node_id, self.config, snapshot)
+            except BaseException:
+                await self.shutdown()
+                raise
 
     def _invalidate(self, reason):
         self._token += 1
@@ -506,6 +520,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
                         active = None
         finally:
             self._closed.set()
+            if self._release_publication is not None:
+                self._release_publication()
             reader.cancel()
             if worker is not None:
                 worker.cancel()
@@ -525,6 +541,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
 
     async def shutdown(self):
         self._closed.set()
+        if self._release_publication is not None:
+            self._release_publication()
         # The native call owns its resources until it returns, even if its awaiting task is canceled.
         if self._native_lock.acquire(blocking=False):
             try:

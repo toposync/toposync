@@ -24,7 +24,7 @@ from ..registry import ModelRegistry, build_default_model_registry
 from .matching import ReferenceEmbedding, compare_references
 from .inspection import decision_visuals
 from .preparation import VisualRegionUnavailable, prepare_visual_frame, visual_preparation_revision
-from .schemas import MultimodalEvaluation, Observation, VisualStateConfig
+from .schemas import MultimodalEvaluation, Observation, ReferenceEvidence, SuggestionProvenance, VisualStateConfig
 from .state import VisualStateReducer
 
 
@@ -44,6 +44,10 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self._ai_classes = []
         self._ai_revision = None
         self._ai_evaluation = None
+        self._suggestion_store = None
+        self._suggestion_task = None
+        self._suggestion_retry_at = 0.0
+        self._suggestion_collect_at = 0.0
         self._native_lock = threading.Lock()
         self._closed = threading.Event()
         self._prefix = None
@@ -148,6 +152,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
         ):
             raise ValueError("visual sensor region requires a prepared image crop")
         store = await self.dependencies.services.call("vision.visual_references")
+        if self._preview_input_pipeline is None and self.config.suggestions.mode == "review":
+            self._suggestion_store = store
         try:
             await context.run_blocking(self._native, self._initialize, store, mode="thread_pool",
                                        concurrency_key="vision.visual_state.resources", max_concurrency=1)
@@ -284,6 +290,54 @@ class VisualStateRuntime(BaseOperatorRuntime):
             observation = observation.model_copy(update={"region_quality": "unobservable"})
         return observation, revision
 
+    def _queue_suggestion(self, context, frame, evidence, metadata, observation, revision, runtime_epoch):
+        if (self._suggestion_store is None or self._closed.is_set() or observation.class_id is None
+                or observation.region_quality != "valid" or revision is None
+                or self._clock() < self._suggestion_retry_at
+                or (self._suggestion_task is not None and not self._suggestion_task.done())):
+            return
+        try:
+            provenance = SuggestionProvenance(runtime_epoch=runtime_epoch, proposed_class_id=observation.class_id,
+                configuration_digest=self._suggestion_store.configuration_digest(self.config),
+                reference_revision=self.config.reference_revision, model_revision=self.config.model_revision,
+                ai_configuration_revision=revision, profile_id=metadata.get("profile_id"),
+                provider_id=metadata.get("provider_id"), model=metadata.get("model"),
+                reason=metadata["observation"]["reason"], declared_confidence=observation.declared_confidence,
+                input_reference_ids=tuple(self._ai_references))
+            prepared_evidence = ReferenceEvidence.model_validate(evidence)
+        except (ValueError, TypeError, KeyError):
+            context.metrics.record_error(RuntimeError("visual_state_suggestion_provenance_invalid"))
+            self._suggestion_retry_at = self._clock() + 60
+            return
+        # At most one retained frame and one native write per sensor; no suggestion queue.
+        self._suggestion_retry_at = self._clock() + 1
+        collect = self._clock() >= self._suggestion_collect_at
+        if collect:
+            self._suggestion_collect_at = self._clock() + 60
+
+        def save():
+            if self._closed.is_set():
+                return
+            if collect:
+                self._suggestion_store.collect(limit=20)
+            if self._closed.is_set():
+                return
+            output = io.BytesIO()
+            Image.fromarray(frame[:, :, ::-1]).save(output, format="PNG")
+            if not self._closed.is_set():
+                self._suggestion_store.offer_suggestion(self.config, observation.class_id, output.getvalue(),
+                                                       prepared_evidence, provenance)
+
+        async def persist():
+            try:
+                await context.scheduler.run_sync(save, mode="thread_pool",
+                    concurrency_key="vision.visual_state.suggestions", max_concurrency=1)
+            except Exception:
+                context.metrics.record_error(RuntimeError("visual_state_suggestion_storage_failed"))
+                self._suggestion_retry_at = self._clock() + 60
+
+        self._suggestion_task = asyncio.create_task(persist())
+
     async def _publish(self, context, processing_status):
         state = self._reducer.tick().model_copy(update={"processing_status": processing_status, "ai_evaluation": self._ai_evaluation})
         marker = (state.runtime_epoch, state.state_version, processing_status, self._ai_evaluation)
@@ -379,7 +433,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
                             failed = True
                     worker = active = None
                 if ai_worker is not None and ai_worker in ready:
-                    _, evidence, observed, token, started = ai_active
+                    prepared_frame, evidence, observed, token, started = ai_active
+                    superseded = False
                     try:
                         result = ai_worker.result()
                         metadata = result.model_dump() if hasattr(result, "model_dump") else result
@@ -389,8 +444,10 @@ class VisualStateRuntime(BaseOperatorRuntime):
                             previous.sample.capture_instance != evidence["sample"]["capture_instance"]
                             or (previous.sample.generation, previous.sample.sequence) >= (
                                 evidence["sample"]["generation"], evidence["sample"]["sequence"]))
+                        observation, revision = self._multimodal_result(result, evidence, observed, started)
+                        self._queue_suggestion(context, prepared_frame, evidence, metadata, observation, revision,
+                                               self._ai_evaluation.runtime_epoch)
                         if self._fresh(observed, token) and not superseded:
-                            observation, revision = self._multimodal_result(result, evidence, observed, started)
                             if revision is not None:
                                 if self._ai_revision is not None and revision != self._ai_revision:
                                     self._reducer = VisualStateReducer(self.config, runtime_epoch=uuid.uuid4().hex, clock=self._clock)
@@ -420,7 +477,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
                         self._ai_evaluation = self._ai_evaluation.model_copy(update={"status": "failed",
                             "reason": "visual_state_multimodal_analysis_failed",
                             "duration_ms": min(3_600_000, max(0, round((self._clock() - started) * 1000)))})
-                        if self._fresh(observed, token):
+                        if self._fresh(observed, token) and not superseded:
                             self._reducer.observe(self._observation(evidence, observed, started=started,
                                 method="multimodal", reason="visual_state_multimodal_analysis_failed"))
                             failed = True
@@ -454,7 +511,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
                 worker.cancel()
             if ai_worker is not None:
                 ai_worker.cancel()
-            cleanup = asyncio.gather(*(task for task in (reader, worker, ai_worker) if task is not None), return_exceptions=True)
+            cleanup = asyncio.gather(*(task for task in (reader, worker, ai_worker, self._suggestion_task) if task is not None), return_exceptions=True)
             cancelled = False
             while not cleanup.done():
                 try:
@@ -477,4 +534,5 @@ class VisualStateRuntime(BaseOperatorRuntime):
 
     @property
     def resources_released(self):
-        return self._closed.is_set() and not self._native_lock.locked()
+        return (self._closed.is_set() and not self._native_lock.locked()
+                and (self._suggestion_task is None or self._suggestion_task.done()))

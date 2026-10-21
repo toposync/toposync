@@ -13,7 +13,7 @@ from test_visual_state_runtime import frame, harness, send, until
 
 
 def answer(category="red", **changes):
-    return {"configuration_revision": "a" * 64,
+    return {"configuration_revision": "a" * 64, "profile_id": "visual", "provider_id": "fixture", "model": "synthetic",
             "observation": {"observable": True, "class_id": category, "reason": "Visible state",
                             "declared_confidence": None, "reference_ids": [], **changes}}
 
@@ -39,9 +39,10 @@ class ControlledAi:
 
 
 @asynccontextmanager
-async def running_sensor(tmp_path, strategy, service, *, backend_factory=None, **changes):
+async def running_sensor(tmp_path, strategy, service, *, backend_factory=None, preview=False, **changes):
     runtime, ctx, clock, store, saved = await harness(tmp_path, **(
         {"backend_factory": backend_factory} if backend_factory else {}))
+    store._clock = clock.unix
     data = runtime.config.model_dump()
     data.update({"strategy": strategy, "ai_profile_id": "visual", **changes})
     if strategy == "direct":
@@ -52,6 +53,9 @@ async def running_sensor(tmp_path, strategy, service, *, backend_factory=None, *
     saved.graph["nodes"][1]["config"] = runtime.config.model_dump(mode="json")
     await runtime.dependencies.config_store.replace_pipeline("sensor", saved)
     runtime.dependencies.services.register("ai.infer.classify_visual_state", service)
+    if preview:
+        from toposync.runtime.pipelines.preview import reference_input_pipeline
+        runtime._preview_input_pipeline = reference_input_pipeline(saved, "state")
     task = None
     try:
         await runtime.prepare(ctx)
@@ -153,7 +157,8 @@ def test_faster_ambiguous_frames_do_not_starve_multimodal_and_only_latest_waits(
     asyncio.run(run())
 
 
-def test_local_conclusive_result_supersedes_slow_ai_and_clears_ambiguous_pending(tmp_path):
+@pytest.mark.parametrize("malformed", [False, True])
+def test_local_conclusive_result_supersedes_slow_ai_and_clears_ambiguous_pending(tmp_path, malformed):
     async def run():
         service = ControlledAi()
         async with running_sensor(tmp_path, "fallback", service) as (runtime, ctx, clock):
@@ -163,7 +168,10 @@ def test_local_conclusive_result_supersedes_slow_ai_and_clears_ambiguous_pending
             await asyncio.sleep(.02)
             await send(runtime, ctx, clock, 3, "blue")
             version = runtime._reducer.snapshot().state_version
-            service.responses[0].set_result(answer("red"))
+            response = answer("red")
+            if malformed:
+                response["observation"].pop("reference_ids")
+            service.responses[0].set_result(response)
             await asyncio.sleep(.06)
             state = runtime._reducer.snapshot()
             assert state.state_version == version and state.candidate.class_id == "blue"

@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import sys
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import httpx
@@ -14,6 +15,7 @@ import pytest
 
 from toposync_ext_ai.providers import AiProviderError, build_provider
 from toposync_ext_ai.settings import AiProfileConfig, AiProviderConfig
+from toposync_ext_ai.visual_transport import BoundedVisualTransport
 
 
 @pytest.fixture(params=["ollama", "openai", "anthropic", "google", "litellm"])
@@ -31,8 +33,18 @@ def transport(request, monkeypatch):
         return httpx.Response(200, json={"done": True, "done_reason": state.finish,
             "message": {"content": state.text, **state.extra}})
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(
-        **kwargs, transport=httpx.MockTransport(respond)))
+    def client(**kwargs):
+        bounded = isinstance(kwargs.pop("transport", None), BoundedVisualTransport)
+        transport = httpx.MockTransport(respond)
+        return original_client(**kwargs, transport=BoundedVisualTransport(transport) if bounded else transport)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+
+    @asynccontextmanager
+    async def completion_client(**_kwargs):
+        yield object()
+
+    monkeypatch.setattr("toposync_ext_ai.providers.visual_completion_client", completion_client)
 
     async def completion(**kwargs):
         state.calls.append(kwargs)

@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from toposync.extensions import BaseExtension
+from toposync.extensions import BaseExtension, register_extension_shutdown_callback
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.services import ServiceRegistry
@@ -114,6 +114,7 @@ class AiExtension(BaseExtension):
             register_filter(EXTENSION_ID, validate_ai_settings_patch)
         data_dir = getattr(getattr(config_store, "paths", None), "data_dir", None)
         router = AiRouter(config_store=config_store, data_dir=data_dir)
+        register_extension_shutdown_callback(app, router.shutdown)
 
         # Processing workers share inference services but do not own the host's
         # application authorization or notification history.
@@ -135,6 +136,7 @@ class AiExtension(BaseExtension):
         services.register("ai.ollama.stream_pull_model", router.stream_ollama_model_pull)
         services.register("ai.infer.locate_region", router.locate_region)
         services.register("ai.infer.evaluate_condition", router.evaluate_condition)
+        services.register("ai.infer.classify_visual_state", router.classify_visual_state)
 
         @app.get("/api/ai/catalog")
         async def ai_catalog() -> dict[str, Any]:

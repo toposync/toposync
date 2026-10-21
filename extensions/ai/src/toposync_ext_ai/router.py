@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Literal, cast
 from urllib.parse import urlparse
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from toposync.runtime.config_store import AppSettings
 
 from .catalog import normalize_model_ref
@@ -20,16 +22,181 @@ from .providers import (
     attempt_from_error,
     attempt_from_success,
     build_provider,
+    prepare_visual_state,
 )
-from .settings import AiExtensionSettings, AiProfileConfig, AiProviderConfig, OllayaConnectionSettings, parse_ai_settings
+from .settings import AiExtensionSettings, AiLimitSettings, AiProfileConfig, AiProviderConfig, OllayaConnectionSettings, parse_ai_settings
 from .usage import AiUsageLimiter
 from .jev import CONNECTION_TEST_TEXT, describe_connection, evaluate_event_text
+from .visual_state import Identifier, VisualStateRequest, VisualStateResponse, validate_visual_response
+
+
+class VisualStateInferenceResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observation: VisualStateResponse | None = None
+    reason: str = ""
+    profile_id: str = ""
+    provider_id: str = ""
+    model: str = ""
+    attempts: list[AiAttempt] = Field(default_factory=list)
+
+
+class _VisualCallPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sensor_id: Identifier
+    deadline_monotonic: float = Field(allow_inf_nan=False, gt=0)
+    max_attempts: int = Field(default=1, ge=1, le=3)
+    allow_remote_images: bool = False
+    sensor_limits: AiLimitSettings = Field(default_factory=AiLimitSettings)
 
 
 class AiRouter:
     def __init__(self, *, config_store: Any | None = None, data_dir: Path | None = None) -> None:
         self._config_store = config_store
         self._limiter = AiUsageLimiter(data_dir=data_dir)
+        self._visual_jobs: set[asyncio.Task] = set()
+        self._visual_closed = False
+
+    async def classify_visual_state(
+        self, *, image: Any, classes: list[dict[str, Any]], reference_images: dict[str, Any],
+        sensor_id: str, deadline_monotonic: float, profile_id: str,
+        scene_description: str = "", fallback_profile_ids: list[str] | None = None,
+        sensor_limits: dict[str, Any] | AiLimitSettings | None = None,
+        max_attempts: int = 1, allow_remote_images: bool = False,
+    ) -> VisualStateInferenceResult:
+        policy = _VisualCallPolicy.model_validate({
+            "sensor_id": sensor_id, "deadline_monotonic": deadline_monotonic,
+            "max_attempts": max_attempts, "allow_remote_images": allow_remote_images,
+            "sensor_limits": sensor_limits if sensor_limits is not None else AiLimitSettings(),
+        })
+        request = VisualStateRequest.model_validate({"classes": classes, "scene_description": scene_description})
+        if not isinstance(profile_id, str) or not profile_id.strip() or len(profile_id) > 256:
+            raise ValueError("invalid_visual_state_profile")
+        if not isinstance(reference_images, dict) or set(reference_images) != {
+            identifier for item in request.classes for identifier in item.reference_ids
+        }:
+            raise ValueError("visual_state_reference_mismatch")
+        if fallback_profile_ids is not None and (not isinstance(fallback_profile_ids, list)
+                or len(fallback_profile_ids) > 32 or any(not isinstance(item, str) for item in fallback_profile_ids)):
+            raise ValueError("invalid_visual_state_alternatives")
+        deadline = min(policy.deadline_monotonic, time.monotonic() + 120)
+        if deadline <= time.monotonic():
+            return VisualStateInferenceResult(reason="visual_state_deadline")
+        if self._visual_closed or len(self._visual_jobs) >= 32:
+            return VisualStateInferenceResult(reason="visual_state_busy")
+        attempts: list[AiAttempt] = []
+        task = asyncio.create_task(self._classify_visual_state(
+            image=image, request=request, reference_images=dict(reference_images), policy=policy,
+            deadline=deadline, profile_id=profile_id, fallback_profile_ids=fallback_profile_ids, attempts=attempts,
+        ))
+        self._visual_jobs.add(task)
+        task.add_done_callback(self._visual_job_finished)
+        try:
+            done, _ = await asyncio.wait({task}, timeout=max(0, deadline - time.monotonic()))
+            if done and time.monotonic() < deadline:
+                return task.result()
+            task.cancel()
+            return VisualStateInferenceResult(reason="visual_state_deadline", attempts=[
+                item.model_copy(deep=True, update={"error": item.error or ("" if item.ok else "visual_state_deadline")})
+                for item in attempts])
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
+    def _visual_job_finished(self, task):
+        self._visual_jobs.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def shutdown(self):
+        self._visual_closed = True
+        tasks = tuple(self._visual_jobs)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            cleanup = asyncio.gather(*tasks, return_exceptions=True)
+            cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
+
+    async def _classify_visual_state(self, *, image, request, reference_images, policy, deadline,
+                                     profile_id, fallback_profile_ids, attempts):
+        try:
+            settings = await self.settings()
+        except Exception:
+            return VisualStateInferenceResult(reason="visual_state_configuration_unavailable")
+        profiles = self._resolve_profiles(settings=settings, profile_id=profile_id,
+                                          fallback_profile_ids=fallback_profile_ids)[:policy.max_attempts]
+        if not profiles:
+            return VisualStateInferenceResult(reason="no_ai_profile_available")
+        for profile, provider in profiles:
+            if time.monotonic() >= deadline:
+                return VisualStateInferenceResult(reason="visual_state_deadline", attempts=attempts)
+            started = time.monotonic()
+            attempt = AiAttempt(profile_id=profile.id, provider_id=provider.id, provider_kind=provider.kind,
+                                model=profile.model, ok=False)
+            attempts.append(attempt)
+            try:
+                local = provider.local and urlparse(provider.host).hostname in {"localhost", "127.0.0.1", "::1"}
+            except ValueError:
+                local = False
+            if not self._provider_allows_image(provider) or (not local and not policy.allow_remote_images):
+                attempt.error = "image_upload_not_allowed"
+                continue
+            budget_group = settings.budget_group_by_id(profile.budget_group_id)
+            members = [item.id for item in settings.profiles if item.budget_group_id == profile.budget_group_id]
+            attempt_deadline = min(deadline, started + profile.timeout_seconds)
+            try:
+                async with asyncio.timeout(max(0, attempt_deadline - time.monotonic())):
+                    async with self._limiter.slot(profile_id=profile.id, limits=settings.limits,
+                            budget_group=budget_group, sensor_id=policy.sensor_id, sensor_limits=policy.sensor_limits):
+                        prepared, encoded = await prepare_visual_state(profile=profile, image=image,
+                            classes=request.model_dump()["classes"], reference_images=reference_images,
+                            scene_description=request.scene_description)
+                        if time.monotonic() >= attempt_deadline:
+                            raise TimeoutError
+                        allowed, reason = await self._limiter.check_and_increment(
+                            profile_id=profile.id, limits=settings.limits, budget_group=budget_group,
+                            budget_group_profile_ids=members, sensor_id=policy.sensor_id, sensor_limits=policy.sensor_limits)
+                        if not allowed:
+                            attempt.error = reason
+                            continue
+                        remaining = attempt_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError
+                        effective = profile.model_copy(update={"timeout_seconds": remaining})
+                        runtime = build_provider(provider, effective)
+                        observation = await runtime.classify_prepared_visual_state(request=prepared, encoded=encoded)
+                        if asyncio.current_task().cancelling():
+                            raise asyncio.CancelledError
+                        if time.monotonic() >= attempt_deadline:
+                            raise TimeoutError
+                        observation = validate_visual_response(
+                            observation.model_dump() if isinstance(observation, VisualStateResponse) else observation, request)
+                        attempt.ok = True
+                        return VisualStateInferenceResult(observation=observation, profile_id=profile.id,
+                            provider_id=provider.id, model=profile.model, attempts=attempts)
+            except TimeoutError:
+                attempt.error = "visual_state_deadline" if time.monotonic() >= deadline else "visual_state_attempt_timeout"
+            except asyncio.CancelledError:
+                attempt.error = "visual_state_cancelled"
+                raise
+            except Exception as exc:
+                # Provider exceptions can contain credentials, URLs or image data.
+                safe = {"visual_state_profile_incompatible", "invalid_visual_state_request",
+                        "visual_state_reference_mismatch", "visual_state_image_limit", "invalid_visual_state_image",
+                        "invalid_visual_state_response", "visual_state_response_encoding",
+                        "visual_state_response_too_large", "visual_state_transport_unsupported"}
+                attempt.error = str(exc) if str(exc) in safe else "visual_state_provider_failed"
+            finally:
+                attempt.latency_ms = max(0, (time.monotonic() - started) * 1000)
+        return VisualStateInferenceResult(reason=attempts[-1].error or "all_ai_profiles_failed", attempts=attempts)
 
     async def settings(self) -> AiExtensionSettings:
         raw: dict[str, Any] = {}

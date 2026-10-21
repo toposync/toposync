@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -11,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .settings import AiProfileConfig, AiProviderConfig
 from .visual_state import VisualStateRequest, VisualStateResponse, strict_visual_json, validate_visual_response
+from .visual_transport import BoundedVisualTransport, visual_completion_client
 
 
 class AiProviderError(RuntimeError):
@@ -428,6 +430,23 @@ def _prepare_visual_state(*, profile: AiProfileConfig, image: Any, classes: list
     return request, encoded
 
 
+async def prepare_visual_state(**kwargs):
+    task = asyncio.create_task(asyncio.to_thread(_prepare_visual_state, **kwargs))
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        if not task.cancelled():
+            task.exception()
+        raise asyncio.CancelledError
+    return task.result()
+
+
 def _validate_visual_state(content: dict[str, Any], request: VisualStateRequest) -> VisualStateResponse:
     try:
         return validate_visual_response(content, request)
@@ -449,8 +468,11 @@ class OllamaProvider:
 
     async def classify_visual_state(self, *, image: Any, classes: list[dict[str, Any]],
                                     reference_images: dict[str, Any], scene_description: str = "") -> VisualStateResponse:
-        request, encoded = _prepare_visual_state(profile=self._profile, image=image, classes=classes,
+        request, encoded = await prepare_visual_state(profile=self._profile, image=image, classes=classes,
             reference_images=reference_images, scene_description=scene_description)
+        return await self.classify_prepared_visual_state(request=request, encoded=encoded)
+
+    async def classify_prepared_visual_state(self, *, request, encoded) -> VisualStateResponse:
         content = await self._chat_json(image=None, messages=request.messages(),
             encoded_images=encoded, response_schema=request.response_schema())
         return _validate_visual_state(content, request)
@@ -562,7 +584,8 @@ class OllamaProvider:
         body.update(truncate=False, shift=False, keep_alive="30s")
         base_url = self._provider.host.rstrip("/")
         timeout = httpx.Timeout(float(self._profile.timeout_seconds), connect=5.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        options = {"transport": BoundedVisualTransport()} if response_schema is not None else {}
+        async with httpx.AsyncClient(timeout=timeout, **options) as client:
             version_response = await client.get(f"{base_url}/api/version")
             version_response.raise_for_status()
             version = str(version_response.json().get("version", "")).split("-")[0].split(".")
@@ -603,8 +626,11 @@ class LiteLLMProvider:
 
     async def classify_visual_state(self, *, image: Any, classes: list[dict[str, Any]],
                                     reference_images: dict[str, Any], scene_description: str = "") -> VisualStateResponse:
-        request, encoded = _prepare_visual_state(profile=self._profile, image=image, classes=classes,
+        request, encoded = await prepare_visual_state(profile=self._profile, image=image, classes=classes,
             reference_images=reference_images, scene_description=scene_description)
+        return await self.classify_prepared_visual_state(request=request, encoded=encoded)
+
+    async def classify_prepared_visual_state(self, *, request, encoded) -> VisualStateResponse:
         content = await self._completion_json(image=None, messages=request.messages(),
             encoded_images=encoded, response_schema=request.response_schema())
         return _validate_visual_state(content, request)
@@ -653,12 +679,18 @@ class LiteLLMProvider:
         }
         if response_schema is not None:
             kwargs.update(response_format={"type": "json_schema", "json_schema": {
-                "name": "visual_state", "strict": True, "schema": response_schema}}, num_retries=0, max_tokens=4096)
+                "name": "visual_state", "strict": True, "schema": response_schema}},
+                num_retries=0, max_retries=0, max_tokens=4096, caching=False)
         if self._provider.api_key:
             kwargs["api_key"] = self._provider.api_key
         if self._provider.host:
             kwargs["api_base"] = self._provider.host
-        response = await acompletion(**kwargs)
+        if response_schema is not None:
+            async with visual_completion_client(model=kwargs["model"], api_key=self._provider.api_key,
+                                                 api_base=self._provider.host, timeout=self._profile.timeout_seconds) as client:
+                response = await acompletion(**kwargs, client=client)
+        else:
+            response = await acompletion(**kwargs)
         if response_schema is not None:
             def field(item, name):
                 return item.get(name) if isinstance(item, dict) else getattr(item, name, None)

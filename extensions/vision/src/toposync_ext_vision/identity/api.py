@@ -164,9 +164,8 @@ async def identity_history_selection(*, request: Request, get_store: Callable[[]
         gallery = get_store()
         with gallery._lock:
             return [row[0] for row in gallery._connection.execute(
-                "SELECT DISTINCT owner_id FROM activity_reference WHERE owner_id<>'independent' "
-                "AND occurrence_id IN (SELECT json_extract(value,'$.occurrence_id') FROM json_each(?)) ORDER BY owner_id",
-                (json.dumps(scope["occurrences"]),))]
+                "SELECT DISTINCT r.owner_id FROM activity_reference r JOIN observation o ON o.id=r.observation_id "
+                "WHERE r.owner_id<>'independent' AND o.identity_id=? ORDER BY r.owner_id", (identity_id,))]
     scope["activities"] = []
     access = NotificationAccess(request)
     for identifier in await asyncio.to_thread(owners):

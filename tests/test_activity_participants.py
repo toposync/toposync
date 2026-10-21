@@ -1,6 +1,7 @@
 """Names are read from the current authorized gallery, never copied into history."""
 
 from functools import partial
+import pytest
 
 from test_identity_api import client
 from test_identity_store import curate, enroll, evidence, policy
@@ -59,6 +60,39 @@ def test_closed_trio_resolves_two_names_and_one_anonymous_in_detail_and_manifest
     assert response.headers['cache-control'] == 'private, no-store'
 
 
+@pytest.mark.parametrize('later_matches', [False, True])
+def test_new_capture_does_not_replace_an_earlier_activitys_owned_decision(client, later_matches):
+    history, gallery, document, identities = trio(client)
+    original = gallery.decision('private-visit-0').observation_id
+    vector = [1.] + [0.] * 15 if later_matches else [0., 0., 1.] + [0.] * 13
+    later = history.occurrences.record(contribution('later', objective_id='second', participant_id='person-0',
+        observed_at=30, started_at=30), retention_seconds=3600).document
+    reference = {'occurrence_id': later['id'], 'privacy_revision': 1, 'evidence_id': 'later',
+        'participant_id': 'person-0', 'observed_at': 30}
+    gallery.observe(evidence('private-visit-0', capture='later', observed_at=30, vector=vector), policy(),
+        activity_reference=reference)
+    client.portal.call(partial(history.enrich_occurrence, enrichment(later['id'], message_id='later-name',
+        evidence_id='later', participant_id='person-0', observed_at=30, kind='recognition',
+        text=None, status='observed', identity_occurrence_id='private-visit-0')))
+    path = '/api/activity/' + document['id']
+    response = client.get(path)
+    assert response.status_code == 200
+    identity = response.json()['occurrence']['participants']['person-0']['identification']
+    assert identity['name'] == 'Synthetic person 0'
+    assert identity['evidence_id'] == 'open-0' and identity['observed_at'] == 10
+    matches = client.get(f'/api/vision/identities/{identities[0]}/notifications', params={'association': 'recognized'})
+    assert document['id'] in {item['payload']['occurrence_id'] for item in matches.json()['notifications']}
+    other = client.get('/api/activity/' + later['id']).json()['occurrence']['participants']['person-0']['identification']
+    assert (other['status'] == 'recognized') is later_matches
+    curate(gallery, 'assign', {'observation_ids': [original], 'identity_id': identities[0]})
+    unassigned = curate(gallery, 'unassign', {'observation_ids': [original]})
+    assert client.get(path).json()['occurrence']['participants']['person-0']['identification'] == {'status': 'unknown'}
+    gallery.undo(unassigned['operation_id'], expected_revision=gallery.revision)
+    assert client.get(path).json()['occurrence']['participants']['person-0']['identification']['name'] == 'Synthetic person 0'
+    history.occurrences.revoke_enrichment(document['id'], expected_revision=document['revision'])
+    assert 'Synthetic person' not in client.get(path).text
+
+
 def test_nominal_history_uses_current_participant_and_location_before_pagination(client):
     import json
     history, gallery, document, identities = trio(client, third_camera='corridor')
@@ -82,6 +116,37 @@ def test_nominal_history_uses_current_participant_and_location_before_pagination
     assert {'value': 'garage', 'label': None} in areas
     history.occurrences.revoke_enrichment(document['id'], expected_revision=document['revision'])
     assert client.get(path, params=filters).json()['notifications'] == []
+
+
+def test_conflicting_owned_capture_cannot_restore_an_earlier_name(client):
+    history, gallery, document, identities = trio(client)
+    sample = evidence('private-visit-0', capture='conflicting', observed_at=10,
+        vector=[0., 1.] + [0.] * 14)
+    reference = {'occurrence_id': document['id'], 'privacy_revision': 1, 'evidence_id': 'open-0',
+        'participant_id': 'person-0', 'observed_at': 10}
+    decision = gallery.observe(sample, policy(), activity_reference=reference)
+    assert decision.reason == 'identity_conflict'
+    projected = client.get('/api/activity/' + document['id']).json()['occurrence']
+    assert projected['participants']['person-0']['identification']['status'] == 'unknown'
+    assert projected['participants']['person-1']['identification']['name'] == 'Synthetic person 1'
+
+
+def test_capture_decisions_survive_backup_and_follow_capture_deletion(client, tmp_path):
+    from toposync_ext_vision.identity.store import IdentityStore
+    history, gallery, document, identities = trio(client)
+    gallery.backup_to(tmp_path / 'capture-backup')
+    restored = IdentityStore.restore_backup(tmp_path / 'capture-backup', tmp_path / 'capture-restored', scope=gallery.scope)
+    try:
+        restored.activity_authorized = history.occurrences.reference_allowed
+        restored.register_policy(policy())
+        projected = restored.activity_participants(document, authorize_cameras=lambda _: True)
+        assert projected['person-0']['name'] == 'Synthetic person 0'
+        original = restored.decision('private-visit-0').observation_id
+        restored.delete_identity(identities[0], expected_revision=restored.revision)
+        assert restored._connection.execute('SELECT 1 FROM observation_decision WHERE id=?', (original,)).fetchone() is None
+        assert restored.activity_participants(document, authorize_cameras=lambda _: True)['person-0']['status'] == 'unknown'
+    finally:
+        restored.close()
 
 
 def test_nominal_history_revalidates_private_owner_after_slow_search(client):

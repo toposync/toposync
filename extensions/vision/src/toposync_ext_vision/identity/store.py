@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS observation (
 CREATE INDEX IF NOT EXISTS observation_gallery ON observation(species, space, reference, quality DESC);
 CREATE INDEX IF NOT EXISTS observation_occurrence ON observation(occurrence_id);
 CREATE INDEX IF NOT EXISTS observation_identity ON observation(identity_id);
+CREATE TABLE IF NOT EXISTS observation_decision (
+ id TEXT PRIMARY KEY REFERENCES observation(id) ON DELETE CASCADE, decision BLOB NOT NULL
+);
 CREATE TRIGGER IF NOT EXISTS observation_owners_delete AFTER DELETE ON observation BEGIN
  DELETE FROM activity_reference WHERE observation_id=OLD.id;
 END;
@@ -296,11 +299,12 @@ class IdentityStore:
                     ("identity", ("name",)),
                     ("observation", ("evidence", "crop")),
                     ("occurrence", ("decision",)),
+                    ("observation_decision", ("decision",)),
                     ("feedback", ("changes", "result")),
                     ("reference_representation", ("evidence",)),
                 ):
                     if (
-                        table == "reference_representation"
+                        table in {"reference_representation", "observation_decision"}
                         and connection.execute(
                             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
                         ).fetchone()
@@ -429,18 +433,20 @@ class IdentityStore:
         """
         with self._lock:
             current = self.decision(occurrence_id)
-            if (
-                current is None
-                or current.revision != decision_revision
-                or current.gallery_revision != self.revision
-            ):
+            if current is None or current.revision != decision_revision:
+                return None
+            return self._validated_decision(current, observed_at=observed_at, max_age_seconds=max_age_seconds)
+
+    def _validated_decision(self, current, *, observed_at, max_age_seconds):
+        with self._lock:
+            if current.gallery_revision != self.revision:
                 return None
             if current.identity_id and current.provenance != "human":
                 if self._connection.execute('SELECT enabled FROM retention_policy').fetchone()[0] and self._connection.execute(
                     'SELECT 1 FROM observation WHERE reference=1 AND created_at<=? LIMIT 1', (time.time() - 365 * 86400,)).fetchone():
                     return None
                 row = self._connection.execute(
-                    "SELECT species FROM occurrence WHERE id=?", (occurrence_id,)
+                    "SELECT species FROM occurrence WHERE id=?", (current.occurrence_id,)
                 ).fetchone()
                 policy = self._policies.get((row["species"], current.embedding_space))
                 if (
@@ -465,6 +471,7 @@ class IdentityStore:
                 (document["id"],)).fetchall()
             references = [(row, self._open(row["reference"])) for row in rows]
             candidates = {}
+            conflicts = set()
             for item in document["enrichments"]:
                 target = item.get("identity_occurrence_id")
                 if item["kind"] != "recognition" or not target:
@@ -474,29 +481,38 @@ class IdentityStore:
                 owned = {row["observation_id"] for row, saved in references if row["occurrence_id"] == target and saved == reference}
                 if not owned or not self.activity_authorized(reference):
                     continue
-                current = self.decision(target)
-                if current is None or current.observation_id not in owned:
-                    continue
-                if current.provenance == "human":
-                    assignment = self._connection.execute(
-                        "SELECT identity_id,confirmed FROM observation WHERE id=?", (current.observation_id,)).fetchone()
-                    if not assignment or not assignment["confirmed"] or assignment["identity_id"] != current.identity_id:
+                for observation_id in owned:
+                    saved = self._connection.execute(
+                        "SELECT o.identity_id,o.confirmed,d.decision FROM available_observation o "
+                        "LEFT JOIN observation_decision d ON d.id=o.id WHERE o.id=?", (observation_id,)).fetchone()
+                    if saved is None:
                         continue
-                else:
-                    current = self.validated_decision(target, decision_revision=current.revision,
-                        observed_at=item["observed_at"], max_age_seconds=0)
-                if current is None or current.status != "recognized" or current.identity_id is None:
-                    continue
-                identity = self._identity(self._connection, current.identity_id)
-                if authorize_cameras(self.camera_ids(identity_id=current.identity_id)) is False:
-                    continue
-                candidates.setdefault(item["participant_id"], {})[current.identity_id] = {
-                    "status": "recognized", "identity_id": current.identity_id,
-                    "name": self._open(identity["name"]), "provenance": current.provenance,
-                    "gallery_revision": self.revision, "decision_revision": current.revision,
-                    "evidence_id": item["evidence_id"], "observed_at": item["observed_at"]}
+                    if saved['confirmed']:
+                        current = RecognitionDecision(occurrence_id=target, observation_id=observation_id,
+                            identity_id=saved['identity_id'], status='recognized' if saved['identity_id'] else 'unknown',
+                            provenance='human', evidence_at=item['observed_at'], gallery_revision=self.revision,
+                            revision=self.revision, reason='confirmed' if saved['identity_id'] else 'human_unassigned')
+                    elif saved['decision'] is not None:
+                        current = RecognitionDecision.model_validate(self._open(saved['decision']))
+                        if current.provenance == 'human' or current.identity_id != saved['identity_id']:
+                            continue
+                        current = self._validated_decision(current, observed_at=item['observed_at'], max_age_seconds=0)
+                    else:
+                        continue
+                    if current is not None and current.reason == 'identity_conflict':
+                        conflicts.add(item['participant_id'])
+                    if current is None or current.status != "recognized" or current.identity_id is None:
+                        continue
+                    identity = self._identity(self._connection, current.identity_id)
+                    if authorize_cameras(self.camera_ids(identity_id=current.identity_id)) is False:
+                        continue
+                    candidates.setdefault(item["participant_id"], {})[current.identity_id] = {
+                        "status": "recognized", "identity_id": current.identity_id,
+                        "name": self._open(identity["name"]), "provenance": current.provenance,
+                        "gallery_revision": self.revision, "decision_revision": current.revision,
+                        "evidence_id": item["evidence_id"], "observed_at": item["observed_at"]}
             for key, identities in candidates.items():
-                result[key] = next(iter(identities.values())) if len(identities) == 1 else {
+                result[key] = next(iter(identities.values())) if len(identities) == 1 and key not in conflicts else {
                     "status": "unknown", "reason": "conflicting_identities"}
             if not all(self.activity_authorized(saved) for _, saved in references):
                 return {key: {"status": "unknown"} for key in document["participants"]}
@@ -963,11 +979,12 @@ class IdentityStore:
         connection.execute('UPDATE gallery SET revision=revision+1')
         if not references_removed:
             # Maintenance must not invalidate recognition against unchanged references.
-            for row in connection.execute('SELECT id,decision FROM occurrence').fetchall():
-                current = RecognitionDecision.model_validate(self._open(row['decision']))
-                if current.gallery_revision == previous:
-                    connection.execute('UPDATE occurrence SET decision=? WHERE id=?',
-                        (self._seal(current.model_copy(update={'gallery_revision': previous + 1}).model_dump()), row['id']))
+            for table in ('occurrence', 'observation_decision'):
+                for row in connection.execute(f'SELECT id,decision FROM {table}').fetchall():
+                    current = RecognitionDecision.model_validate(self._open(row['decision']))
+                    if current.gallery_revision == previous:
+                        connection.execute(f'UPDATE {table} SET decision=? WHERE id=?',
+                            (self._seal(current.model_copy(update={'gallery_revision': previous + 1}).model_dump()), row['id']))
 
     def apply_retention(self, *, now: float | None = None) -> dict:
         """Bound each category to 128 records per maintenance cycle (once a minute)."""
@@ -1282,6 +1299,8 @@ class IdentityStore:
                     time.time(),
                 ),
             )
+            connection.execute('INSERT INTO observation_decision(id,decision) VALUES(?,?)',
+                (observation_id, self._seal(decision.model_dump())))
             self._retain_activity_reference(connection, activity_reference, evidence.occurrence_id, observation_id)
             return decision
 

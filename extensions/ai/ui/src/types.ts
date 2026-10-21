@@ -20,6 +20,7 @@ export type AiProfileConfig = {
   capabilities: string[];
   timeout_seconds: number;
   max_image_side_px: number;
+  max_images_per_request: number;
   jpeg_quality: number;
   temperature: number;
   enabled: boolean;

@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .settings import AiProfileConfig, AiProviderConfig
+from .visual_state import VisualStateRequest, VisualStateResponse, strict_visual_json, validate_visual_response
 
 
 class AiProviderError(RuntimeError):
@@ -376,10 +377,83 @@ def _build_condition_prompt(description: str) -> list[dict[str, Any]]:
     ]
 
 
+def _prepare_visual_state(*, profile: AiProfileConfig, image: Any, classes: list[dict[str, Any]],
+                          reference_images: dict[str, Any], scene_description: str):
+    if not {"vision", "structured_json", "multiple_images"} <= set(profile.capabilities):
+        raise AiProviderError("visual_state_profile_incompatible")
+    try:
+        request = VisualStateRequest.model_validate({"classes": classes, "scene_description": scene_description})
+    except ValueError:
+        raise AiProviderError("invalid_visual_state_request") from None
+    identifiers = [identifier for item in request.classes for identifier in item.reference_ids]
+    if not isinstance(reference_images, dict) or set(reference_images) != set(identifiers):
+        raise AiProviderError("visual_state_reference_mismatch")
+    if 1 + len(identifiers) > profile.max_images_per_request:
+        raise AiProviderError("visual_state_image_limit")
+    images = [image, *(reference_images[identifier] for identifier in identifiers)]
+    total_bytes = 0
+    try:
+        from PIL import Image
+        import numpy as np
+
+        for item in images:
+            if isinstance(item, (bytes, bytearray, memoryview)):
+                if len(item) > 8 * 1024 * 1024:
+                    raise ValueError("image too large")
+                with Image.open(io.BytesIO(item)) as opened:
+                    width, height = opened.size
+                total_bytes += len(item)
+            elif isinstance(item, Image.Image):
+                width, height = item.size
+                total_bytes += width * height * len(item.getbands())
+            elif isinstance(item, np.ndarray) and item.dtype == np.uint8 and item.ndim in (2, 3):
+                height, width = item.shape[:2]
+                if item.ndim == 3 and item.shape[2] not in (3, 4):
+                    raise ValueError("unsupported channels")
+                total_bytes += item.nbytes
+            else:
+                raise ValueError("unsupported image")
+            if min(width, height) < 1 or width * height > 4_194_304 or total_bytes > 64 * 1024 * 1024:
+                raise ValueError("image capacity exceeded")
+        encoded = []
+        encoded_size = 0
+        for item in images:
+            value = encode_image_base64(item, max_side_px=profile.max_image_side_px, jpeg_quality=profile.jpeg_quality)
+            encoded_size += len(value.data_b64)
+            if value.mime_type != "image/jpeg" or not value.width or not value.height or encoded_size > 16 * 1024 * 1024:
+                raise ValueError("invalid encoded image")
+            encoded.append(value)
+    except (ValueError, TypeError, OSError, Image.DecompressionBombError):
+        raise AiProviderError("invalid_visual_state_image") from None
+    return request, encoded
+
+
+def _validate_visual_state(content: dict[str, Any], request: VisualStateRequest) -> VisualStateResponse:
+    try:
+        return validate_visual_response(content, request)
+    except ValueError:
+        raise AiProviderError("invalid_visual_state_response") from None
+
+
+def _parse_visual_json(content: str) -> dict[str, Any]:
+    try:
+        return strict_visual_json(content)
+    except ValueError:
+        raise AiProviderError("invalid_visual_state_response") from None
+
+
 class OllamaProvider:
     def __init__(self, provider: AiProviderConfig, profile: AiProfileConfig) -> None:
         self._provider = provider
         self._profile = profile
+
+    async def classify_visual_state(self, *, image: Any, classes: list[dict[str, Any]],
+                                    reference_images: dict[str, Any], scene_description: str = "") -> VisualStateResponse:
+        request, encoded = _prepare_visual_state(profile=self._profile, image=image, classes=classes,
+            reference_images=reference_images, scene_description=scene_description)
+        content = await self._chat_json(image=None, messages=request.messages(),
+            encoded_images=encoded, response_schema=request.response_schema())
+        return _validate_visual_state(content, request)
 
     async def locate_region(self, *, image: Any, description: str) -> RegionDetectionResult:
         content = await self._chat_json(image=image, messages=_build_region_prompt(description))
@@ -454,14 +528,18 @@ class OllamaProvider:
                     if isinstance(item, dict):
                         yield item
 
-    async def _chat_json(self, *, image: Any, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    async def _chat_json(self, *, image: Any, messages: list[dict[str, Any]],
+                         encoded_images: list[EncodedImage] | None = None,
+                         response_schema: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             import httpx
         except Exception as exc:  # noqa: BLE001
             raise AiProviderError("httpx is required to call Ollama") from exc
 
         ollama_messages = [dict(item) for item in messages]
-        if image is not None:
+        if encoded_images is not None:
+            ollama_messages[-1]["images"] = [item.data_b64 for item in encoded_images]
+        elif image is not None:
             encoded = encode_image_base64(
                 image,
                 max_side_px=self._profile.max_image_side_px,
@@ -473,7 +551,7 @@ class OllamaProvider:
             "model": self._profile.model,
             "messages": ollama_messages,
             "stream": False,
-            "format": "json",
+            "format": response_schema if response_schema is not None else "json",
             "options": {
                 "temperature": float(self._profile.temperature),
             },
@@ -496,6 +574,10 @@ class OllamaProvider:
         if (not isinstance(payload, dict) or payload.get("done") is not True or payload.get("done_reason") != "stop"):
             raise AiProviderError("Assistant response did not finish completely; simplify the request")
         message = payload.get("message") if isinstance(payload, dict) else None
+        if response_schema is not None:
+            if not isinstance(message, dict) or message.get("tool_calls") or message.get("refusal"):
+                raise AiProviderError("invalid_visual_state_response")
+            return _parse_visual_json(message.get("content"))
         content = message.get("content") if isinstance(message, dict) else ""
         if len(str(content or "")) > 262144:
             raise AiProviderError("Assistant response is too large; simplify the request")
@@ -519,6 +601,14 @@ class LiteLLMProvider:
         self._provider = provider
         self._profile = profile
 
+    async def classify_visual_state(self, *, image: Any, classes: list[dict[str, Any]],
+                                    reference_images: dict[str, Any], scene_description: str = "") -> VisualStateResponse:
+        request, encoded = _prepare_visual_state(profile=self._profile, image=image, classes=classes,
+            reference_images=reference_images, scene_description=scene_description)
+        content = await self._completion_json(image=None, messages=request.messages(),
+            encoded_images=encoded, response_schema=request.response_schema())
+        return _validate_visual_state(content, request)
+
     async def locate_region(self, *, image: Any, description: str) -> RegionDetectionResult:
         parsed = await self._completion_json(image=image, messages=_build_region_prompt(description))
         result = RegionDetectionResult.model_validate(parsed)
@@ -535,27 +625,24 @@ class LiteLLMProvider:
         result.model = self._profile.model
         return result
 
-    async def _completion_json(self, *, image: Any, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    async def _completion_json(self, *, image: Any, messages: list[dict[str, Any]],
+                               encoded_images: list[EncodedImage] | None = None,
+                               response_schema: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
             from litellm import acompletion
         except Exception as exc:  # noqa: BLE001
             raise AiProviderError("LiteLLM is not installed in this Toposync environment") from exc
 
-        encoded = encode_image_base64(
-            image,
-            max_side_px=self._profile.max_image_side_px,
-            jpeg_quality=self._profile.jpeg_quality,
-        )
-        data_url = f"data:{encoded.mime_type};base64,{encoded.data_b64}"
+        if encoded_images is None:
+            encoded_images = [encode_image_base64(image, max_side_px=self._profile.max_image_side_px,
+                                                 jpeg_quality=self._profile.jpeg_quality)]
         converted = [
             {"role": messages[0]["role"], "content": messages[0]["content"]},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": str(messages[-1]["content"])},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            },
+            {"role": "user", "content": [
+                {"type": "text", "text": str(messages[-1]["content"])},
+                *[{"type": "image_url", "image_url": {"url": f"data:{item.mime_type};base64,{item.data_b64}"}}
+                  for item in encoded_images],
+            ]},
         ]
         kwargs: dict[str, Any] = {
             "model": _litellm_model_name(self._provider, self._profile),
@@ -564,11 +651,24 @@ class LiteLLMProvider:
             "temperature": float(self._profile.temperature),
             "timeout": float(self._profile.timeout_seconds),
         }
+        if response_schema is not None:
+            kwargs.update(response_format={"type": "json_schema", "json_schema": {
+                "name": "visual_state", "strict": True, "schema": response_schema}}, num_retries=0, max_tokens=4096)
         if self._provider.api_key:
             kwargs["api_key"] = self._provider.api_key
         if self._provider.host:
             kwargs["api_base"] = self._provider.host
         response = await acompletion(**kwargs)
+        if response_schema is not None:
+            def field(item, name):
+                return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+            choices = field(response, "choices")
+            if not isinstance(choices, list) or len(choices) != 1 or field(choices[0], "finish_reason") != "stop":
+                raise AiProviderError("invalid_visual_state_response")
+            message = field(choices[0], "message")
+            if field(message, "tool_calls") or field(message, "refusal"):
+                raise AiProviderError("invalid_visual_state_response")
+            return _parse_visual_json(field(message, "content"))
         content = _first_message_content(response)
         return _extract_json_object(content)
 

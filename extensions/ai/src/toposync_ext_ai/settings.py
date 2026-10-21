@@ -55,6 +55,7 @@ class AiProfileConfig(BaseModel):
     )
     timeout_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
     max_image_side_px: int = Field(default=1280, ge=128, le=8192)
+    max_images_per_request: int = Field(default=1, strict=True, ge=1, le=65)
     jpeg_quality: int = Field(default=85, ge=30, le=100)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     enabled: bool = True

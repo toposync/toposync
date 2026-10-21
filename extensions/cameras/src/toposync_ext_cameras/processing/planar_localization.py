@@ -16,6 +16,7 @@ from .panorama_localization import (
     ANALYSIS_WIDTH, MINIMUM_MATCHES, _matching_descriptors, _mutual_matches,
     _support, correspondence_groups, frame_identity,
 )
+from .visual_region import reference_mask_points
 
 
 def fit_frame_homography(current, reference, size):
@@ -65,6 +66,20 @@ class PlanarLocalizer:
         self.results = OrderedDict()
         self.sift = cv2.SIFT_create(nfeatures=4000, contrastThreshold=.025)
         self.reference_points, self.reference_descriptors = self._features(reference)
+
+    def with_reference_mask(self, mask):
+        from copy import copy
+
+        prepared = copy(self)
+        prepared._lock = threading.Lock()
+        prepared.results = OrderedDict()
+        prepared.sift = cv2.SIFT_create(nfeatures=4000, contrastThreshold=.025)
+        pixels = self.reference_points * (np.asarray(mask.shape[1::-1]) - 1) / (np.asarray(self.size) - 1)
+        selected = reference_mask_points(mask, pixels)
+        prepared.reference_points = self.reference_points[selected]
+        prepared.reference_descriptors = (self.reference_descriptors[selected]
+                                         if self.reference_descriptors is not None and selected.sum() >= 2 else None)
+        return prepared
 
     def _features(self, image):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image

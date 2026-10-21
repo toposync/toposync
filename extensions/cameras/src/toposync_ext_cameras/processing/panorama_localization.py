@@ -214,6 +214,34 @@ def fit_frame_rotation(
 
 
 class PanoramaLocalizer:
+    def with_reference_mask(self, mask):
+        """Keep region-specific matches and anchors isolated from navigation."""
+        from copy import copy
+
+        with self._lock:
+            prepared = copy(self)
+            prepared.reference_mask = mask.copy()
+            prepared.reference_mask.flags.writeable = False
+            prepared.references = [{key: value for key, value in reference.items()
+                                    if not key.startswith("contextual_")} for reference in self.references]
+        prepared._lock = threading.RLock()
+        prepared.results = OrderedDict()
+        prepared._anchors = OrderedDict()
+        prepared._contextual_matcher = None
+        prepared._matching_retry_after = 0.0
+        prepared.last_reference = None
+        return prepared
+
+    def _reference_support(self, reference, pixels):
+        from .visual_region import frame_to_reference, reference_mask_points
+
+        mask = getattr(self, "reference_mask", None)
+        if mask is None:
+            return np.ones(len(pixels), dtype=bool)
+        mapped = frame_to_reference(pixels, {"lens": self.lens, "rotation_matrix": reference["rotation_matrix"]},
+                                    {"to_source": np.eye(3)}, mask.shape[1::-1])
+        return reference_mask_points(mask, mapped)
+
     def calibrated_transition(self, previous: np.ndarray, current: np.ndarray) -> dict | None:
         """Recover observed displacement, never arrival, using the bound lens.
 
@@ -550,6 +578,8 @@ class PanoramaLocalizer:
                 continue
             current_points = points[[pair.queryIdx for pair in pairs]]
             reference_points = reference[prefix + "points"][[pair.trainIdx for pair in pairs]]
+            selected = self._reference_support(reference, reference_points)
+            current_points, reference_points = current_points[selected], reference_points[selected]
             scale = min(1.0, ANALYSIS_WIDTH / self.lens["width"])
             overlay = stationary_overlay_points(current_points * scale, reference_points * scale)
             candidate = {} if diagnostics is not None else None
@@ -841,6 +871,8 @@ class PanoramaLocalizer:
             diagnostics["photometry"] = method
             diagnostics["candidates"] = []
         for reference, a, b in pairs:
+            selected = self._reference_support(reference, b)
+            a, b = a[selected], b[selected]
             a = (a + 0.5) * [image.shape[1] / width, image.shape[0] / height] - 0.5
             a = source_pixels(a, matrix)
             candidate = {} if diagnostics is not None else None

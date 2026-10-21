@@ -28,6 +28,8 @@ def _import_onnxruntime():
         raise RuntimeError(
             "onnxruntime is not installed. Install the first-party vision runtime dependencies."
         ) from exc
+    # Local inference must not start the SDK's background telemetry uploader.
+    ort.disable_telemetry_events()
     return ort
 
 

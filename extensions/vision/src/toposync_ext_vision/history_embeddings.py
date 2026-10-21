@@ -60,10 +60,11 @@ def embed_history(*, data_dir: Path, query: str, images: dict[str, bytes]) -> di
         raise ValueError("visual_image_bytes_exceed_budget")
     with _LOCK:
         try:
-            import onnxruntime as ort
+            from .processing.runtime_backends.onnxruntime_backend import _import_onnxruntime
             from safetensors.numpy import load_file
             from tokenizers import Tokenizer
 
+            ort = _import_onnxruntime()
             root = Path(data_dir) / "vision-models"
             for name, expected in MODEL_FILES.items():
                 with (root / name).open("rb") as stream:

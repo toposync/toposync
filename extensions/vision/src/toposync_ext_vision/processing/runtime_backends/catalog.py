@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .onnxruntime_backend import (
+    _import_onnxruntime,
     available_onnxruntime_execution_providers,
     resolve_onnxruntime_execution_providers,
 )
@@ -10,7 +11,7 @@ from .onnxruntime_backend import (
 
 def collect_vision_runtime_backends() -> list[dict[str, Any]]:
     try:
-        import onnxruntime as ort  # type: ignore
+        ort = _import_onnxruntime()
 
         available = True
         version = str(getattr(ort, "__version__", "") or "")

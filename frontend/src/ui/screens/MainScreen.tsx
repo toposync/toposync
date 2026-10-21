@@ -477,6 +477,14 @@ export function MainScreen({
   const selectedNotificationRef = useRef<HTMLButtonElement | null>(null);
   const [notificationsExpanded, setNotificationsExpanded] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
+  const notificationsToggleRef = useRef<HTMLButtonElement | null>(null);
+  const detailsWereOpen = useRef(false);
+  useEffect(() => {
+    if (detailsWereOpen.current && !isNotificationDetailsOpen && !notificationsOpen) {
+      notificationsToggleRef.current?.focus({ preventScroll: true });
+    }
+    detailsWereOpen.current = isNotificationDetailsOpen;
+  }, [isNotificationDetailsOpen, notificationsOpen]);
   const filter = notificationsFilter;
   const setFilter = onNotificationsFilterChange;
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
@@ -1611,6 +1619,7 @@ export function MainScreen({
           <div className="notificationsCollapsedRail">
             <button
               className="iconButton notificationsToggleButton"
+              ref={notificationsToggleRef}
               type="button"
               aria-label={t("core.ui.notifications.aria_open", {}, "Open notifications")}
               title={t("core.ui.notifications.aria_open", {}, "Open notifications")}

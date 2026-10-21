@@ -211,6 +211,22 @@ export type PipelineReviewPanel = {
   render: (graph: unknown) => import("react").ReactNode;
 };
 
+/** Evidence for prepared pixels; receipt time does not certify physical exposure. */
+export type PipelineReferenceEvidence = {
+  source_identity: string;
+  preparation_revision: string;
+  sample: { capture_instance: string; generation: number; sequence: number };
+  observed_at: number;
+  freshness_basis: "capture" | "receipt";
+  historical_fallback: false;
+};
+
+export type PipelineReferenceFrame = { blob: Blob; evidence: PipelineReferenceEvidence; receipt: string };
+
+export type PipelineReferenceCapture =
+  | { available: true; capture: (signal?: AbortSignal) => Promise<PipelineReferenceFrame> }
+  | { available: false; reason: "read_only" | "remote_execution" | "invalid_graph" | "no_camera_source" | "no_camera_selected" | "no_pipeline_name" };
+
 export type PipelineOperatorPanel = {
   id: string;
   operatorId: string;
@@ -225,6 +241,8 @@ export type PipelineOperatorPanel = {
     /** Execution host chosen by this pipeline; older hosts may omit this field. */
     processingServerId?: string;
     cameraId?: string;
+    /** Optional host capability. Pending captures abort when this step or its inputs change. */
+    referenceCapture?: PipelineReferenceCapture;
     config: Record<string, unknown>;
     showAdvanced: boolean;
     purpose?: "automatic" | "manual";

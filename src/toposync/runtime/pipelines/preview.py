@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from copy import deepcopy
 import hashlib
 import json
 import time
@@ -295,16 +296,43 @@ def reference_capture_evidence(packet: Packet, pipeline: Pipeline, *, maximum_ag
                                    int(shape[1]), int(shape[0]), sample)
     if geometry is None:
         raise PipelinePreviewError("Reference image geometry does not match its capture.", code="reference_capture_geometry")
-    # This identifies the preparation, not the camera's physical PTZ pose.
-    preparation = json.dumps(pipeline.graph, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return {
         "source_identity": packet.stream_id,
-        "preparation_revision": hashlib.sha256(preparation.encode()).hexdigest(),
+        "preparation_revision": reference_preparation_revision(pipeline),
         "sample": sample,
         "observed_at": (time.time() if now_unix is None else now_unix) - freshness.age_seconds,
         "freshness_basis": "capture" if freshness.basis == "physical_capture" else "receipt",
         "historical_fallback": False,
     }
+
+
+def reference_preparation_revision(pipeline: Pipeline) -> str:
+    """Bind pixel preparation without invalidating examples for layout or cadence edits."""
+    graph = PipelineGraphV2Spec.model_validate(pipeline.graph)
+    _validate_reference_slice(pipeline, graph)
+    by_id = {node.id: node for node in graph.nodes}
+    outgoing = {edge.source.node: edge.target.node for edge in graph.edges}
+    current = next(node.id for node in graph.nodes if node.operator_id == "camera.source")
+    prepared = []
+    while current is not None:
+        node = by_id[current]
+        if node.operator_id not in _REFERENCE_SKIP | {"core.passthrough"}:
+            prepared.append({"operator": node.operator_id, "config": node.config})
+        current = outgoing.get(current)
+    # This revision identifies configuration, not physical PTZ pose or calibration validity.
+    try:
+        encoded = json.dumps(prepared, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except ValueError as error:
+        raise PipelinePreviewError("Reference preparation requires finite values.", code="invalid_graph") from error
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def freeze_reference_packet(packet: Packet) -> Packet:
+    """Keep copied pixels bound to their original evidence while encoding runs elsewhere."""
+    name, image = resolve_image_artifact_for_data(packet)
+    artifact = packet.artifacts[name]
+    return replace(packet, payload={"capture_evidence": dict(packet.payload["capture_evidence"])},
+                   artifacts={name: replace(artifact, data=image.copy(), metadata=deepcopy(artifact.metadata))})
 
 
 def resolve_preview_packet_image(packet: Packet) -> Any | None:

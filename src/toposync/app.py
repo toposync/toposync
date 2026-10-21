@@ -20,6 +20,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.responses import StreamingResponse
 from toposync.runtime.pipelines.inspection import PipelineInspectionStore
+from toposync.runtime.pipelines.capture_receipts import CaptureReceipts
 from toposync.runtime.pipelines.inspection_api import install_inspection_routes
 from toposync.runtime.pipelines.demands import ResourceDemandRegistry
 from toposync.runtime.pipelines.demand_api import install_demand_routes
@@ -103,6 +104,7 @@ from toposync.runtime.pipelines.telemetry import (
 from toposync.runtime.pipelines.preview import (
     PipelinePreviewError,
     build_preview_registry,
+    freeze_reference_packet,
     prepare_preview_pipeline,
     reference_capture_evidence,
     resolve_preview_packet_image,
@@ -1441,6 +1443,7 @@ async def _lifespan(app: FastAPI):
             prefer_latest=True,
         ),
     }
+    app.state.capture_receipts = CaptureReceipts()
     app.state.pipeline_preview_frame_limiter = _RequestConcurrencyLimiter(
         PIPELINE_PREVIEW_FRAME_CONCURRENCY,
         prefer_latest=True,
@@ -3773,8 +3776,9 @@ def create_app() -> FastAPI:
     ) -> Response:
         _require(request, action="core:pipelines:read")
         reference_capture = body.purpose == "reference"
+        reference_owner = None
         if reference_capture:
-            _inspection_owner(request)
+            reference_owner = _inspection_owner(request)
             _require(request, action="core:pipelines:write")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
@@ -3821,7 +3825,8 @@ def create_app() -> FastAPI:
                     except PipelinePreviewError as exc:
                         last_capture_issue = exc.code
                         return
-                    image = image.copy()
+                    packet = freeze_reference_packet(packet)
+                    image = resolve_preview_packet_image(packet)
                 captured_image.set_result((image, packet))
 
             deps = _build_preview_runtime_dependencies(request, pipeline=preview_pipeline, collector=_collector)
@@ -3857,10 +3862,10 @@ def create_app() -> FastAPI:
                         return fallback_response
                     raise HTTPException(
                         status_code=504,
-                        detail=last_capture_issue or (
+                        detail=last_capture_issue or ("reference_capture_timeout" if reference_capture else (
                             "Timed out waiting for a preview frame. Check the camera source or leave the pipeline "
                             "running until this point so a stored snapshot can be collected."
-                        ),
+                        )),
                     ) from exc
             finally:
                 await runtime.stop()
@@ -3884,7 +3889,7 @@ def create_app() -> FastAPI:
             blob, _ext, mime_type = await asyncio.to_thread(
                 _encode_image_bytes,
                 image,
-                fmt=str(body.format or "png"),
+                fmt="png" if reference_capture else str(body.format or "png"),
                 jpeg_quality=int(body.jpeg_quality),
             )
             capture_headers = {}
@@ -3894,6 +3899,11 @@ def create_app() -> FastAPI:
                 except PipelinePreviewError as exc:
                     raise HTTPException(status_code=409, detail=exc.code) from exc
                 capture_headers["X-Toposync-Capture-Evidence"] = json.dumps(evidence, separators=(",", ":"))
+                if len(blob) > 8 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="reference_capture_image_limit")
+                capture_headers["X-Toposync-Capture-Receipt"] = request.app.state.capture_receipts.issue(
+                    reference_owner, blob, evidence
+                )
             return Response(
                 content=blob,
                 media_type=mime_type,

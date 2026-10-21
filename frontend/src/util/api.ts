@@ -8,6 +8,7 @@ export type EmitEventResponse = {
 import { resolveToposyncUrl } from "@toposync/plugin-api";
 import type { CompositionElement } from "@toposync/plugin-api";
 import type { Notification } from "@toposync/plugin-api";
+import type { PipelineReferenceEvidence, PipelineReferenceFrame } from "@toposync/plugin-api";
 
 export type Composition = {
   id: string;
@@ -211,6 +212,7 @@ export type PipelinePreviewFallbackSnapshotRequest = {
 
 export type PipelinePreviewFrameRequest = {
   pipeline: Pipeline;
+  purpose?: "preview" | "reference";
   fallback_snapshot?: PipelinePreviewFallbackSnapshotRequest | null;
   timeout_seconds?: number;
   format?: "png" | "jpg" | "webp";
@@ -2495,7 +2497,12 @@ export async function fetchPipelinePreviewFrame(
   payload: PipelinePreviewFrameRequest,
   signal?: AbortSignal,
 ): Promise<Blob> {
-  const response = await fetch("/api/pipelines/preview/frame", {
+  const response = await fetchPipelinePreviewResponse(payload, signal);
+  return response.blob();
+}
+
+async function fetchPipelinePreviewResponse(payload: PipelinePreviewFrameRequest, signal?: AbortSignal): Promise<Response> {
+  const response = await fetch(resolveToposyncUrl("/api/pipelines/preview/frame"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -2505,7 +2512,38 @@ export async function fetchPipelinePreviewFrame(
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Preview failed: ${response.status}`);
   }
-  return response.blob();
+  return response;
+}
+
+export async function fetchPipelineReferenceFrame(
+  payload: PipelinePreviewFrameRequest,
+  signal?: AbortSignal,
+): Promise<PipelineReferenceFrame> {
+  const response = await fetchPipelinePreviewResponse({ ...payload, purpose: "reference", fallback_snapshot: null, format: "png" }, signal);
+  let evidence: PipelineReferenceEvidence;
+  try {
+    evidence = JSON.parse(response.headers.get("X-Toposync-Capture-Evidence") ?? "null");
+    const sample = evidence?.sample;
+    if (!evidence || typeof evidence.source_identity !== "string" || !evidence.source_identity.trim()
+        || evidence.source_identity.length > 200 || !/^[a-f0-9]{64}$/.test(evidence.preparation_revision)
+        || typeof sample?.capture_instance !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(sample.capture_instance)
+        || !Number.isSafeInteger(sample.generation) || sample.generation < 0
+        || !Number.isSafeInteger(sample.sequence) || sample.sequence <= 0
+        || !Number.isFinite(evidence.observed_at) || evidence.observed_at < 0
+        || !["capture", "receipt"].includes(evidence.freshness_basis) || evidence.historical_fallback !== false) {
+      throw new Error("Invalid capture evidence");
+    }
+  } catch {
+    throw new Error("reference_capture_evidence_invalid");
+  }
+  const blob = await response.blob();
+  signal?.throwIfAborted();
+  const receipt = response.headers.get("X-Toposync-Capture-Receipt") ?? "";
+  if (!receipt || receipt.length > 4096) throw new Error("reference_capture_receipt_invalid");
+  if (blob.type !== "image/png" || blob.size === 0 || blob.size > 8 * 1024 * 1024) {
+    throw new Error("reference_capture_image_invalid");
+  }
+  return { blob, evidence, receipt };
 }
 
 export async function listPipelineOperators(

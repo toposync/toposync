@@ -1,6 +1,8 @@
 import React from "react";
 import { GestureConfigCard, PersonGroundConfigCard, PointingConfigCard } from "./HumanMotionPanels";
 import type { PipelineOperatorPanel } from "@toposync/plugin-api";
+import { buildPipelineStepReferenceRequest } from "./pipelineStepSnapshots";
+import { usePipelineReferenceCapture } from "./pipelineReferenceCapture";
 
 import type { CameraContextsResponse, CamerasIndexResponse, PipelineOperatorDefinition } from "../../../../../util/api";
 import { i18n } from "../../../../../util/i18n";
@@ -58,6 +60,7 @@ type Props = {
   config: Record<string, unknown>;
   pipelineName: string | null;
   processingServerId: string;
+  readOnly?: boolean;
   onOpenProcessingServers?: () => void;
 
   interactiveCameraId: string;
@@ -407,10 +410,20 @@ function BuiltinOperatorConfigPanel({
 
 export function OperatorConfigPanel(props: Props): React.ReactElement | null {
   const panel = props.operatorPanels?.[props.step.operatorId];
+  const resolution = React.useMemo(() => buildPipelineStepReferenceRequest(
+    props.steps, props.index, props.pipelineName, props.step.nodeId, props.operatorsById,
+    props.processingServerId,
+  ), [props.steps, props.index, props.pipelineName, props.step.nodeId, props.operatorsById, props.processingServerId]);
+  const requestText = !props.readOnly && resolution.enabled ? JSON.stringify(resolution.request) : "";
+  const request = React.useMemo(() => requestText ? JSON.parse(requestText) : null, [requestText]);
+  const revision = JSON.stringify([requestText, props.step.uid, props.step.nodeId, props.config]);
+  const referenceCapture = usePipelineReferenceCapture(request, revision,
+    props.readOnly ? "read_only" : resolution.enabled ? "invalid_graph" : resolution.reason.code);
   const extension = panel?.render({
     i18n, operatorId: props.step.operatorId, stepUid: props.step.uid, nodeId: props.step.nodeId,
     processingServerId: props.processingServerId || "local", cameraId: props.interactiveCameraId,
     config: props.config, showAdvanced: props.showAdvanced,
+    referenceCapture,
     updateConfig: patch => props.onUpdateConfig(previous => ({ ...previous, ...patch })),
     replaceConfig: next => props.onUpdateConfig(() => next),
   });

@@ -11,7 +11,7 @@ from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines.image_geometry import image_geometry
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.preview import (
-    PipelinePreviewError, prepare_preview_pipeline, reference_capture_evidence,
+    PipelinePreviewError, prepare_preview_pipeline, reference_capture_evidence, reference_preparation_revision,
 )
 from toposync.runtime.pipelines.runtime import Artifact, Packet
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
@@ -91,6 +91,19 @@ def test_capture_returns_identity_and_preparation_without_inventing_physical_tim
     assert result["source_identity"] == "camera:synthetic"
 
 
+def test_preparation_revision_tracks_pixels_instead_of_layout_node_order_or_cadence():
+    request = pipeline("camera.source", "core.throttle", "camera.image_crop")
+    request.graph["nodes"][0]["config"] = {"camera_id": "actual", "source_id": "day"}
+    original = reference_preparation_revision(request)
+    request.graph["nodes"][1]["config"] = {"interval_seconds": 15}
+    request.graph["layout"] = {"nodes": {"n0": {"x": 100, "y": 100}}}
+    request.graph["revision"] = 10
+    request.graph["nodes"].reverse()
+    assert reference_preparation_revision(request) == original
+    request.graph["nodes"][0]["config"] = {"left": 20}
+    assert reference_preparation_revision(request) != original
+
+
 @pytest.mark.parametrize("mode", ["stale", "missing", "private", "geometry"])
 def test_invalid_capture_cannot_be_used_as_reference(mode):
     item = packet(age=2 if mode == "stale" else 0, private=mode == "private")
@@ -112,7 +125,10 @@ def test_api_reference_capture_returns_evidence_and_disables_side_effect_stores(
             captured_dependencies.append(dependencies)
 
         async def start(self):
-            await self.dependencies.preview_packet_collector(packet(), "sink", "capture")
+            captured = packet()
+            await self.dependencies.preview_packet_collector(captured, "sink", "capture")
+            captured.payload["capture_evidence"]["sequence"] = 99
+            captured.artifacts["main"].metadata["image_geometry"]["capture_evidence"]["sequence"] = 99
 
         async def stop(self):
             pass
@@ -123,7 +139,7 @@ def test_api_reference_capture_returns_evidence_and_disables_side_effect_stores(
         request = pipeline("camera.source")
         request.graph["nodes"][0]["config"] = {"rtsp_url": "rtsp://synthetic-never-opened"}
         response = client.post("/api/pipelines/preview/frame", json={
-            "pipeline": request.model_dump(), "purpose": "reference", "timeout_seconds": 0.5,
+            "pipeline": request.model_dump(), "purpose": "reference", "timeout_seconds": 0.5, "format": "jpg",
         })
     assert response.status_code == 200, response.text
     evidence = json.loads(response.headers["X-Toposync-Capture-Evidence"])

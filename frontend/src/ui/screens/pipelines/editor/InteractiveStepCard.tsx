@@ -362,6 +362,7 @@ export function InteractiveStepCard({
                 config={config}
                 pipelineName={pipelineName}
                 processingServerId={processingServerId}
+                readOnly={readOnly}
                 onOpenProcessingServers={onOpenProcessingServers}
                 interactiveCameraId={interactiveCameraId}
                 camerasIndex={camerasIndex}

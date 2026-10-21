@@ -68,6 +68,8 @@
   --color-action-background: #087873;
   --color-action-hover: #06645f;
   --color-action-text: #ffffff;
+  --color-action-danger-background: #b91c1c;
+  --color-action-danger-hover: #991b1b;
   --color-accent-teal: #0ea5a4;
   --color-accent-blue: #3b82f6;
   --gradient-accent: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));

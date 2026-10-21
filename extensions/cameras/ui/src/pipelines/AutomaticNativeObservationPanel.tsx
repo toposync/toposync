@@ -51,19 +51,19 @@ export function AutomaticNativeObservationPanel({ config, sources = [], observat
   }));
   useEffect(() => { validity.current?.(valid); }, [valid]);
   useEffect(() => () => validity.current?.(true), []);
-  return <div style={{ display: "grid", gap: 12 }}>
+  return <div className="formGrid">
     <label className="field"><span>{t("ext.cameras.automatic.native.mode")}</span><select className="input" value={enabled ? "native" : "continuous"} onChange={event => replaceConfig({ enabled: event.target.value === "native", sources: {}, categories: observationCategories, fallback_to_video: false })}>
       <option value="continuous">{t("ext.cameras.automatic.native.continuous")}</option>
       <option value="native">{t("ext.cameras.automatic.native.qualified")}</option>
     </select></label>
     {enabled && <>
-      <label><input type="checkbox" checked={config.fallback_to_video === true} onChange={event => replaceConfig({ ...config, fallback_to_video: event.target.checked })} /> {t("ext.cameras.automatic.native.fallback")}</label>
+      <label className="formChoice"><input type="checkbox" checked={config.fallback_to_video === true} onChange={event => replaceConfig({ ...config, fallback_to_video: event.target.checked })} /> {t("ext.cameras.automatic.native.fallback")}</label>
       {!matchingCategories && <p role="status">{t("ext.cameras.automatic.native.categories_changed")}</p>}
       {error ? <p role="alert">{t("ext.cameras.onvif.error")}</p> : !index ? <p role="status">{t("ext.cameras.onvif.loading")}</p> : sources.map(source => {
         const camera = index.cameras.find(item => item.id === source.camera_id);
         const binding = bindings[source.camera_id];
         const value = matchingCategories && binding?.source_id === source.source_id ? binding.signal : undefined;
-        return <fieldset key={`${source.camera_id}/${source.source_id}/${categories}`}><legend>{source.camera_name} · {source.source_name}</legend>
+        return <fieldset className="formSection" key={`${source.camera_id}/${source.source_id}/${categories}`}><legend>{source.camera_name} · {source.source_name}</legend>
           {camera ? <CameraOnvifRecipeOptimization automaticWindow camera={{ ...camera, enabled: true, control: camera.control || { type: "none" }, sources: camera.sources || [] }} sourceId={source.source_id} preset="people_simple" processingServerId="local" value={value} disabled={false} t={t}
             onPendingChange={next => setPending(previous => previous[source.camera_id] === next ? previous : { ...previous, [source.camera_id]: next })}
             onChange={(signal, profileToken) => {

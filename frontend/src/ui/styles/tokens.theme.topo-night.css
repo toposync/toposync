@@ -1,5 +1,6 @@
 :root[data-toposync-base-theme="topo-night"],
 :root[data-toposync-theme="topo-night"] {
+  color-scheme: dark;
   --color-application-background: #060914;
   --color-application-background-secondary: #0b1020;
 

@@ -5502,28 +5502,33 @@ video {
 }
 
 .settingsTab {
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(12, 18, 37, 0.36);
-  color: rgba(230, 232, 242, 0.92);
+  min-height: var(--control-height-m);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-frost);
+  color: var(--color-text-primary);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: var(--shadow-inner-highlight);
 }
 
 .settingsTab:hover {
-  border-color: rgba(255, 255, 255, 0.22);
-  background: rgba(15, 23, 48, 0.46);
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-frost-strong);
 }
 
 .settingsTab.isSelected {
-  border-color: rgba(251, 191, 36, 0.55);
-  background: rgba(251, 191, 36, 0.14);
-  color: rgba(255, 244, 210, 0.92);
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-background-strong);
+  color: var(--color-text-primary);
+}
+
+.settingsTab:focus-visible {
+  outline: 2px solid var(--color-action-background);
+  outline-offset: 2px;
 }
 
 .settingsSplit {
@@ -6053,11 +6058,21 @@ video {
   gap: 12px;
 }
 
+.streamingLiveHeroCard .settingsDetailHeader {
+  flex-wrap: wrap;
+}
+
+.streamingLiveHeroCard .settingsDetailHeader > :first-child {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
 .streamingLiveHeroMetrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(80px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  min-width: min(100%, 300px);
+  flex: 1 1 300px;
+  min-width: 0;
 }
 
 .streamingLiveHeroMetrics > div {
@@ -6866,7 +6881,6 @@ video {
     grid-template-columns: 1fr;
   }
 
-  .streamingLiveHeroMetrics,
   .streamingCameraSummaryItem,
   .streamingPlaybackVariant {
     grid-template-columns: 1fr;
@@ -7921,8 +7935,8 @@ video {
 .layerMainButton:focus-visible,
 .layerDeleteButton:focus-visible,
 .compositionSelectButton:focus-visible {
-  outline: none;
-  outline-offset: 0;
+  outline: 2px solid var(--color-action-background);
+  outline-offset: 2px;
 }
 
 :where(button, input, textarea, select) {
@@ -8303,25 +8317,17 @@ label.chipButton {
 .pillButtonDanger,
 .iconButtonDanger,
 .layerDeleteButton {
-  color: var(--color-text-inverted);
-  border-color: color-mix(in srgb, var(--color-danger) 46%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-danger) 84%, white),
-    color-mix(in srgb, var(--color-danger) 68%, black)
-  );
+  color: var(--color-action-text);
+  border-color: var(--color-action-danger-background);
+  background: var(--color-action-danger-background);
 }
 
 .dangerButton:hover:not(:disabled):not([aria-disabled="true"]),
 .pillButtonDanger:hover:not(:disabled):not([aria-disabled="true"]),
 .iconButtonDanger:hover:not(:disabled):not([aria-disabled="true"]),
 .layerDeleteButton:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: color-mix(in srgb, var(--color-danger) 68%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-danger) 90%, white),
-    color-mix(in srgb, var(--color-danger) 72%, black)
-  );
+  border-color: var(--color-action-danger-hover);
+  background: var(--color-action-danger-hover);
   box-shadow: var(--shadow-elevation-3), inset 0 1px 0 rgba(255, 255, 255, 0.18);
   transform: translateY(var(--hover-translate-y));
 }
@@ -8389,6 +8395,85 @@ select {
 .pipelinesTextArea {
   font-family: var(--font-family-mono);
   font-variant-numeric: tabular-nums;
+}
+
+.formGrid,
+.formSection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.formSection {
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-frost);
+}
+
+.formSection > legend {
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-14);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.formGrid > :is(h3, h4, p),
+.formSection > :is(h3, h4, p),
+:is(.formGrid, .formSection) .field {
+  margin: 0;
+}
+
+:is(.formGrid, .formSection) .field,
+:is(.formGrid, .formSection) .input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+:is(.formGrid, .formSection) .input {
+  width: 100%;
+}
+
+.formChoice:not([hidden]) {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-height-s);
+  padding-block: var(--space-2);
+  line-height: var(--line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.formChoice > :is(input[type="checkbox"], input[type="radio"]) {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--color-action-background);
+}
+
+.formActions,
+.formChoices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+:is(.formGrid, .formSection, .pipelineInspectionPanel) :is(.chipButton, .primaryButton) {
+  justify-self: start;
+  min-height: var(--control-height-m);
+  height: auto;
+  max-width: 100%;
+  padding-block: var(--space-2);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .pipelinesTextarea {
@@ -8470,9 +8555,9 @@ select {
 .notificationsToggleBadge,
 .main2dMarkerClusterCount,
 .pillBadge {
-  border: 1px solid color-mix(in srgb, var(--color-accent-border) 55%, transparent);
-  background: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));
-  color: var(--color-text-inverted);
+  border: 1px solid var(--color-action-background);
+  background: var(--color-action-background);
+  color: var(--color-action-text);
 }
 
 .main2dMarkerButton {
@@ -8880,7 +8965,7 @@ button:disabled,
 [role="button"][aria-disabled="true"],
 a[aria-disabled="true"] {
   cursor: not-allowed !important;
-  opacity: 0.55 !important;
+  opacity: 1 !important;
   filter: grayscale(1) !important;
   background: var(--color-surface-solid) !important;
   color: var(--color-text-muted) !important;

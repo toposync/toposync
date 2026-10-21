@@ -58,7 +58,7 @@ export function RecognitionPolicyPanel({ i18n, config, updateConfig, onValidityC
     <p>{text("These values describe your calibration protocol, not probabilities. Changing a model requires a new calibration. No model is installed or run here.", "Estes valores descrevem seu protocolo de calibração, não probabilidades. Trocar o modelo exige nova calibração. Nenhum modelo é instalado ou executado aqui.")}</p>
     {error && <p role="alert">{text("Could not load model options.", "Não foi possível carregar as opções de modelo.")} <button type="button" className="chipButton" onClick={() => setReload(value => value + 1)}>{text("Try again", "Tentar novamente")}</button></p>}
     {!policies.length && <RecognitionPolicySummary i18n={i18n} config={config} />}
-    {policies.map((policy, index) => <fieldset key={index} style={{ minWidth: 0 }}>
+    {policies.map((policy, index) => <fieldset key={index} className="formSection">
       <legend>{text("Recognition calibration", "Calibração de reconhecimento")} {index + 1}</legend>
       <label className="field"><span>{text("Species and model", "Espécie e modelo")}</span><select className="input" value={`${policy.species}/${policy.embedding_space}`} onChange={event => {
         const choice = choices.find(item => `${item.species}/${item.embedding_space}` === event.target.value);
@@ -69,7 +69,7 @@ export function RecognitionPolicyPanel({ i18n, config, updateConfig, onValidityC
       </select></label>
       <label className="field"><span>{text("Calibration reference / revision", "Referência / revisão da calibração")}</span><input className="input" required maxLength={512} value={policy.calibration_revision || ""} onChange={event => change(index, { ...policy, calibration_revision: event.target.value })} /></label>
       {numericFields.map(([key, minimum, maximum, en, br]) => <label className="field" key={key}><span>{pt ? br : en}</span><input className="input" type="number" required min={minimum} max={maximum} step="any" value={typeof policy[key] === "number" && Number.isFinite(policy[key]) ? policy[key] as number : ""} onChange={event => change(index, { ...policy, [key]: event.target.value === "" ? undefined : event.target.valueAsNumber })} /></label>)}
-      <label><input type="checkbox" checked={policy.automatic_enabled === true} onChange={event => change(index, { ...policy, automatic_enabled: event.target.checked })} /> {text("Allow automatic confirmation using this calibration", "Permitir confirmação automática com esta calibração")}</label>
+      <label className="formChoice"><input type="checkbox" checked={policy.automatic_enabled === true} onChange={event => change(index, { ...policy, automatic_enabled: event.target.checked })} /> {text("Allow automatic confirmation using this calibration", "Permitir confirmação automática com esta calibração")}</label>
       <button type="button" className="chipButton" onClick={() => updateConfig({ policies: policies.filter((_, current) => current !== index) })}>{text("Remove policy", "Remover política")}</button>
     </fieldset>)}
     {!valid && <p role="alert">{text("Complete each calibration. The suggestion threshold cannot exceed acceptance; each species/model pair must be unique.", "Complete cada calibração. O limite de sugestão não pode superar o de aceitação; cada par de espécie/modelo deve ser único.")}</p>}

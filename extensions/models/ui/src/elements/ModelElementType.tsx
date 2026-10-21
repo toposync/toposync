@@ -288,7 +288,7 @@ function ModelEditor({ element, update, remove, close, i18n }: ModelEditorProps)
       <details>
         <summary style={{ minHeight: 44, padding: "12px 0", boxSizing: "border-box", cursor: "pointer" }}>{t("ext.models.editor.advanced")}</summary>
         <form onSubmit={(event) => { event.preventDefault(); void applyOrientation(); }}>
-          <fieldset disabled={orienting} style={{ border: 0, padding: 0, margin: 0 }}>
+          <fieldset disabled={orienting} className="formSection">
             <legend>{t("ext.models.editor.orientation")}</legend>
             <div className="rowWrap">
               {(["x", "z", "y"] as const).map(axis => <div className="field" key={axis} style={{ flex: 1, minWidth: 140 }}>

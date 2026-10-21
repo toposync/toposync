@@ -74,16 +74,16 @@ export function PipelineInspectionPanel({ transmissionId, playerElement, onPaire
       setOpen(true);
     }}><Icon name="eye" /></button>
     {open ? createPortal(<aside className={`pipelineInspectionPanel${selected.length > 1 ? " isMultiple" : ""}`} aria-label={t("inspection.open")}>
-      <button type="button" autoFocus onClick={close}>{t("inspection.close")}</button>
+      <button className="chipButton" type="button" autoFocus onClick={close}>{t("inspection.close")}</button>
       <h2>{t("inspection.open")}</h2>
       <p className="pipelineInspectionLimit">{t("inspection.multiple_limit")}</p>
-      {configuredCameras.length > 0 ? <details><summary>{t("inspection.configured_cameras")}</summary><fieldset className="pipelineInspectionChoices"><legend>{t("inspection.configured_cameras")}</legend>
-        {configuredCameras.map(camera => <label key={camera.id}><input type="checkbox" checked={cameras.includes(camera.id)} onChange={event =>
+      {configuredCameras.length > 0 ? <details><summary>{t("inspection.configured_cameras")}</summary><fieldset className="formSection pipelineInspectionChoices"><legend>{t("inspection.configured_cameras")}</legend>
+        {configuredCameras.map(camera => <label className="formChoice" key={camera.id}><input type="checkbox" checked={cameras.includes(camera.id)} onChange={event =>
           setCameras(previous => event.target.checked ? [...previous, camera.id] : previous.filter(id => id !== camera.id))} />{camera.name}</label>)}
         <small>{t("inspection.camera_filter")}</small>
       </fieldset></details> : null}
-      <fieldset className="pipelineInspectionChoices"><legend>{t("inspection.choose_multiple")}</legend>
-        {choices.map(pipeline => <label key={pipeline.name}><input type="checkbox" checked={selected.includes(pipeline.name)}
+      <fieldset className="formSection pipelineInspectionChoices"><legend>{t("inspection.choose_multiple")}</legend>
+        {choices.map(pipeline => <label className="formChoice" key={pipeline.name}><input type="checkbox" checked={selected.includes(pipeline.name)}
           disabled={!selected.includes(pipeline.name) && selected.length >= 4} onChange={event => {
             setSelected(previous => event.target.checked ? [...previous, pipeline.name] : previous.filter(name => name !== pipeline.name));
             if (event.target.checked && !focused) setFocused(pipeline.name);
@@ -208,18 +208,18 @@ function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChang
   };
   return <article className="pipelineInspectionFlow" ref={article}>
     <h3>{pipeline.display_name || pipeline.name}</h3>
-    <button type="button" onClick={onRemove}>{t("inspection.remove_flow")}</button>
-    {onFocus && publications.some(node => node.config?.transmission_id === transmissionId) ? <button type="button" onClick={onFocus}>{t("inspection.show_in_player")}</button> : null}
+    <button className="chipButton" type="button" onClick={onRemove}>{t("inspection.remove_flow")}</button>
+    {onFocus && publications.some(node => node.config?.transmission_id === transmissionId) ? <button className="chipButton" type="button" onClick={onFocus}>{t("inspection.show_in_player")}</button> : null}
     <p className="pipelineInspectionLimit">{t(publication ? "inspection.paired_video" : "inspection.frame")}</p>
     {sources.length ? <p>{t("inspection.sources")}: {sources.join(" · ")}</p> : null}
     {!inPlayer && publication ? <div className="pipelineInspectionPreview" ref={preview} /> : null}
     {!onscreen ? <p>{t("inspection.suspended")}</p> : error ? <p role="alert">{t("inspection.failed")}</p> : loading ? <p role="status">{t("inspection.loading")}</p> : !snapshot ? <p>{t("inspection.waiting")}</p> : null}
       {snapshot && <details className="pipelineInspectionLayers"><summary>{t("inspection.layers")}</summary><div className="pipelineInspectionControls">
-        <label><input type="checkbox" checked={boxes} onChange={event => setBoxes(event.target.checked)} />{t("inspection.boxes")}</label>
-        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding", "groups", "gestures", "mapping", "zones", "motion", "activity"].map(layer => <label key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
+        <label className="formChoice"><input type="checkbox" checked={boxes} onChange={event => setBoxes(event.target.checked)} />{t("inspection.boxes")}</label>
+        {["pose", "tracks", "trails", "masks", "faces", "identity", "embedding", "groups", "gestures", "mapping", "zones", "motion", "activity"].map(layer => <label className="formChoice" key={layer}><input type="checkbox" checked={layers.has(layer)} onChange={event => {
           const next = new Set(layers); if (event.target.checked) next.add(layer); else next.delete(layer); setLayers(next);
         }} />{t(`inspection.${layer}`)}</label>)}
-        {paired && <button type="button" aria-pressed={frozen} onClick={() => { setFrozenAt(Date.now()); setFrozen(!frozen); }}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>}
+        {paired && <button className="chipButton" type="button" aria-pressed={frozen} onClick={() => { setFrozenAt(Date.now()); setFrozen(!frozen); }}>{t(frozen ? "inspection.resume" : "inspection.freeze")}</button>}
         {[...layers].filter(layer => !snapshot.nodes.some(node => node.expires_at !== null && node.expires_at * 1000 > now && (layer === "motion" ? node.motion : node.visuals.some(visual => visual.layer === layer)))).map(layer =>
           <small key={layer}>{t("inspection.layer_unavailable", { layer: t(`inspection.${layer}`) })}</small>)}
       </div></details>}
@@ -241,7 +241,7 @@ function InspectionFlow({ pipeline, transmissionId, playerElement, onPairedChang
             const expired = node.expires_at !== null && node.expires_at * 1000 <= (frozen && paired ? frozenAt : now);
             const state = expired ? "expired" : node.state;
             return <article className="pipelineInspectionNode" key={node.node_id}>
-              <label><input type="checkbox" checked={!selectedNodes || selectedNodes.has(node.node_id)} onChange={event => {
+              <label className="formChoice"><input type="checkbox" checked={!selectedNodes || selectedNodes.has(node.node_id)} onChange={event => {
                 const next = new Set(selectedNodes || snapshot.nodes.map(value => value.node_id));
                 if (event.target.checked) next.add(node.node_id); else next.delete(node.node_id);
                 setSelectedNodes(next);

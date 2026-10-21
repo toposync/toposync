@@ -108,6 +108,43 @@ class _MediaMtxApiClientStub:
         return dict(self.viewers_by_path)
 
 
+def test_disabled_engine_preserves_declared_pipeline_preview_without_publishers() -> None:
+    async def scenario() -> None:
+        payload = {
+            "engine": {"enabled": False},
+            "transmissions": [{"id": "preview", "path": "preview", "enabled": True}],
+        }
+        runtime = TransmissionRuntimeState(monotonic=lambda: 100.0)
+        publisher = _PublisherManagerStub()
+        publisher.started.add("preview:main")
+        engine = _EngineManagerStub()
+        bridge = StreamWriterBridge(
+            config_store=_ConfigStoreStub(payload), engine_manager=engine,
+            runtime_state=runtime, publisher_manager=publisher,
+            logger=SimpleNamespace(exception=lambda *args, **kwargs: None),
+        )
+        frame = numpy.zeros((2, 2, 3), dtype=numpy.uint8)
+        for transmission in ("preview", "removed"):
+            await runtime.update_writer_frame(
+                transmission_id=transmission, writer_id="pipeline:publish_video",
+                lifecycle_state=Lifecycle.UPDATE, writer_priority=0, frame=frame, frame_ts=100.0,
+            )
+        await runtime.update_output_viewer_count(output_key="preview:main", transmission_id="preview", viewer_count=1)
+        for now in (100.0, 100.5):
+            await bridge._tick_once(now)
+            selected = await runtime.get_selected_writer_frame("preview")
+            assert selected.frame is not None
+            numpy.testing.assert_array_equal(selected.frame, frame)
+        assert (await runtime.get_selected_writer_frame("removed")).frame is None
+        assert await runtime.get_viewer_count_by_output() == {}
+        assert publisher.started == set()
+        assert publisher.stop_calls == ["preview:main"]
+        assert publisher.start_calls == []
+        assert engine.ensure_running_calls == 0
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("fps", [15, 30, 60])
 def test_writer_loop_delivers_configured_cadence_above_ten_frames_per_second(monkeypatch, fps) -> None:
     sent, _, _ = asyncio.run(_writer_loop_clock_scenario(monkeypatch, fps=fps))

@@ -156,15 +156,23 @@ class VisualReferenceStore:
         references = []
         for category in config.classes:
             for reference_id in category.reference_ids:
-                reference = self._reference(reference_id)
-                if (reference.class_id != category.class_id or reference.status != "confirmed"
-                        or reference.evidence.source_identity != config.source_identity
-                        or reference.evidence.preparation_revision != config.preparation_revision
-                        or (config.region_id is not None and not reference.evidence.prepared_region)):
-                    raise ReferenceConflict("reference is incompatible with configuration")
-                self._read_image(reference)
+                self.read_configured_reference(config, category.class_id, reference_id)
                 references.append(reference_id)
         return references
+
+    def read_configured_reference(
+        self, config: VisualStateConfig, class_id: str, reference_id: str,
+    ) -> tuple[StoredReference, bytes]:
+        with self._lock:
+            if not any(category.class_id == class_id and reference_id in category.reference_ids for category in config.classes):
+                raise ReferenceConflict("reference is not configured for this class")
+            reference = self._reference(reference_id)
+            if (reference.class_id != class_id or reference.status != "confirmed"
+                    or reference.evidence.source_identity != config.source_identity
+                    or reference.evidence.preparation_revision != config.preparation_revision
+                    or (config.region_id is not None and not reference.evidence.prepared_region)):
+                raise ReferenceConflict("reference is incompatible with configuration")
+            return reference, self._read_image(reference)
 
     def create_draft(self, config: VisualStateConfig, *, lifetime_seconds: int = 3600) -> ReferenceDraft:
         if type(lifetime_seconds) is not int or not 1 <= lifetime_seconds <= 86400:

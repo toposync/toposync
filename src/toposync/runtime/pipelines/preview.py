@@ -279,14 +279,41 @@ def _validate_reference_slice(pipeline: Pipeline, graph: PipelineGraphV2Spec) ->
             raise PipelinePreviewError("Reference capture requires a stable prepared region.", code="reference_capture_region")
 
 
+def reference_input_pipeline(pipeline: Pipeline, node_id: str) -> Pipeline:
+    """Select one unambiguous upstream path without executing the target or its siblings."""
+    graph = PipelineGraphV2Spec.model_validate(pipeline.graph)
+    by_id = {node.id: node for node in graph.nodes}
+    if node_id not in by_id:
+        raise PipelinePreviewError("Reference target is absent.", code="reference_target_missing")
+    selected = set()
+    current = node_id
+    while True:
+        incoming = [edge for edge in graph.edges if edge.target.node == current]
+        if not incoming:
+            break
+        if len(incoming) != 1 or incoming[0].source.node in selected or incoming[0].source.node == node_id:
+            raise PipelinePreviewError("Reference input must have one acyclic path.", code="reference_input_ambiguous")
+        current = incoming[0].source.node
+        selected.add(current)
+    result = pipeline.model_copy(update={"graph": {
+        "schema_version": 2, "uid": graph.uid,
+        "nodes": [node for node in pipeline.graph["nodes"] if node["id"] in selected],
+        "edges": [edge for edge in pipeline.graph["edges"]
+                  if edge["from"]["node"] in selected and edge["to"]["node"] in selected],
+    }})
+    reference_preparation_revision(result)
+    return result
+
+
 def reference_capture_evidence(packet: Packet, pipeline: Pipeline, *, maximum_age_ms: int = 750,
+                               input_artifact_name: str = "main",
                                now_monotonic: float | None = None, now_unix: float | None = None) -> dict[str, Any]:
     """Evidence for a local capture; no envelope timestamp or stored-image fallback."""
     freshness = resolve_frame_freshness(packet, local_monotonic_clock=True,
                                         now_monotonic=now_monotonic, now_unix=now_unix)
     if freshness.age_seconds is None or freshness.age_seconds * 1000 > maximum_age_ms:
         raise PipelinePreviewError("Reference image lacks current capture evidence.", code="reference_capture_stale")
-    artifact_name, image = resolve_image_artifact_for_data(packet)
+    artifact_name, image = resolve_image_artifact_for_data(packet, input_artifact_name=input_artifact_name)
     shape = getattr(image, "shape", ())
     if len(shape) < 2 or shape[0] * shape[1] > 4_194_304:
         raise PipelinePreviewError("Reference image is missing or exceeds pixel limits.", code="reference_capture_image")
@@ -328,9 +355,9 @@ def reference_preparation_revision(pipeline: Pipeline) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def freeze_reference_packet(packet: Packet) -> Packet:
+def freeze_reference_packet(packet: Packet, *, input_artifact_name: str = "main") -> Packet:
     """Keep copied pixels bound to their original evidence while encoding runs elsewhere."""
-    name, image = resolve_image_artifact_for_data(packet)
+    name, image = resolve_image_artifact_for_data(packet, input_artifact_name=input_artifact_name)
     artifact = packet.artifacts[name]
     return replace(packet, payload={"capture_evidence": dict(packet.payload["capture_evidence"])},
                    artifacts={name: replace(artifact, data=image.copy(), metadata=deepcopy(artifact.metadata))})

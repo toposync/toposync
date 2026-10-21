@@ -84,6 +84,7 @@ class VisualStateConfig(VisualStateModel):
     reference_revision: Revision
     model_revision: Revision
     input_artifact_name: Name = "main"
+    evaluation_interval_ms: int = Field(default=250, strict=True, ge=50, le=60_000)
     classes: tuple[VisualStateClass, ...] = Field(min_length=2, max_length=32)
     strategy: Literal["examples", "fallback", "direct"] = "examples"
     model_id: Name | None = None
@@ -117,6 +118,8 @@ class VisualStateConfig(VisualStateModel):
 
     def validate_activation(self) -> None:
         """Drafts may lack examples/resources; activation must not silently fill them."""
+        if self.sensor_id == "unconfigured":
+            raise ValueError("activation requires an individual sensor identifier")
         if self.source_identity is None:
             raise ValueError("activation requires a verified source and preparation")
         active = [item for item in self.classes if item.enabled]

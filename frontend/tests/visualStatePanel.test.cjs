@@ -20,8 +20,9 @@ const model = load('visualState.ts');
 const fresh = () => model.newVisualConfiguration(index => `Estado ${index}`);
 const evidence = { source_identity: 'camera:synthetic', preparation_revision: 'revision', prepared_region: true };
 
-test('opening an empty readonly panel does not silently initialize persisted configuration', () => {
-  for (const readonly of [true, false]) {
+test('empty and catalog-default panels initialize unique identities only when editable', () => {
+  const identities = new Set();
+  for (const readonly of [true, false]) for (const config of [{}, { sensor_id: 'unconfigured', classes: [] }]) {
     const effects = [], changes = [];
     const react = {
       createElement: (type, properties, ...children) => ({ type, properties, children }),
@@ -31,11 +32,17 @@ test('opening an empty readonly panel does not silently initialize persisted con
     };
     const panel = load('VisualStatePanel.tsx', { react: { ...react, default: react },
       '@toposync/plugin-api': {}, './api': {}, './visualState': model, './styles': { styles: '' } });
-    panel.VisualStatePanel({ config: {}, replaceConfig: value => changes.push(value),
+    panel.VisualStatePanel({ config, replaceConfig: value => changes.push(value),
       i18n: { useI18n: () => ({ t: key => key }) },
       referenceCapture: readonly ? { available: false, reason: 'read_only' } : undefined });
     effects.forEach(effect => effect());
     assert.equal(changes.length, readonly ? 0 : 1);
+    if (!readonly) {
+      assert.notEqual(changes[0].sensor_id, 'unconfigured');
+      assert.equal(changes[0].classes.length, 2);
+      assert.ok(!identities.has(changes[0].sensor_id));
+      identities.add(changes[0].sensor_id);
+    }
   }
 });
 

@@ -14,6 +14,7 @@ First-party extension focused on public task-oriented vision operators for the P
 - `vision.segment_instances`
 - `vision.pose_estimate` (experimental MediaPipe Pose 33 and RTMPose-M Halpe26 backends)
 - `vision.gesture_recognize` (experimental temporal body gestures)
+- `vision.visual_state` (experimental local comparison with private reference images)
 
 The public surface is task-based, not vendor-based. The official first-party runtime is ONNX Runtime, with CPU as the default execution path.
 
@@ -35,7 +36,7 @@ does not prove physical camera latency or synchronized remote clocks.
 
 ## Visual reference API
 
-The visual sensor foundation exposes `/api/vision/visual-state/drafts` for creating and reading draft class configurations. `PUT /drafts/{draft_id}` requires the current `expected_revision`; removing a reference from the configuration is a logical removal, and reattaching its identifier supports undo while the draft remains valid. Drafts expire after one hour. The sensor operator and class gallery are not yet exposed in the product.
+The visual sensor foundation exposes `/api/vision/visual-state/drafts` for creating and reading draft class configurations. `PUT /drafts/{draft_id}` requires the current `expected_revision`; removing a reference from the configuration is a logical removal, and reattaching its identifier supports undo while the draft remains valid. Drafts expire after one hour. The experimental operator has a class gallery; local activation also requires an explicit image embedding manifest, its verified revision, and calibrated comparison parameters. No model or accuracy threshold is selected implicitly. Multimodal fallback and direct analysis are not yet executable.
 
 Reference capture uses the host preview endpoint with `purpose: "reference"`. It accepts a restricted local camera path, preserves privacy controls, and returns PNG pixels, capture evidence and an opaque receipt. The receipt binds the exact bytes, authenticated user and preparation to the server process for 60 seconds. Restarting the process invalidates pending receipts. Receipt timing does not certify physical camera exposure or PTZ pose.
 
@@ -57,8 +58,32 @@ reopening an incomplete gallery reports an error. Expired drafts can be collecte
 without deleting saved references. Superseded pipeline references are currently
 retained conservatively, including after pipeline deletion, and continue to count
 toward storage limits. Automatic retention reconciliation and consistent backup
-and restore are still pending. The runtime operator is not yet registered in the
-public catalog; these storage guarantees do not constitute a working sensor.
+and restore are still pending.
+
+### Local execution
+
+The operator currently accepts a saved local pipeline with one supported camera
+preparation path. Its preparation revision must match the references. Input pixels
+must have current capture identity and matching image geometry; packet lifecycle
+`OPEN` and `CLOSE` do not identify physical classes. Source/capture changes restart
+confirmation, and every runtime restart begins without a current value.
+
+One native inference and one latest pending image are retained per sensor. The
+default evaluation interval is 250 milliseconds; the state is checked every
+50 milliseconds independently of inference. Output is `payload.visual_state`,
+without image artifacts, and includes status, current class or null, evidence
+revisions, capture identity and remaining validity. Consumers must honor that
+validity; publication time cannot renew old evidence. Native work can finish after
+cancellation, but retains its execution slot until then and cannot publish a late
+result. A blocked native library cannot be forcibly stopped by a Python thread.
+
+ONNX Runtime platform telemetry is disabled before discovery or session creation
+through the shared loader. Application diagnostics remain separate from this
+SDK telemetry setting.
+
+These mechanisms and synthetic tests do not qualify accuracy, physical capture
+latency, PTZ alignment or safety of an alarm or gate. Model selection, the integrated
+test workflow, multimodal strategies and Home Assistant publication remain in progress.
 
 ## Dependencies
 

@@ -12,6 +12,7 @@ from toposync.runtime.pipelines.image_geometry import image_geometry
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.pipelines.preview import (
     PipelinePreviewError, prepare_preview_pipeline, reference_capture_evidence, reference_preparation_revision,
+    reference_input_pipeline,
 )
 from toposync.runtime.pipelines.runtime import Artifact, Packet
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
@@ -102,6 +103,24 @@ def test_preparation_revision_tracks_pixels_instead_of_layout_node_order_or_cade
     assert reference_preparation_revision(request) == original
     request.graph["nodes"][0]["config"] = {"left": 20}
     assert reference_preparation_revision(request) != original
+
+
+def test_runtime_input_revision_matches_capture_and_excludes_downstream_effects():
+    whole = pipeline("camera.source", "camera.image_crop", "vision.visual_state", "home_assistant.call_service")
+    prefix = reference_input_pipeline(whole, "n2")
+    assert [node["operator"] for node in prefix.graph["nodes"]] == ["camera.source", "camera.image_crop"]
+    expected = reference_preparation_revision(pipeline("camera.source", "camera.image_crop"))
+    assert reference_preparation_revision(prefix) == expected
+    whole.graph["nodes"][1]["config"] = {"left": 10}
+    assert reference_preparation_revision(reference_input_pipeline(whole, "n2")) != expected
+
+
+def test_runtime_reference_input_rejects_ambiguous_or_cyclic_ancestry():
+    request = pipeline("camera.source", "camera.image_crop", "vision.visual_state")
+    request.graph["edges"].append({**request.graph["edges"][1], "uid": "cycle",
+                                   "from": {"node": "n2", "port": "out"}})
+    with pytest.raises(PipelinePreviewError, match="acyclic"):
+        reference_input_pipeline(request, "n2")
 
 
 @pytest.mark.parametrize("mode", ["stale", "missing", "private", "geometry"])

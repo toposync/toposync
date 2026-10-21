@@ -23,7 +23,10 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const { t: translate } = i18n.useI18n();
   const t = (key: string, parameters?: Record<string, unknown>) => translate(`ext.vision.visualState.${key}`, parameters);
   const [initial] = useState(() => newVisualConfiguration(index => t("state", { index })));
-  const value = { ...initial, ...config } as VisualConfiguration;
+  const unconfigured = !config.sensor_id || config.sensor_id === "unconfigured";
+  const value = { ...initial, ...config, ...(unconfigured ? {
+    sensor_id: initial.sensor_id, reference_revision: initial.reference_revision, classes: initial.classes,
+  } : {}) } as VisualConfiguration;
   const [draft, setDraft] = useState<VisualDraft | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +44,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     return () => { active.current?.abort(); active.current = null; };
   }, [context, captureCallback]);
   useEffect(() => {
-    if (!readonly && !config.sensor_id) replaceConfig(value);
+    if (!readonly && unconfigured) replaceConfig(value);
   }, [config.sensor_id, readonly]);
   useEffect(() => { setDraft(null); setUndo(null); setPhoto(null); }, [value.sensor_id]);
 

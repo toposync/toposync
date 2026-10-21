@@ -2,6 +2,7 @@ export const onvifTranslations = {
   en: {
     "ext.cameras.onvif.window_settings": "Advanced observation window",
     "ext.cameras.onvif.hold_seconds": "Keep analysis after inactive (seconds)",
+    "ext.cameras.onvif.hold_seconds_invalid": "Enter a number from 0 to 300 seconds.",
     "ext.cameras.onvif.window_help": "Active keeps analysis running. Inactive starts this delay; a new activation cancels closing. Capture retains at least five seconds after its first usable frame. Connection failures resume normal processing.",
     "ext.cameras.onvif.transport.recovering": "Recovering the event connection",
     "ext.cameras.onvif.transport.observing": "Event reads working",
@@ -60,6 +61,7 @@ export const onvifTranslations = {
   "pt-BR": {
     "ext.cameras.onvif.window_settings": "Janela de observação avançada",
     "ext.cameras.onvif.hold_seconds": "Manter análise após inativo (segundos)",
+    "ext.cameras.onvif.hold_seconds_invalid": "Informe um número de 0 a 300 segundos.",
     "ext.cameras.onvif.window_help": "Ativo mantém a análise. Inativo inicia este prazo; uma nova ativação cancela o fechamento. A captura conserva pelo menos cinco segundos após o primeiro quadro utilizável. Falhas de conexão retomam o processamento normal.",
     "ext.cameras.onvif.transport.recovering": "Recuperando a conexão de eventos",
     "ext.cameras.onvif.transport.observing": "Leitura de eventos funcionando",

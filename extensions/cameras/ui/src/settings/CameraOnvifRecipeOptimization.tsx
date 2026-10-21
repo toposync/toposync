@@ -89,7 +89,7 @@ export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, proces
   if (processingServerId !== "local") return <p className="settingsStatusMuted">{t("ext.cameras.onvif.local")}</p>;
   if (camera.control.type !== "onvif") return <p className="settingsStatusMuted">{t("ext.cameras.onvif.manual")}</p>;
   return <div className="field" style={{ overflowWrap: "anywhere" }}>
-    {!automaticWindow && <label className="row"><input type="checkbox" checked={enabled} disabled={disabled || loading || !catalog} onChange={event => {
+    {!automaticWindow && <label className="formChoice"><input type="checkbox" checked={enabled} disabled={disabled || loading || !catalog} onChange={event => {
       setEnabled(event.target.checked); setGap(false); setObservationError(""); setSelection(""); setSelectedSignal(null); onChange(undefined); onPendingChange?.(event.target.checked);
     }} />{t("ext.cameras.onvif.optimize")}</label>}
     {loading ? <p role="status">{t("ext.cameras.onvif.loading")}</p> : null}
@@ -108,24 +108,33 @@ export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, proces
           placeholder="—" noOptionsMessage={() => t("ext.cameras.onvif.no_compatible_events")}
           formatOptionLabel={item => <div style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}><div>{item.label || item.item_name}</div><small>{item.topic} · {JSON.stringify(item.source)} · {JSON.stringify(item.key)}</small></div>}
           styles={{
-            control: base => ({ ...base, backgroundColor: "var(--color-surface-solid)", borderColor: "var(--color-border-subtle)" }),
+            control: (base, state) => ({
+              ...base, minHeight: 44, borderRadius: "var(--radius-control)", backgroundColor: "var(--color-surface-solid)",
+              borderColor: state.isFocused ? "var(--color-action-background)" : "var(--color-border-subtle)",
+              boxShadow: state.isFocused ? "0 0 0 2px var(--color-action-background)" : "none",
+              ":hover": { borderColor: state.isFocused ? "var(--color-action-background)" : "var(--color-border-strong)" },
+            }),
             menu: base => ({ ...base, backgroundColor: "var(--color-surface-solid)", zIndex: 50 }),
             singleValue: base => ({ ...base, color: "var(--color-text-primary)" }),
-            input: base => ({ ...base, color: "var(--color-text-primary)" }),
+            input: base => ({ ...base, color: "var(--color-text-primary)", "input:focus-visible": { boxShadow: "none" } }),
+            dropdownIndicator: base => ({ ...base, color: "var(--color-text-muted)", ":hover": { color: "var(--color-text-primary)" } }),
             option: (base, state) => ({ ...base, color: "var(--color-text-primary)", backgroundColor: state.isFocused || state.isSelected ? "var(--color-surface-frost-strong)" : "transparent" }),
           }}
           onChange={item => { setSelection(item ? identity(item) : ""); setSelectedSignal(item); onChange(undefined); onPendingChange?.(true); }} />
       </div>
       <details><summary>{t("ext.cameras.onvif.window_settings")}</summary><label className="field">
         <span>{t("ext.cameras.onvif.hold_seconds")}</span>
-        <input type="text" inputMode="decimal" maxLength={10} value={holdSeconds} aria-invalid={!validDuration} disabled={disabled} onChange={event => {
+        <input className="input" type="text" inputMode="decimal" maxLength={10} value={holdSeconds} aria-invalid={!validDuration}
+          aria-describedby={!validDuration ? `${selectId}-duration-error` : undefined} disabled={disabled} onChange={event => {
           const draft = event.target.value;
           setHoldSeconds(draft);
           const duration = Number(draft.replace(",", "."));
           if (draft.trim() && Number.isFinite(duration) && duration >= 0 && duration <= 300 && value) onChange({ ...value, hold_seconds: duration, coverage_confirmed: automaticWindow ? false : value.coverage_confirmed }, profile?.token);
         }} />
-      </label><p className="settingsDescription">{t(automaticWindow ? "ext.cameras.automatic.native.window" : "ext.cameras.onvif.window_help")}</p></details>
-      {selected && selectionAvailable ? <label className="row" style={{ alignItems: "flex-start" }}><input type="checkbox" checked={Boolean(value?.coverage_confirmed)} disabled={disabled || !validDuration} onChange={event => { onPendingChange?.(!event.target.checked); onChange(event.target.checked ? {
+      </label>
+        {!validDuration ? <p className="errorText" role="alert" id={`${selectId}-duration-error`}>{t("ext.cameras.onvif.hold_seconds_invalid")}</p> : null}
+        <p className="settingsDescription">{t(automaticWindow ? "ext.cameras.automatic.native.window" : "ext.cameras.onvif.window_help")}</p></details>
+      {selected && selectionAvailable ? <label className="formChoice"><input type="checkbox" checked={Boolean(value?.coverage_confirmed)} disabled={disabled || !validDuration} onChange={event => { onPendingChange?.(!event.target.checked); onChange(event.target.checked ? {
         topic: selected.topic, qualified_topic: selected.qualified_topic, item_name: selected.item_name,
         source: selected.source, key: selected.key, coverage_confirmed: true, hold_seconds: holdDuration,
       } : undefined, profile?.token); }} /><span>{t(automaticWindow ? "ext.cameras.automatic.native.qualify" : "ext.cameras.onvif.qualify")}</span></label> : null}

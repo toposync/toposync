@@ -7925,6 +7925,7 @@ video {
 
 .chipButton:focus-visible,
 .pillButton:focus-visible,
+input[type="file"]:focus-visible,
 .primaryButton:focus-visible,
 .dangerButton:focus-visible,
 .iconButton:focus-visible,
@@ -8208,7 +8209,8 @@ video {
 .elementTypeButton,
 .layerDeleteButton,
 .layerMainButton,
-.compositionSelectButton {
+.compositionSelectButton,
+input[type="file"]::file-selector-button {
   border: 1px solid var(--color-border-subtle);
   color: var(--color-text-primary);
   background: var(--color-surface-frost);
@@ -8226,12 +8228,26 @@ video {
 .chipButton,
 .pillButton,
 .primaryButton,
-.dangerButton {
+.dangerButton,
+input[type="file"]::file-selector-button {
   height: var(--control-height-m);
   padding: 0 var(--space-3);
   border-radius: var(--radius-pill);
   font-size: var(--font-size-13);
   font-weight: var(--font-weight-semibold);
+}
+
+input[type="file"] {
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px;
+  border-radius: var(--radius-control);
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: var(--space-2);
+  font-family: inherit;
+  cursor: pointer;
 }
 
 label.chipButton {
@@ -8269,6 +8285,7 @@ label.chipButton {
 }
 
 .chipButton:not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
+input[type="file"]:hover:not(:disabled)::file-selector-button,
 .pillButton:not(.pillButtonPrimary):not(.pillButtonDanger):not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
 .iconButton:not(.iconButtonPrimary):not(.iconButtonDanger):not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
 .sceneIconButton:hover:not(:disabled):not([aria-disabled="true"]),
@@ -8970,6 +8987,7 @@ select {
 
 /* Disabled controls retain their label and hit area, but never advertise an action. */
 button:disabled,
+input[type="file"]:disabled::file-selector-button,
 [role="button"][aria-disabled="true"],
 a[aria-disabled="true"] {
   cursor: not-allowed !important;

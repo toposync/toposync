@@ -1,7 +1,21 @@
 import type { TranslationBundle } from "@toposync/plugin-api";
 
+const visualSettingsMessages: Record<string, [string, string]> = {
+  budget_groups: ["Shared account budgets", "Orçamentos compartilhados da conta"],
+  budget_groups_help: ["Group profiles that use the same account. Their requests share these limits. Renaming a group preserves its identity and usage; no provider is queried here.", "Agrupe perfis que usam a mesma conta. Suas consultas compartilham estes limites. Renomear preserva identidade e consumo; nenhum provedor é consultado aqui."],
+  budget_group: ["Account budget", "Orçamento da conta"],
+  no_budget_group: ["No shared account group", "Sem grupo compartilhado da conta"],
+  add_budget_group: ["Add account budget", "Adicionar orçamento de conta"],
+  remove_budget_group: ["Remove account budget", "Remover orçamento de conta"],
+  budget_group_in_use: ["This group is assigned to profiles. Reassign them explicitly before removing it.", "Este grupo está atribuído a perfis. Reatribua-os explicitamente antes de removê-lo."],
+  multimodal_capability: ["Supports vision, multiple images and structured JSON", "Suporta visão, múltiplas imagens e JSON estruturado"],
+  multimodal_capability_help: ["Declare only capabilities supported by this model and provider. This setting does not verify model quality or execute a request.", "Declare apenas capacidades suportadas por este modelo e provedor. Este ajuste não verifica qualidade nem executa uma consulta."],
+  maximum_images: ["Maximum images per request, including current frame", "Máximo de imagens por consulta, incluindo quadro atual"],
+};
+
 export const aiTranslations: TranslationBundle = {
   en: {
+    ...Object.fromEntries(Object.entries(visualSettingsMessages).map(([key, value]) => [`ext.ai.settings.${key}`, value[0]])),
     "core.ui.pipelines.alerts.ai_provider_unavailable.message": "Ollama could not be checked from the selected processing server.",
     "core.ui.pipelines.alerts.ai_provider_unavailable.suggestion": "Review that server's Ollama connection before enabling this pipeline.",
     "core.ui.pipelines.alerts.ai_model_unavailable.message": "None of the selected models were found in the Ollama inventory queried by the processing server.",
@@ -242,6 +256,7 @@ export const aiTranslations: TranslationBundle = {
     "ext.ai.operator.condition.failure.pass": "Pass through",
   },
   "pt-BR": {
+    ...Object.fromEntries(Object.entries(visualSettingsMessages).map(([key, value]) => [`ext.ai.settings.${key}`, value[1]])),
     "core.ui.pipelines.alerts.ai_provider_unavailable.message": "Não foi possível consultar o Ollama a partir do servidor de processamento selecionado.",
     "core.ui.pipelines.alerts.ai_provider_unavailable.suggestion": "Revise a conexão com o Ollama usada por esse servidor antes de habilitar o fluxo.",
     "core.ui.pipelines.alerts.ai_model_unavailable.message": "Nenhum modelo selecionado foi encontrado no Ollama consultado pelo servidor de processamento.",

@@ -9,6 +9,7 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from time import monotonic as _monotonic
 from typing import Any, AsyncIterator
@@ -246,21 +247,31 @@ class AiUsageLimiter:
             return (False, self._error or reason) if self._error or reason else (True, "")
 
     async def snapshot(self, *, profile_ids: list[str] | None = None,
-                       budget_group_ids: list[str] | None = None) -> dict[str, Any]:
+                       budget_group_ids: list[str] | None = None, sensor_ids: list[str] | None = None) -> dict[str, Any]:
         await self._ensure_loaded()
         async with self._lock:
             out: dict[str, Any] = {"available": not bool(self._error), "error": self._error,
                                   "persistent": self._path is not None, "profiles": {}, "budget_groups": {},
-                                  "raw_counters": {} if self._error else dict(self._state.counters), "pauses": []}
+                                  "raw_counters": {} if self._error else dict(self._state.counters), "pauses": [],
+                                  "sensors": {}, "resets_at": {}}
             if self._error:
                 return out
             now = max(time.time(), self._state.last_timestamp)
+            calendar = datetime.fromtimestamp(now)
+            month = calendar.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            out["resets_at"] = {
+                "minute": (calendar.replace(second=0, microsecond=0) + timedelta(minutes=1)).timestamp(),
+                "hour": (calendar.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)).timestamp(),
+                "day": (calendar.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).timestamp(),
+                "month": month.replace(year=month.year + (month.month == 12), month=month.month % 12 + 1).timestamp(),
+            }
             out["pauses"] = [{"scope": json.loads(key)[0], "id": json.loads(key)[1], **self._pause_info(key, state),
                               "failures": state.failures,
                               "recovery_pending": key in self._failure_probes}
                              for key, state in self._state.backoffs.items()]
             for kind, identifiers, target in [("profile", profile_ids or [], "profiles"),
-                                               ("group", budget_group_ids or [], "budget_groups")]:
+                                               ("group", budget_group_ids or [], "budget_groups"),
+                                               ("sensor", sensor_ids or [], "sensors")]:
                 for identifier in identifiers:
                     out[target][identifier] = {period: self._state.counters.get(
                         self._scope_key(kind, identifier, period, now), 0) for period in _PERIODS}

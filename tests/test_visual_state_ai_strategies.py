@@ -193,6 +193,11 @@ def test_slow_ai_cannot_keep_previous_value_alive_and_expired_result_is_discarde
             state = runtime._reducer.snapshot()
             assert state.state_version == version and state.class_id is None
             assert state.last_analysis.sample.sequence == 2
+            await until(lambda: ctx.packets[-1].payload["visual_state"]["ai_evaluation"]["status"] == "discarded")
+            evaluation = ctx.packets[-1].payload["visual_state"]["ai_evaluation"]
+            assert evaluation["duration_ms"] >= 750
+            assert evaluation["reason"] == "multimodal_observation_expired"
+            assert evaluation["sample"]["sequence"] == 3
     asyncio.run(run())
 
 
@@ -243,6 +248,7 @@ def test_invalid_ai_response_never_becomes_a_class(tmp_path, response):
     (answer(None), "multimodal_ambiguous"),
     (answer(None, observable=False), "multimodal_unobservable"),
     ({"reason": "sensor_minute_limit"}, "sensor_minute_limit"),
+    ({"reason": "visual_state_image_limit"}, "visual_state_image_limit"),
     ({"reason": "secret https://private"}, "visual_state_provider_failed"),
 ])
 def test_abstention_unobservable_and_denial_remain_explicit(tmp_path, response, reason):
@@ -252,6 +258,8 @@ def test_abstention_unobservable_and_denial_remain_explicit(tmp_path, response, 
             state = runtime._reducer.snapshot()
             assert state.class_id is None and state.last_analysis.reason == reason
             assert state.last_analysis.declared_confidence is None
+            if reason in {"sensor_minute_limit", "visual_state_image_limit"}:
+                assert runtime._ai_evaluation.status == ("limited" if reason == "sensor_minute_limit" else "failed")
     asyncio.run(run())
 
 

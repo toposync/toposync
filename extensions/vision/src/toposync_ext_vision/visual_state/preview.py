@@ -113,7 +113,8 @@ class VisualStatePreviewRunner:
                     return {"image": data, "evidence": evidence}
             started = time.monotonic()
             await asyncio.sleep(duration_ms / 1000)
-            return {"test_only": True, "state": sensor._reducer.tick().model_dump(mode="json"),
+            state = sensor._reducer.tick().model_copy(update={"ai_evaluation": sensor._ai_evaluation})
+            return {"test_only": True, "state": state.model_dump(mode="json"),
                     "states": list(states), "completed_at": time.time(), "duration_ms": round((time.monotonic() - started) * 1000)}
         finally:
             cleanup = asyncio.create_task(self._dispose(owner, runtime, sensor, scheduler, task, encoding))

@@ -8,8 +8,9 @@ export function VisualStatePreviewResult({ result, classes, stale, t }: {
   const name = (id: string) => classes.find(item => item.class_id === id)?.label ?? id;
   const time = (value: number) => <time dateTime={new Date(value * 1000).toISOString()}>{new Date(value * 1000).toLocaleString()}</time>;
   const reason = (value: string) => {
-    const translated = t(`reason_${value}`);
-    return translated.includes(`reason_${value}`) ? t("reason_other") : translated;
+    const key = /^(?:(?:sensor|group)_)?(?:minute|hour|day|month)_limit$/.test(value) ? "ai_limit" : value;
+    const translated = t(`reason_${key}`);
+    return translated.includes(`reason_${key}`) ? t("reason_other") : translated;
   };
   const field = (label: string, value: React.ReactNode) => <div className="visualEvidenceField"><dt>{t(label)}</dt><dd>{value}</dd></div>;
   return <div className="identityInspector visualPreviewResult" role="status">
@@ -19,6 +20,15 @@ export function VisualStatePreviewResult({ result, classes, stale, t }: {
     {time(result.completed_at)}
     {stale && <p>{t("preview_stale")}</p>}
     <p>{t("preview_finished")}</p>
+    <p>{t("preview_validity")}: {state.valid_for_ms ?? 0} ms.</p>
+    {state.ai_evaluation && <div className="identityInspector">
+      <strong>{t("ai_evaluation")}: {t(`ai_status_${state.ai_evaluation.status}`)}</strong>
+      <p>{reason(state.ai_evaluation.reason)}</p>
+      {state.ai_evaluation.duration_ms !== null && <p>{t("ai_observed_duration")}: {state.ai_evaluation.duration_ms} ms.</p>}
+      {state.ai_evaluation.profile_id && <p>{t("ai_profile")}: {state.ai_evaluation.profile_id} · {state.ai_evaluation.model}</p>}
+      {state.ai_evaluation.retry_at !== null && <p>{t("ai_retry_at")}: {time(state.ai_evaluation.retry_at)}</p>}
+      <p>{t("ai_evaluation_history")}</p>
+    </div>}
     <dl>
       {state.candidate && field("candidate", <>{name(state.candidate.class_id)} · {time(state.candidate.started_at)}</>)}
       {state.last_confirmed && field("last_confirmed", <>{name(state.last_confirmed.class_id)} · {time(state.last_confirmed.observed_at)}</>)}

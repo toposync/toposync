@@ -142,6 +142,17 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
                             "revision": revision, "artifact_present": present})
         return {"choices": choices}
 
+    @router.get("/ai-options")
+    async def ai_options(request: Request, sensor_id: Identifier, response: Response):
+        _authorize(request)
+        request.app.state.auth.authorize(context=request.state.auth_context, action="core:extension:use",
+            resource_type="core:extension", resource_selector="com.toposync.ai")
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return await request.app.state.services.call("ai.visual_state.options", sensor_id=sensor_id)
+        except Exception as error:
+            raise HTTPException(503, detail="visual_ai_options_unavailable") from error
+
     @router.post("/drafts", status_code=201)
     def create_draft(request: Request, configuration: VisualStateConfig):
         _authorize(request, write=True)

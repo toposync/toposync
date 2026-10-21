@@ -1,6 +1,7 @@
 import { requestJson, resolveToposyncUrl } from "@toposync/plugin-api";
 import type { PipelineReferenceEvidence, PipelineReferenceFrame } from "@toposync/plugin-api";
 import type { VisualConfiguration, VisualDraft, VisualModel, VisualPreview } from "./visualState";
+import type { VisualAiOptions } from "./visualStateAi";
 export type Species = "person" | "cat" | "dog";
 export type Identity = { id: string; name: string; species: Species; references: number; occurrences: number; representative_id: string | null };
 export type GalleryData = { identities: Identity[]; revision: number; permissions: { curate: boolean; history: boolean } };
@@ -15,6 +16,8 @@ export const photoUrl = (id: string) => resolveToposyncUrl(`${base}/observations
 export const changed = () => window.dispatchEvent(new Event("toposync:identity-gallery-changed"));
 
 const visualBase = "/api/vision/visual-state/drafts";
+export const readVisualAiOptions = (sensorId: string, signal?: AbortSignal) => requestJson<VisualAiOptions>(
+  `/api/vision/visual-state/ai-options?sensor_id=${encodeURIComponent(sensorId)}`, { signal });
 export async function captureVisualFrame(configuration: VisualConfiguration, pipeline: unknown, signal: AbortSignal): Promise<PipelineReferenceFrame> {
   const response = await fetch(resolveToposyncUrl("/api/vision/visual-state/capture-frame"), {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ configuration, pipeline }), signal,

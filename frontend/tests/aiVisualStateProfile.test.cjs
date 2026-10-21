@@ -44,6 +44,8 @@ test('settings round trip retains account limits and profile membership', () => 
   const saved = context.normalizeSettings(JSON.parse(JSON.stringify(loaded)), configured);
   assert.deepEqual(JSON.parse(JSON.stringify(saved.budget_groups)), configured.budget_groups);
   assert.deepEqual(Array.from(saved.profiles, profile => profile.budget_group_id), ['account', 'account']);
+  configured.budget_groups[0].name = 'Shared ';
+  assert.equal(context.normalizeSettings(configured, configured).budget_groups[0].name, 'Shared ');
 });
 
 test('deleting another profile removes its fallback without losing account membership', () => {

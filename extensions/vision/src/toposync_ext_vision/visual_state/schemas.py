@@ -238,6 +238,19 @@ class StateCandidate(VisualStateModel):
     started_at: Timestamp
 
 
+class MultimodalEvaluation(VisualStateModel):
+    runtime_epoch: Identifier
+    sample: SampleIdentity
+    observed_at: Timestamp
+    status: Literal["running", "complete", "discarded", "limited", "failed"]
+    reason: Annotated[str, StringConstraints(min_length=1, max_length=160)]
+    duration_ms: Milliseconds | None = None
+    retry_at: Timestamp | None = None
+    profile_id: str = Field(default="", max_length=256)
+    provider_id: str = Field(default="", max_length=256)
+    model: str = Field(default="", max_length=256)
+
+
 class PublishedState(VisualStateModel):
     schema_version: Literal[1] = 1
     sensor_id: Identifier
@@ -262,6 +275,7 @@ class PublishedState(VisualStateModel):
     processing_status: Literal["idle", "waiting", "evaluating", "limited", "failed"] = "idle"
     last_analysis: Observation | None = None
     analysis_age_ms: Counter | None = None
+    ai_evaluation: MultimodalEvaluation | None = None
 
     @model_validator(mode="after")
     def validate_current_value(self) -> Self:

@@ -384,7 +384,31 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
       ) : null}
 
       {activeSection === "limits" ? (
-        <LimitsSection t={t} limits={normalized.limits} usage={usage} onChange={updateLimits} />
+        <>
+          <LimitsSection t={t} limits={normalized.limits} usage={usage} onChange={updateLimits} />
+          <h3>{t("ext.ai.settings.budget_groups")}</h3><p>{t("ext.ai.settings.budget_groups_help")}</p>
+          {normalized.budget_groups.map(group => {
+            const inUse = profiles.some(profile => profile.budget_group_id === group.id);
+            const update = (changes: Partial<typeof group>) => patch({ budget_groups: normalized.budget_groups.map(item =>
+              item.id === group.id ? { ...item, ...changes } : item) });
+            return <fieldset key={group.id}>
+              <legend>{group.name || t("ext.ai.settings.budget_group")}</legend>
+              <label className="field"><span className="label">{t("ext.ai.settings.name_field")}</span>
+                <input className="input" value={group.name} maxLength={160} onChange={event => update({ name: event.target.value })} /></label>
+              <LimitsSection t={t} limits={group.limits} usage={null} onChange={limits => update({ limits: normalizeLimits({ ...group.limits, ...limits }) })} />
+              {usage?.budget_groups[group.id] && <p>{Object.entries(usage.budget_groups[group.id]).map(([period, count]) =>
+                `${t(`ext.ai.settings.per_${period}`)}: ${count}`).join(" · ")}</p>}
+              <button className="chipButton" type="button" disabled={inUse} onClick={() => patch({
+                budget_groups: normalized.budget_groups.filter(item => item.id !== group.id),
+              })}>{t("ext.ai.settings.remove_budget_group")}</button>
+              {inUse && <p>{t("ext.ai.settings.budget_group_in_use")}</p>}
+            </fieldset>;
+          })}
+          <button className="chipButton" type="button" disabled={normalized.budget_groups.length >= 128}
+            onClick={() => patch({ budget_groups: [...normalized.budget_groups,
+              { id: crypto.randomUUID(), name: t("ext.ai.settings.budget_group"), limits: { ...normalized.limits } }] })}>
+            {t("ext.ai.settings.add_budget_group")}</button>
+        </>
       ) : null}
       {activeSection === "jev" ? (
         <JevConnectionSection t={t} connection={normalized.jev} onChange={(jev) => updateSettings({ jev })} />
@@ -619,6 +643,20 @@ function ProfilesSection({
                   checked={activeProfile.enabled}
                   onChange={(enabled) => onProfileChange({ enabled })}
                 />
+                <label className="field"><span className="label">{t("ext.ai.settings.budget_group")}</span>
+                  <select className="input" value={activeProfile.budget_group_id ?? ""}
+                    onChange={event => onProfileChange({ budget_group_id: event.target.value || null })}>
+                    <option value="">{t("ext.ai.settings.no_budget_group")}</option>
+                    {settings.budget_groups.map(group => <option key={group.id} value={group.id}>{group.name || group.id}</option>)}
+                  </select></label>
+                <Checkbox label={t("ext.ai.settings.multimodal_capability")}
+                  checked={["vision", "structured_json", "multiple_images"].every(capability => activeProfile.capabilities.includes(capability))}
+                  onChange={enabled => onProfileChange({ capabilities: enabled
+                    ? [...new Set([...activeProfile.capabilities, "vision", "structured_json", "multiple_images"])]
+                    : activeProfile.capabilities.filter(capability => capability !== "multiple_images") })} />
+                <p className="settingsStatusMuted">{t("ext.ai.settings.multimodal_capability_help")}</p>
+                <NumberField label={t("ext.ai.settings.maximum_images")} value={activeProfile.max_images_per_request} min={1} max={65}
+                  onChange={max_images_per_request => onProfileChange({ max_images_per_request })} />
               </div>
             </div>
 
@@ -858,8 +896,8 @@ function NumberField({
   onChange: (value: number) => void;
 }): React.ReactElement {
   return (
-    <div className="field" style={{ minWidth: 140, flex: "1 1 140px" }}>
-      <div className="label">{label}</div>
+    <label className="field" style={{ minWidth: 140, flex: "1 1 140px" }}>
+      <span className="label">{label}</span>
       <input
         className="input"
         type="number"
@@ -869,7 +907,7 @@ function NumberField({
         value={Number.isFinite(value) ? value : min}
         onChange={(event) => onChange(clamp(Number(event.target.value), min, max))}
       />
-    </div>
+    </label>
   );
 }
 
@@ -883,8 +921,8 @@ function NullableNumberField({
   onChange: (value: number | null) => void;
 }): React.ReactElement {
   return (
-    <div className="field" style={{ minWidth: 130, flex: "1 1 130px" }}>
-      <div className="label">{label}</div>
+    <label className="field" style={{ minWidth: 130, flex: "1 1 130px" }}>
+      <span className="label">{label}</span>
       <input
         className="input"
         type="number"
@@ -895,7 +933,7 @@ function NullableNumberField({
           onChange(raw ? Math.max(1, Number(raw) || 1) : null);
         }}
       />
-    </div>
+    </label>
   );
 }
 
@@ -910,7 +948,7 @@ function normalizeSettings(raw: Record<string, unknown>, defaults: AiExtensionSe
     profiles: ensureDefaultProfiles(profiles),
     limits: normalizeLimits(isRecord(raw.limits) ? raw.limits : base.limits),
     budget_groups: (Array.isArray(raw.budget_groups) ? raw.budget_groups : base.budget_groups ?? [])
-      .filter(isRecord).map(group => ({ id: asString(group.id, ""), name: asString(group.name, ""),
+      .filter(isRecord).map(group => ({ id: asString(group.id, ""), name: typeof group.name === "string" ? group.name : "",
         limits: normalizeLimits(isRecord(group.limits) ? group.limits : {}) })),
     model_catalog_version: asString(raw.model_catalog_version, base.model_catalog_version),
     jev: isRecord(raw.jev) ? {

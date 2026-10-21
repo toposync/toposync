@@ -572,6 +572,28 @@ class AiRouter:
         return await self._limiter.snapshot(profile_ids=[profile.id for profile in settings.profiles],
             budget_group_ids=[group.id for group in settings.budget_groups])
 
+    async def visual_state_options(self, *, sensor_id: str) -> dict[str, Any]:
+        settings = await self.settings()
+        usage = await self._limiter.snapshot(profile_ids=[profile.id for profile in settings.profiles],
+            budget_group_ids=[group.id for group in settings.budget_groups], sensor_ids=[sensor_id])
+        usage.pop("raw_counters", None)
+        choices = []
+        for profile in settings.profiles:
+            provider = settings.provider_by_id(profile.provider_id)
+            try:
+                local = bool(provider and provider.local and urlparse(provider.host).hostname in {"localhost", "127.0.0.1", "::1"})
+            except ValueError:
+                local = False
+            choices.append({**profile.model_dump(include={"id", "name", "model", "provider_id", "budget_group_id",
+                "capabilities", "timeout_seconds", "max_images_per_request"}),
+                "enabled": bool(profile.enabled and provider and provider.enabled), "local": local,
+                "images_allowed": bool(provider and self._provider_allows_image(provider)),
+                "chain": [item.id for item, _ in self._resolve_profiles(settings=settings, profile_id=profile.id,
+                                                                         fallback_profile_ids=None)]})
+        return {"profiles": choices, "limits": settings.limits.model_dump(),
+                "budget_groups": [item.model_dump() for item in settings.budget_groups],
+                "usage": usage, "checked_at": time.time()}
+
     @staticmethod
     def _resolve_profiles(
         *,

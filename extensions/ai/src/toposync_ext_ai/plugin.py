@@ -137,6 +137,7 @@ class AiExtension(BaseExtension):
         services.register("ai.infer.locate_region", router.locate_region)
         services.register("ai.infer.evaluate_condition", router.evaluate_condition)
         services.register("ai.infer.classify_visual_state", router.classify_visual_state)
+        services.register("ai.visual_state.options", router.visual_state_options)
 
         @app.get("/api/ai/catalog")
         async def ai_catalog() -> dict[str, Any]:

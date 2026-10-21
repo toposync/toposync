@@ -1,12 +1,14 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { activateModalFocus, type HostI18n, type HostUi, type PipelineReferenceCapture, type PipelineReferenceFrame } from "@toposync/plugin-api";
 import { captureVisualFrame, captureVisualReference, createVisualDraft, readVisualDraft, testVisualState, updateVisualDraft, visualReferenceUrl } from "./api";
-import { bindVisualConfiguration, newVisualClass, newVisualConfiguration, replaceVisualRegion, restoreVisualReferences, visualClassesValid, visualSource, type VisualClass, type VisualConfiguration, type VisualDraft } from "./visualState";
+import { bindVisualConfiguration, newVisualClass, newVisualConfiguration, replaceVisualRegion, restoreVisualReferences, visualClassDefaults, visualClassesValid, visualSource, type VisualClass, type VisualConfiguration, type VisualDraft } from "./visualState";
 import { styles } from "./styles";
 import { VisualStateModelSettings } from "./VisualStateModelSettings";
 import { VisualStateDecisionSettings } from "./VisualStateDecisionSettings";
 import { VisualStatePreviewResult } from "./VisualStatePreviewResult";
 import { VisualStateRegionSettings } from "./VisualStateRegionSettings";
+import { VisualStateAiSettings } from "./VisualStateAiSettings";
+import { visualTestReady } from "./visualStateAi";
 import type { VisualPreview } from "./visualState";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
@@ -32,6 +34,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const value = { ...initial, ...config, ...(unconfigured ? {
     sensor_id: initial.sensor_id, reference_revision: initial.reference_revision, classes: initial.classes,
   } : {}) } as VisualConfiguration;
+  if (Array.isArray(value.classes)) value.classes = visualClassDefaults(value.classes);
   const [draft, setDraft] = useState<VisualDraft | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +42,8 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const [pending, setPending] = useState<PendingCapture | null>(null);
   const [photo, setPhoto] = useState<{ id: string; label: string } | null>(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [aiSettingsDirty, setAiSettingsDirty] = useState(false);
+  const [aiReady, setAiReady] = useState(false);
   const [preview, setPreview] = useState<{ result: VisualPreview; classes: VisualClass[]; context: string; pipeline: string } | null>(null);
   const active = useRef<AbortController | null>(null);
   const draftRef = useRef(draft);
@@ -120,7 +125,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   return <section className="identityGallery visualStatePanel" aria-label={t("title")}>
     <style>{styles}</style>
     <p>{t("help")}</p>
-    {!value.model_id && <p className="identityMuted">{t("model_missing")}</p>}
+    {value.strategy !== "direct" && !value.model_id && <p className="identityMuted">{t("model_missing")}</p>}
     {unavailable && <p role="status">{t(unavailable)}</p>}
     {error && <div role="alert"><p>{t(error)}</p>
       {pending && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("retry", signal => upload(pending, signal))}>{t("retry_capture")}</button>}
@@ -143,7 +148,16 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
         onChange={event => changed(replaceVisualRegion(value, null, event.target.checked))} />{t("full_image")}</label>
       {hasReferences && <button type="button" className="chipButton" onClick={() => mutate({ ...value, source_identity: null,
         preparation_revision: null, region_id: null, use_full_image: false, classes: classes.map(item => ({ ...item, reference_ids: [] })) })}>{t("reset_region")}</button>}
+      {value.strategy === "direct" && !hasReferences && <>
+        <button type="button" className="chipButton" disabled={!canCapture} onClick={() => void run("verify", async signal => {
+          const frame = await (value.canonical_region ? captureVisualFrame(value, inputPipeline, signal) : captureCallback!(signal));
+          signal.throwIfAborted(); changed(bindVisualConfiguration(value, frame.evidence));
+        })}>{t("verify_region")}</button>
+        <p className="identityMuted">{t(value.source_identity ? "region_verified" : "verify_region_help")}</p>
+      </>}
     </fieldset>
+    <VisualStateAiSettings value={value} change={changed} disabled={disabled} advanced={showAdvanced}
+      editing={setAiSettingsDirty} readiness={setAiReady} t={t} />
     {classes.map((category, index) => category && typeof category === "object" && <fieldset key={category.class_id || index} disabled={disabled} className="visualStateClass">
       <legend>{t("class_number", { index: index + 1 })}</legend>
       <div className="identityToolbar">
@@ -168,7 +182,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
               ? { ...item, reference_ids: item.reference_ids.filter(id => id !== reference) } : item) })}>{t("remove")}</button>
         </div>)}
       </div>
-      {!category.reference_ids?.length && <p className="identityMuted">{t("empty_references")}</p>}
+      {!category.reference_ids?.length && <p className="identityMuted">{t(value.strategy === "direct" ? "direct_class_evidence" : "empty_references")}</p>}
       {(showAdvanced || category.enabled === false) && <><label className="identityField"><span>{t("key")}</span><input value={category.key ?? ""} maxLength={64}
         pattern="[a-z][a-z0-9_]{0,63}" onChange={event => updateClass(category.class_id, { key: event.target.value })} /></label>
         <label><input type="checkbox" checked={category.enabled} onChange={event => updateClass(category.class_id, { enabled: event.target.checked })} />{t("enabled")}</label></>}
@@ -179,22 +193,20 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       {hasReferences && !draft && <button type="button" className="chipButton" disabled={disabled || !valid} onClick={() => void run("load", async signal => { await synchronize(value, signal); })}>{t("load_references")}</button>}
       {undo && <button type="button" className="chipButton" disabled={disabled} onClick={() => { mutate(restoreVisualReferences(value, undo), false); }}>{t("undo")}</button>}
     </div>
-    <VisualStateModelSettings value={value} change={changed} disabled={disabled} t={t} />
+    {value.strategy !== "direct" && <VisualStateModelSettings value={value} change={changed} disabled={disabled} t={t} />}
     <VisualStateDecisionSettings value={value} change={changed} disabled={disabled} editing={setSettingsDirty} t={t} />
     <fieldset disabled={disabled}>
       <legend>{t("preview_title")}</legend><p className="identityMuted">{t("preview_help")}</p>
       {!inputPipeline && <p role="status">{t("preview_host_unavailable")}</p>}
-      <button type="button" className="chipButton" disabled={!inputPipeline || !regionCompatible || !valid || settingsDirty || !value.model_id || !value.comparison
-        || !classes.filter(item => item.enabled).every(item => item.reference_ids.length > 0)}
+      <button type="button" className="chipButton" disabled={!inputPipeline || !regionCompatible || !valid || settingsDirty || aiSettingsDirty
+        || !visualTestReady(value) || (value.strategy !== "examples" && !aiReady)}
         onClick={() => void run("test", async signal => {
           const result = await testVisualState(value, inputPipeline, signal); signal.throwIfAborted();
           setPreview({ result, classes: structuredClone(classes), context, pipeline: pipelineContext });
         })}>{t("test_now")}</button>
       {preview && <VisualStatePreviewResult result={preview.result} classes={preview.classes}
-        stale={preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty} t={t} />}
+        stale={preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty || aiSettingsDirty} t={t} />}
     </fieldset>
-    {showAdvanced && <label className="identityField"><span>{t("scene_description")}</span><textarea className="input" rows={3} maxLength={2000}
-      disabled={disabled} value={value.scene_description} onChange={event => changed({ ...value, scene_description: event.target.value })} /></label>}
     {photo && draft && <PhotoDialog url={visualReferenceUrl(draft.draft_id, photo.id, false)} label={photo.label} close={closePhoto} t={t} />}
   </section>;
 }

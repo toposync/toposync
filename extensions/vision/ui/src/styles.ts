@@ -49,6 +49,10 @@ export const styles = `
 .visualStatePanel summary {cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:600}
 .visualDecisionFields {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:10px}
 .visualPreviewResult {min-width:0;overflow-wrap:anywhere}
+.visualAiLimits {max-width:100%;overflow-x:auto}
+.visualStatePanel details {min-width:0}
+.visualAiLimits table {border-collapse:collapse;text-align:left}
+.visualAiLimits th,.visualAiLimits td {padding:4px;vertical-align:top}
 .visualRegionSettings {display:grid;gap:10px;min-width:0}
 .visualPreviewResult dl {display:grid;gap:10px;margin:10px 0}
 .visualEvidenceField dt {font-weight:600}

@@ -24,7 +24,7 @@ from ..registry import ModelRegistry, build_default_model_registry
 from .matching import ReferenceEmbedding, compare_references
 from .inspection import decision_visuals
 from .preparation import VisualRegionUnavailable, prepare_visual_frame, visual_preparation_revision
-from .schemas import Observation, VisualStateConfig
+from .schemas import MultimodalEvaluation, Observation, VisualStateConfig
 from .state import VisualStateReducer
 
 
@@ -43,6 +43,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self._ai_references = {}
         self._ai_classes = []
         self._ai_revision = None
+        self._ai_evaluation = None
         self._native_lock = threading.Lock()
         self._closed = threading.Event()
         self._prefix = None
@@ -284,8 +285,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
         return observation, revision
 
     async def _publish(self, context, processing_status):
-        state = self._reducer.tick().model_copy(update={"processing_status": processing_status})
-        marker = (state.runtime_epoch, state.state_version, processing_status)
+        state = self._reducer.tick().model_copy(update={"processing_status": processing_status, "ai_evaluation": self._ai_evaluation})
+        marker = (state.runtime_epoch, state.state_version, processing_status, self._ai_evaluation)
         if marker == self._last_publication or context.is_cancelled() or self._closed.is_set():
             return
         self._last_publication = marker
@@ -381,6 +382,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     _, evidence, observed, token, started = ai_active
                     try:
                         result = ai_worker.result()
+                        metadata = result.model_dump() if hasattr(result, "model_dump") else result
+                        metadata = metadata if isinstance(metadata, dict) else {}
                         previous = self._reducer.snapshot().last_analysis
                         superseded = previous is not None and (
                             previous.sample.capture_instance != evidence["sample"]["capture_instance"]
@@ -397,10 +400,26 @@ class VisualStateRuntime(BaseOperatorRuntime):
                             if observation.region_quality != "valid":
                                 self._token += 1
                                 pending = ai_pending = None
+                            status = "complete" if metadata.get("observation") is not None else "limited" if (
+                                re.fullmatch(r"(?:(?:sensor|group)_)?(?:minute|hour|day|month)_limit", observation.reason)
+                                or metadata.get("retry_at") is not None) else "failed"
+                            reason = observation.reason
+                        else:
+                            status, reason = "discarded", "multimodal_observation_expired" if not self._fresh(observed, token) else "multimodal_superseded"
+                        retry_at = metadata.get("retry_at")
+                        self._ai_evaluation = self._ai_evaluation.model_copy(update={
+                            "status": status, "reason": reason,
+                            "duration_ms": min(3_600_000, max(0, round((self._clock() - started) * 1000))),
+                            "retry_at": retry_at if type(retry_at) in {int, float} and math.isfinite(retry_at) and retry_at >= 0 else None,
+                            **{key: metadata[key][:256] for key in ("profile_id", "provider_id", "model") if isinstance(metadata.get(key), str)},
+                        })
                     except asyncio.CancelledError:
                         raise
                     except Exception:
                         context.metrics.record_error(RuntimeError("visual_state_multimodal_analysis_failed"))
+                        self._ai_evaluation = self._ai_evaluation.model_copy(update={"status": "failed",
+                            "reason": "visual_state_multimodal_analysis_failed",
+                            "duration_ms": min(3_600_000, max(0, round((self._clock() - started) * 1000)))})
                         if self._fresh(observed, token):
                             self._reducer.observe(self._observation(evidence, observed, started=started,
                                 method="multimodal", reason="visual_state_multimodal_analysis_failed"))
@@ -412,6 +431,9 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     if self._fresh(observed, token):
                         self._reducer.await_multimodal(self._observation(evidence, observed, started=started,
                             method="multimodal", reason="multimodal_pending"))
+                        self._ai_evaluation = MultimodalEvaluation(runtime_epoch=self._reducer.runtime_epoch,
+                            sample=evidence["sample"], observed_at=evidence["observed_at"], status="running",
+                            reason="multimodal_pending", profile_id=self.config.ai_profile_id)
                         ai_worker = asyncio.create_task(self._infer_multimodal(prepared_frame, observed))
                     else:
                         ai_active = None

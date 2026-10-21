@@ -105,6 +105,8 @@ test('empty and catalog-default panels initialize unique identities only when ed
       '@toposync/plugin-api': {}, './api': {}, './visualState': model, './styles': { styles: '' },
       './VisualStateModelSettings': { VisualStateModelSettings: () => null },
       './VisualStateDecisionSettings': { VisualStateDecisionSettings: () => null },
+      './VisualStateAiSettings': { VisualStateAiSettings: () => null },
+      './visualStateAi': load('visualStateAi.ts'),
       './VisualStatePreviewResult': { VisualStatePreviewResult: () => null },
       './VisualStateRegionSettings': { VisualStateRegionSettings: () => null } });
     panel.VisualStatePanel({ config, replaceConfig: value => changes.push(value),

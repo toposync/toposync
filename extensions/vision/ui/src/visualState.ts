@@ -13,9 +13,13 @@ export type VisualConfiguration = {
   region_id: string | null; use_full_image: boolean; reference_revision: string; model_revision: string;
   classes: VisualClass[]; strategy: "examples" | "fallback" | "direct"; scene_description: string;
   model_id?: string | null; [key: string]: unknown;
+  ai_profile_id?: string | null;
   canonical_region?: CanonicalVisualRegion | null;
 };
 export type VisualDraft = { draft_id: string; revision: number; expires_at: number; configuration: VisualConfiguration };
+export function visualClassDefaults(classes: VisualClass[]): VisualClass[] {
+  return classes.map(category => Object.assign({ description: "", enabled: true, reference_ids: [] }, category));
+}
 export type VisualModel = { model_id: string; name: string; revision: string; artifact_present: boolean };
 export type VisualSample = { capture_instance: string; generation: number; sequence: number };
 export type VisualPublishedState = {
@@ -25,6 +29,9 @@ export type VisualPublishedState = {
   candidate: { class_id: string; started_at: number } | null;
   last_confirmed: { class_id: string; observed_at: number } | null;
   analysis_age_ms: number | null;
+  ai_evaluation?: { status: "running" | "complete" | "discarded" | "limited" | "failed"; reason: string;
+    duration_ms: number | null; retry_at: number | null; profile_id: string; provider_id: string; model: string;
+    observed_at: number; runtime_epoch: string; sample: VisualSample } | null;
   last_analysis: { class_id: string | null; similarity: number | null; margin: number | null;
     declared_confidence: number | null; reference_ids: string[]; sample: VisualSample;
     observed_at: number; duration_ms: number; region_quality: "valid" | "unobservable" | "unavailable";
@@ -46,14 +53,14 @@ export function applyVisualDecisionValues(configuration: VisualConfiguration, fi
   const parsed = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value.trim() === "" ? NaN : Number(value)]));
   const between = (key: string, minimum: number, maximum: number, integer = false) =>
     Number.isFinite(parsed[key]) && parsed[key] >= minimum && parsed[key] <= maximum && (!integer || Number.isInteger(parsed[key]));
-  if (!visualComparisonFields.every(key => between(key, key.endsWith("margin") ? 0 : -1, key.endsWith("margin") ? 2 : 1))
-      || parsed.hold_threshold > parsed.enter_threshold || parsed.hold_margin > parsed.enter_margin
+  if ((configuration.strategy !== "direct" && (!visualComparisonFields.every(key => between(key, key.endsWith("margin") ? 0 : -1, key.endsWith("margin") ? 2 : 1))
+      || parsed.hold_threshold > parsed.enter_threshold || parsed.hold_margin > parsed.enter_margin))
       || !between("confirmations", 2, 30, true) || !between("minimum_separation_ms", 1, 60000, true)
       || !between("evaluation_interval_ms", 50, 60000, true)
       || !["maximum_gap_ms", "maximum_frame_age_ms", "validity_ms"].every(key => between(key, 1, 3600000, true))
       || !between("pending_hold_ms", 0, 3600000, true) || parsed.minimum_separation_ms > parsed.maximum_gap_ms
       || parsed.pending_hold_ms > parsed.validity_ms || parsed.maximum_frame_age_ms > parsed.validity_ms) throw new Error("visual_decision_invalid");
-  return { ...configuration, comparison: Object.fromEntries(visualComparisonFields.map(key => [key, parsed[key]])),
+  return { ...configuration, ...(configuration.strategy !== "direct" ? { comparison: Object.fromEntries(visualComparisonFields.map(key => [key, parsed[key]])) } : {}),
     temporal: Object.fromEntries(Object.keys(visualTemporalDefaults).map(key => [key, parsed[key]])),
     evaluation_interval_ms: parsed.evaluation_interval_ms };
 }

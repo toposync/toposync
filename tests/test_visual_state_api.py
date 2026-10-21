@@ -11,6 +11,27 @@ from test_visual_state_capture import packet, pipeline
 from toposync.runtime.pipelines.capture_receipts import CaptureReceipts
 
 
+def test_ai_options_use_owner_authorization_and_safe_service_errors(client):  # noqa: F811
+    calls = []
+
+    async def options(sensor_id):
+        calls.append(sensor_id)
+        if sensor_id == "broken":
+            raise RuntimeError("secret provider host and key")
+        return {"profiles": [], "checked_at": 1}
+
+    client.app.state.services.register("ai.visual_state.options", options)
+    response = client.get("/api/vision/visual-state/ai-options?sensor_id=door")
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    assert calls == ["door"]
+    assert client.get("/api/vision/visual-state/ai-options?sensor_id=../escape").status_code == 422
+    failure = client.get("/api/vision/visual-state/ai-options?sensor_id=broken")
+    assert failure.status_code == 503 and "secret" not in failure.text
+    client.post("/api/auth/logout")
+    assert client.get("/api/vision/visual-state/ai-options?sensor_id=door").status_code == 401
+    assert calls == ["door", "broken"]
+
+
 def test_models_report_declared_revisions_without_opening_weights_or_reference_storage(client, tmp_path, monkeypatch):  # noqa: F811
     from toposync_ext_vision.processing.runtime_backends.embedding import embedding_model_revision
     from toposync_ext_vision.processing.runtime_backends import onnxruntime_backend

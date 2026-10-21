@@ -18,11 +18,11 @@ export function VisualStateDecisionSettings({ value, change, disabled, editing, 
   }
   return <fieldset disabled={disabled}>
     <legend>{t("decision_settings")}</legend>
-    <p className="identityMuted">{t("comparison_help")}</p>
+    {value.strategy !== "direct" && <><p className="identityMuted">{t("comparison_help")}</p>
     <details open={!value.comparison || undefined}>
       <summary>{t("comparison_settings")}</summary>
       <div className="visualDecisionFields">{visualComparisonFields.map(key => input(key, key.endsWith("margin") ? 0 : -1, key.endsWith("margin") ? 2 : 1, "any"))}</div>
-    </details>
+    </details></>}
     <details><summary>{t("temporal_settings")}</summary><p className="identityMuted">{t("temporal_help")}</p>
       <div className="visualDecisionFields">
         {input("evaluation_interval_ms", 50, 60000)}

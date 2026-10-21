@@ -301,7 +301,7 @@ function AiSettingsPanelContent({ i18n, settings, updateSettings }: Props): Reac
   const qwenInstalled = hasInstalledModel(installedModelRefs, DEFAULT_OLLAMA_MODEL);
 
   return (
-    <div>
+    <div className="settingsPanel">
       <div className="settingsDetailHeader" style={{ alignItems: "flex-start", gap: 16 }}>
         <div>
           <div className="modalSectionTitle">{t("ext.ai.settings.title", {}, "IA")}</div>

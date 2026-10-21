@@ -469,11 +469,6 @@ video {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.10);
 }
 
-.pillButton:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: var(--borderStrong);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
-}
-
 .pillButton:focus-visible {
   outline: 2px solid rgba(251, 191, 36, 0.55);
   outline-offset: 2px;
@@ -2886,11 +2881,6 @@ video {
   white-space: nowrap;
 }
 
-.chipButton:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: var(--borderStrong);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
-}
-
 .chipButton:focus-visible,
 .primaryButton:focus-visible,
 .iconButton:focus-visible,
@@ -5068,11 +5058,6 @@ video {
   font-size: 14px;
 }
 
-.iconButton:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: var(--borderStrong);
-  background: rgba(255, 255, 255, 0.06);
-}
-
 .iconButton:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -5564,6 +5549,7 @@ video {
 
 .settingsPanel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   min-width: 0;
 }
@@ -5601,6 +5587,7 @@ video {
   font-size: 13px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .settingsPanel .input,
@@ -6026,9 +6013,14 @@ video {
 
 .settingsDetailHeader {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
+}
+
+.settingsDetailHeader > .settingsTabBar {
+  flex: 1 1 320px;
 }
 
 .streamingSettingsPanel {
@@ -6586,7 +6578,7 @@ video {
 
 .settingsListItemMeta {
   font-size: 11px;
-  color: rgba(230, 232, 242, 0.62);
+  color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8260,9 +8252,9 @@ label.chipButton {
   border-radius: var(--radius-control);
 }
 
-.chipButton:hover:not(:disabled):not([aria-disabled="true"]),
-.pillButton:not(.pillButtonPrimary):not(.pillButtonDanger):hover:not(:disabled):not([aria-disabled="true"]),
-.iconButton:not(.iconButtonPrimary):not(.iconButtonDanger):hover:not(:disabled):not([aria-disabled="true"]),
+.chipButton:not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
+.pillButton:not(.pillButtonPrimary):not(.pillButtonDanger):not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
+.iconButton:not(.iconButtonPrimary):not(.iconButtonDanger):not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
 .sceneIconButton:hover:not(:disabled):not([aria-disabled="true"]),
 .layerDragHandle:hover:not(:disabled):not([aria-disabled="true"]),
 .layerToggleButton:hover:not(:disabled):not([aria-disabled="true"]),
@@ -8510,6 +8502,7 @@ select {
 .settingsNavItem.isSelected,
 .settingsTab.isSelected,
 .choiceItem.isSelected,
+.chipButton.isActive,
 .pillButton.isActive,
 .iconButton.isActive,
 .layerMainButton.isSelected,

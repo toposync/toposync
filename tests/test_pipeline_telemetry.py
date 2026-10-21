@@ -110,11 +110,40 @@ def test_first_numeric_sample_has_bounded_allocation_peak() -> None:
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    # Three days of minute buckets fit without a second, temporary list of counters.
-    assert peak < 3 * 1024 * 1024
+    # An initial sample must not allocate histograms for three days of empty buckets.
+    assert peak < 512 * 1024
     snapshot = store.snapshot_numeric_metric("pipe", "node", "test.score", now_s=100.0)
     assert snapshot["total_count"] == 1
     assert sum(snapshot["histogram_bins"]) == 1
+
+
+def test_sparse_histograms_preserve_dense_checkpoint_and_rollover() -> None:
+    import base64
+    import zlib
+
+    # Written by the dense v4 implementation, including a reused circular bucket.
+    checkpoint = base64.b64decode(
+        "VE9QT1NZTkNfUElQRUxJTkVfVEVMRU1FVFJZX1YxCnheY2FgYGAEYjBwiHMAsVmAuCCzIBVE5+WnpHIB6ZLU4hK94uT8olSYShgtAmSwwkyA0x/sQbphAMRWAGIJqIAolP6PBgSgrmFC0gvSN2smCNy0hwj/gNIIRchqjMHgMV41Z8+AwBsMNQ5QI+EhguQOkBg2cQyvAwUAZbsz4A=="
+    )
+    store = PipelineTelemetryStore()
+    store.load_checkpoint_bytes(checkpoint)
+    snapshot = store.snapshot_numeric_metric("pipe", "node", "test.score", now_s=121.0)
+    assert snapshot["total_count"] == 3
+    assert snapshot["histogram_bins"] == [0, 1, 1, 1]
+    rewritten = store.dump_checkpoint_bytes(include_hist=True, now_s=121.0)
+    assert zlib.decompress(rewritten.split(b"\n", 1)[1]) == zlib.decompress(checkpoint.split(b"\n", 1)[1])
+
+    without_histogram = PipelineTelemetryStore()
+    without_histogram.load_checkpoint_bytes(store.dump_checkpoint_bytes(include_hist=False, now_s=121.0))
+    snapshot_without_histogram = without_histogram.snapshot_numeric_metric("pipe", "node", "test.score", now_s=121.0)
+    assert snapshot_without_histogram == {**snapshot, "histogram_bins": [0, 0, 0, 0]}
+    assert without_histogram.observe_numeric("pipe", "node", "test.score", 0.8, now_s=122.0)
+    assert without_histogram.snapshot_numeric_metric("pipe", "node", "test.score", now_s=122.0)["histogram_bins"] == [0, 0, 0, 1]
+
+    assert store.observe_numeric("pipe", "node", "test.score", 0.1, now_s=126.0)
+    rolled = store.snapshot_numeric_metric("pipe", "node", "test.score", now_s=126.0)
+    assert rolled["total_count"] == 2
+    assert rolled["histogram_bins"] == [1, 1, 0, 0]
 
 
 def test_pipeline_telemetry_store_applies_sampling_and_window_rollover() -> None:

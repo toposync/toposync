@@ -690,7 +690,7 @@ export function WizardCreatePipelineFromTransmission({
               </div>
 
               <div className="rowWrap" style={{ gap: 10 }}>
-                <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                <div className="field" style={{ flex: "1 1 220px" }}>
                   <label className="label">{t("ext.streaming.wizard.pipeline_name", {}, "Nome do fluxo (opcional)")}</label>
                   <input className="input" value={pipelineName} onChange={(event) => setPipelineName(event.target.value)} />
                 </div>
@@ -814,11 +814,11 @@ export function WizardCreatePipelineFromTransmission({
               </div>
 
               <div className="rowWrap" style={{ gap: 10 }}>
-                <div className="field" style={{ flex: 1, minWidth: 260 }}>
+                <div className="field" style={{ flex: "1 1 260px" }}>
                   <label className="label">{t("ext.streaming.wizard.detection_categories", {}, "Detection categories (csv)")}</label>
                   <input className="input" value={detectionCategories} onChange={(event) => setDetectionCategories(event.target.value)} placeholder="person,car" />
                 </div>
-                <div className="field" style={{ flex: 1, minWidth: 260 }}>
+                <div className="field" style={{ flex: "1 1 260px" }}>
                   <label className="label">{t("ext.streaming.wizard.tracking_categories", {}, "Tracking categories (csv)")}</label>
                   <input className="input" value={trackingCategories} onChange={(event) => setTrackingCategories(event.target.value)} placeholder="person,car" />
                 </div>

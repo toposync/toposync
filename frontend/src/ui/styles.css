@@ -5625,7 +5625,11 @@ video {
 .settingsPanel .settingsList {
   max-height: 430px;
   overflow: auto;
-  padding-right: 2px;
+  padding: 4px;
+}
+
+.settingsPanel .settingsList > * {
+  flex-shrink: 0;
 }
 
 .settingsPanel .settingsListItem,
@@ -6196,6 +6200,7 @@ video {
 
 .streamingCameraVariantChip > span:last-child {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6253,6 +6258,8 @@ video {
 
 .streamingFormGrid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 10px;
   align-items: end;
 }
@@ -6298,7 +6305,7 @@ video {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: color-mix(in srgb, var(--color-success) 82%, var(--color-text-primary));
+  color: var(--color-text-primary);
 }
 
 .streamingStatusOk::before {
@@ -6358,23 +6365,21 @@ video {
   min-height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-primary);
   font-weight: 800;
 }
 
 .streamingRuntimeBadge.is-live {
-  color: color-mix(in srgb, var(--color-success) 82%, var(--color-text-primary));
   background: color-mix(in srgb, var(--color-success) 15%, transparent);
 }
 
 .streamingRuntimeBadge.is-degraded {
-  color: color-mix(in srgb, var(--color-warning) 86%, var(--color-text-primary));
   background: color-mix(in srgb, var(--color-warning) 16%, transparent);
 }
 
 .streamingRuntimeBadge.is-stale,
 .streamingRuntimeBadge.is-offline {
-  color: color-mix(in srgb, var(--color-danger) 82%, var(--color-text-primary));
   background: color-mix(in srgb, var(--color-danger) 14%, transparent);
 }
 
@@ -6418,12 +6423,14 @@ video {
 
 .streamingWizard {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
 .streamingWizard .cardBody {
   margin-top: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -6516,7 +6523,7 @@ video {
   max-height: 260px;
   margin-top: 8px;
   overflow: auto;
-  padding-right: 2px;
+  padding: 4px;
 }
 
 .streamingCameraPickerOption {
@@ -7923,6 +7930,10 @@ video {
 .dangerButton:focus-visible,
 .iconButton:focus-visible,
 .sceneIconButton:focus-visible,
+.streamingIssueBanner:focus-visible,
+.streamingCameraSummaryItem:focus-visible,
+.streamingCameraPickerButton:focus-visible,
+.streamingCameraPickerOption:focus-visible,
 .elementTypeButton:focus-visible,
 .layerDragHandle:focus-visible,
 .layerToggleButton:focus-visible,

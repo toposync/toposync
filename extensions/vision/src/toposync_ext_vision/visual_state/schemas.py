@@ -75,6 +75,14 @@ class VisualStateClass(VisualStateModel):
         return self
 
 
+class VisualAiLimits(VisualStateModel):
+    max_concurrency: int = Field(default=1, strict=True, ge=1, le=1)
+    requests_per_minute: int | None = Field(default=20, strict=True, ge=1)
+    requests_per_hour: int | None = Field(default=300, strict=True, ge=1)
+    requests_per_day: int | None = Field(default=2000, strict=True, ge=1)
+    requests_per_month: int | None = Field(default=None, strict=True, ge=1)
+
+
 class VisualStateConfig(VisualStateModel):
     schema_version: Literal[1] = 1
     sensor_id: Identifier
@@ -94,6 +102,11 @@ class VisualStateConfig(VisualStateModel):
     temporal: TemporalPolicy = Field(default_factory=TemporalPolicy)
     ai_profile_id: Identifier | None = None
     scene_description: str = Field(default="", max_length=2000)
+    ai_timeout_ms: int = Field(default=60_000, strict=True, ge=1, le=120_000)
+    ai_max_attempts: int = Field(default=1, strict=True, ge=1, le=3)
+    ai_allow_remote_images: bool = Field(default=False, strict=True)
+    ai_references_per_class: int = Field(default=2, strict=True, ge=1, le=30)
+    ai_limits: VisualAiLimits = Field(default_factory=VisualAiLimits)
 
     @model_validator(mode="after")
     def validate_configuration(self) -> Self:

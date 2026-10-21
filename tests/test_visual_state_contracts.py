@@ -64,6 +64,16 @@ def test_configuration_round_trip_and_stable_identity(configuration: dict) -> No
     lambda data: data["comparison"].update(enter_margin=float("inf")),
     lambda data: data["comparison"].update(hold_threshold=0.9),
     lambda data: data.update(unrecognized_option=True),
+    lambda data: data.update(ai_timeout_ms=0),
+    lambda data: data.update(ai_timeout_ms=120001),
+    lambda data: data.update(ai_max_attempts=4),
+    lambda data: data.update(ai_max_attempts=True),
+    lambda data: data.update(ai_allow_remote_images="true"),
+    lambda data: data.update(ai_references_per_class=0),
+    lambda data: data.update(ai_references_per_class=31),
+    lambda data: data.update(ai_limits={"max_concurrency": 2}),
+    lambda data: data.update(ai_limits={"max_concurrency": True}),
+    lambda data: data.update(ai_limits={"requests_per_minute": 0}),
 ])
 def test_form_and_text_reject_the_same_invalid_contract(configuration: dict, change) -> None:
     change(configuration)

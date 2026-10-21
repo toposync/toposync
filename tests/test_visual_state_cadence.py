@@ -56,6 +56,16 @@ def test_continuous_input_and_idle_delivery_are_not_rejected_as_event_dependent(
     assert not visual_state_cadence_diagnostics(VisualStateConfig.model_validate(configuration), context)
 
 
+def test_direct_mode_reports_budget_and_latency_without_requiring_embedding_model(configuration):  # noqa: F811
+    configuration.update(strategy="direct", model_id=None, comparison=None, ai_profile_id="visual")
+    before = json.dumps(configuration, sort_keys=True)
+    diagnostics = visual_state_diagnostics(configuration, {})
+    assert {item.code for item in diagnostics} == {"visual_state_ai_budget_too_low", "visual_state_ai_latency_unverified"}
+    assert json.dumps(configuration, sort_keys=True) == before
+    configuration["ai_limits"] = {f"requests_per_{period}": None for period in ("minute", "hour", "day", "month")}
+    assert {item.code for item in visual_state_diagnostics(configuration, {})} == {"visual_state_ai_latency_unverified"}
+
+
 def test_compiled_editor_analysis_reaches_the_visual_sensor_with_upstream_context(configuration):  # noqa: F811
     from toposync.runtime.config_store import Pipeline
     from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler, register_builtin_operators

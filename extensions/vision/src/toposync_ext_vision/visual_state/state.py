@@ -128,6 +128,34 @@ class VisualStateReducer:
         if self._current is not None and self._hold_until is None:
             self._hold_until = observation.observed_monotonic + self.config.temporal.pending_hold_ms / 1000
 
+    def await_multimodal(self, observation: Observation) -> PublishedState:
+        """An unresolved sample shortens the old lease but is not a completed decision."""
+        now = self._now()
+        self._expire(now)
+        if (observation.acceptance != "abstain" or observation.region_quality != "valid"
+                or any(getattr(observation, field) != expected for field, expected in (
+                    ("runtime_epoch", self.runtime_epoch), ("sensor_id", self.config.sensor_id),
+                    ("source_identity", self.config.source_identity),
+                    ("preparation_revision", self.config.preparation_revision),
+                    ("reference_revision", self.config.reference_revision), ("model_revision", self.config.model_revision)))
+                or not 0 <= (now - observation.observed_monotonic) * 1000 <= self.config.temporal.maximum_frame_age_ms
+                or (self._invalidated_at is not None and observation.observed_monotonic <= self._invalidated_at)):
+            return self.snapshot()
+        previous = self._last_seen
+        if previous is not None and (
+            observation.sample.capture_instance != previous.sample.capture_instance
+            or observation.sample.generation != previous.sample.generation
+            or observation.sample.sequence <= previous.sample.sequence
+            or observation.observed_monotonic < previous.observed_monotonic
+        ):
+            return self.snapshot()
+        before = self._hold_until, self._reason
+        self._contradiction(observation)
+        self._reason = "multimodal_pending"
+        if before != (self._hold_until, self._reason):
+            self._version += 1
+        return self.snapshot()
+
     def _confirm(self, observation: Observation, now: float) -> None:
         switching = self._current is None or self._current.class_id != observation.class_id
         self._current = observation

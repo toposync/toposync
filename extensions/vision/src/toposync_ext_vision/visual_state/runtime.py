@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
+import re
 import threading
 import time
 import uuid
@@ -27,7 +29,7 @@ from .state import VisualStateReducer
 
 
 class VisualStateRuntime(BaseOperatorRuntime):
-    """One local inference plus one latest frame; decision expiry never waits for either."""
+    """Independent local and multimodal workers, each with at most one latest frame."""
 
     def __init__(self, config, dependencies, *, backend_factory=build_embedding_backend,
                  preview_input_pipeline=None,
@@ -38,6 +40,9 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self._clock, self._unix_clock = clock, unix_clock
         self._backend = None
         self._references = {}
+        self._ai_references = {}
+        self._ai_classes = []
+        self._ai_revision = None
         self._native_lock = threading.Lock()
         self._closed = threading.Event()
         self._prefix = None
@@ -66,23 +71,40 @@ class VisualStateRuntime(BaseOperatorRuntime):
             self._backend.close()
             self._backend = None
         self._references.clear()
+        self._ai_references.clear()
 
     def _initialize(self, store):
-        registry = self.dependencies.vision_model_registry
-        if not isinstance(registry, ModelRegistry):
-            registry = build_default_model_registry()
-        manifest = registry.get_manifest(self.config.model_id)
-        if manifest is None or manifest.task != "embedding":
-            raise ValueError("visual sensor requires an explicit image embedding model")
-        self._backend = self._backend_factory(manifest)
-        if self._backend.revision != self.config.model_revision:
-            raise ValueError("visual sensor model revision changed; recalibrate its references")
+        if self.config.strategy != "direct":
+            registry = self.dependencies.vision_model_registry
+            if not isinstance(registry, ModelRegistry):
+                registry = build_default_model_registry()
+            manifest = registry.get_manifest(self.config.model_id)
+            if manifest is None or manifest.task != "embedding":
+                raise ValueError("visual sensor requires an explicit image embedding model")
+            self._backend = self._backend_factory(manifest)
+            if self._backend.revision != self.config.model_revision:
+                raise ValueError("visual sensor model revision changed; recalibrate its references")
+        reference_bytes = 0
         for category in self.config.classes:
+            count = min(len(category.reference_ids), self.config.ai_references_per_class)
+            # Spread over capture order; this is not a claim of visual diversity.
+            selected = [category.reference_ids[round(index * (len(category.reference_ids) - 1) / max(1, count - 1))]
+                        for index in range(count)]
+            if category.enabled and self.config.strategy != "examples":
+                self._ai_classes.append({"class_id": category.class_id, "label": category.label,
+                                         "description": category.description, "reference_ids": selected})
             for reference_id in category.reference_ids:
                 if self._closed.is_set():
                     raise RuntimeError("visual sensor stopped")
                 reference, content = store.read_configured_reference(self.config, category.class_id, reference_id)
                 if not category.enabled:
+                    continue
+                if self.config.strategy != "examples" and reference_id in selected:
+                    reference_bytes += len(content)
+                    if reference_bytes > 64 * 1024 * 1024:
+                        raise ValueError("visual sensor AI references exceed the memory limit")
+                    self._ai_references[reference_id] = content
+                if self._backend is None:
                     continue
                 with Image.open(io.BytesIO(content)) as image:
                     frame = np.asarray(image.convert("RGB"))[:, :, ::-1].copy()
@@ -93,10 +115,11 @@ class VisualStateRuntime(BaseOperatorRuntime):
 
     async def prepare(self, context):
         self.config.validate_activation()
-        if self.config.strategy != "examples":
-            raise ValueError("multimodal visual sensor execution is not available yet")
         if self.dependencies.services is None:
             raise ValueError("visual sensor requires local configuration and private references")
+        if (self.config.strategy != "examples"
+                and "ai.infer.classify_visual_state" not in self.dependencies.services.list_ids()):
+            raise ValueError("visual sensor multimodal service is unavailable")
         if self._preview_input_pipeline is not None:
             self._prefix = self._preview_input_pipeline
         else:
@@ -190,9 +213,75 @@ class VisualStateRuntime(BaseOperatorRuntime):
     async def _analyze(self, context, packet):
         frame, evidence = await prepare_visual_frame(self.config, self._prefix, packet, self.dependencies.services,
                                                      clock=self._clock, unix_clock=self._unix_clock)
-        vector = await context.run_blocking(self._native, self._backend.embed, frame, mode="thread_pool",
-            concurrency_key=f"vision.visual_state:{self.config.sensor_id}", max_concurrency=1)
-        return vector, evidence
+        vector = None
+        if self.config.strategy != "direct":
+            vector = await context.run_blocking(self._native, self._backend.embed, frame, mode="thread_pool",
+                concurrency_key=f"vision.visual_state:{self.config.sensor_id}", max_concurrency=1)
+        return vector, evidence, frame
+
+    def _observation(self, evidence, observed, *, started, method="local", **decision):
+        return Observation(
+            sensor_id=self.config.sensor_id, runtime_epoch=self._reducer.runtime_epoch,
+            source_identity=evidence["source_identity"], preparation_revision=evidence["preparation_revision"],
+            reference_revision=self.config.reference_revision, model_revision=self.config.model_revision,
+            sample=evidence["sample"], observed_at=evidence["observed_at"], observed_monotonic=observed,
+            freshness_basis=evidence["freshness_basis"], region_quality="valid", method=method,
+            duration_ms=min(3_600_000, max(0, round((self._clock() - started) * 1000))), **decision,
+        )
+
+    def _fresh(self, observed, token):
+        return token == self._token and 0 <= (self._clock() - observed) * 1000 < self.config.temporal.maximum_frame_age_ms
+
+    async def _infer_multimodal(self, frame, observed):
+        remaining = min(self.config.ai_timeout_ms / 1000,
+                        observed + self.config.temporal.maximum_frame_age_ms / 1000 - self._clock())
+        if remaining <= 0:
+            return {"reason": "visual_state_deadline"}
+        # The router owns monotonic deadlines and native cleanup; convert the testable observation clock once.
+        return await self.dependencies.services.call("ai.infer.classify_visual_state",
+            image=frame, classes=self._ai_classes, reference_images=dict(self._ai_references),
+            sensor_id=self.config.sensor_id, profile_id=self.config.ai_profile_id,
+            scene_description=self.config.scene_description, deadline_monotonic=time.monotonic() + remaining,
+            max_attempts=self.config.ai_max_attempts, allow_remote_images=self.config.ai_allow_remote_images,
+            sensor_limits=self.config.ai_limits.model_dump())
+
+    def _multimodal_result(self, result, evidence, observed, started):
+        value = result.model_dump() if hasattr(result, "model_dump") else result
+        if not isinstance(value, dict):
+            raise ValueError("invalid_visual_state_response")
+        answer = value.get("observation")
+        if answer is None:
+            reason = value.get("reason")
+            if not isinstance(reason, str) or re.fullmatch(r"[a-z][a-z0-9_]{0,159}", reason) is None:
+                reason = "visual_state_provider_failed"
+            return self._observation(evidence, observed, started=started, method="multimodal", reason=reason), None
+        revision = value.get("configuration_revision")
+        if not isinstance(revision, str) or re.fullmatch(r"[a-f0-9]{64}", revision) is None:
+            raise ValueError("invalid_visual_state_response")
+        if not isinstance(answer, dict) or set(answer) != {
+            "observable", "class_id", "reason", "declared_confidence", "reference_ids",
+        }:
+            raise ValueError("invalid_visual_state_response")
+        category, identifiers, confidence = answer["class_id"], answer["reference_ids"], answer["declared_confidence"]
+        if (type(answer["observable"]) is not bool
+                or (category is not None and (not isinstance(category, str) or category not in {
+                    item["class_id"] for item in self._ai_classes}))
+                or (not answer["observable"] and category is not None)
+                or not isinstance(answer["reason"], str) or not answer["reason"].strip() or len(answer["reason"]) > 320
+                or not isinstance(identifiers, list) or len(identifiers) > 64
+                or any(not isinstance(identifier, str) or identifier not in self._ai_references for identifier in identifiers)
+                or len(set(identifiers)) != len(identifiers)
+                or (confidence is not None and (type(confidence) not in {float, int}
+                    or not math.isfinite(confidence) or not 0 <= confidence <= 1))):
+            raise ValueError("invalid_visual_state_response")
+        observation = self._observation(evidence, observed, started=started, method="multimodal",
+            class_id=category, acceptance="enter" if category is not None else "abstain",
+            reference_ids=identifiers, declared_confidence=confidence,
+            reason="multimodal_unobservable" if not answer["observable"] else
+                   "multimodal_match" if category is not None else "multimodal_ambiguous")
+        if not answer["observable"]:
+            observation = observation.model_copy(update={"region_quality": "unobservable"})
+        return observation, revision
 
     async def _publish(self, context, processing_status):
         state = self._reducer.tick().model_copy(update={"processing_status": processing_status})
@@ -216,14 +305,17 @@ class VisualStateRuntime(BaseOperatorRuntime):
             raise RuntimeError("visual sensor was not prepared")
         reader = asyncio.create_task(context.read())
         worker = None
+        ai_worker = None
+        ai_pending = ai_active = None
         pending = active = None
         next_evaluation = 0.0
         analysis_started = 0.0
         failed = False
         try:
             while not context.is_cancelled() and not self._closed.is_set():
-                await self._publish(context, "evaluating" if worker else "waiting" if pending else "failed" if failed else "idle")
-                ready, _ = await asyncio.wait({reader, worker} if worker else {reader}, timeout=0.05)
+                await self._publish(context, "evaluating" if worker or ai_worker else
+                                    "waiting" if pending or ai_pending else "failed" if failed else "idle")
+                ready, _ = await asyncio.wait({task for task in (reader, worker, ai_worker) if task is not None}, timeout=0.05)
                 if context.is_cancelled() or self._closed.is_set():
                     break
                 if reader in ready:
@@ -233,46 +325,96 @@ class VisualStateRuntime(BaseOperatorRuntime):
                         admitted = self._admit(packet)
                         if token != self._token:
                             pending = None
+                            ai_pending = None
                         if admitted is not None:
                             pending = admitted
                     reader = asyncio.create_task(context.read())
                 if worker is not None and worker in ready:
                     try:
-                        vector, evidence = worker.result()
+                        vector, evidence, prepared_frame = worker.result()
                         frozen, _, observed, token = active
-                        if token == self._token:
-                            decision = compare_references(
-                                self.config, vector, self._references, model_revision=self._backend.revision,
-                                preparation_revision=evidence["preparation_revision"],
-                                current_class_id=self._reducer.current_class_id,
-                            )
-                            self._reducer.observe(Observation(
-                                sensor_id=self.config.sensor_id, runtime_epoch=self._reducer.runtime_epoch,
-                                source_identity=evidence["source_identity"], preparation_revision=evidence["preparation_revision"],
-                                reference_revision=self.config.reference_revision, model_revision=self.config.model_revision,
-                                sample=evidence["sample"], observed_at=evidence["observed_at"], observed_monotonic=observed,
-                                freshness_basis=evidence["freshness_basis"], region_quality="valid", method="local",
-                                class_id=decision.class_id, acceptance=decision.acceptance, similarity=decision.similarity,
-                                margin=decision.margin, reference_ids=decision.reference_ids, reason=decision.reason,
-                                duration_ms=min(3_600_000, max(0, round((self._clock() - analysis_started) * 1000))),
-                            ))
+                        if self._fresh(observed, token):
+                            needs_ai = self.config.strategy == "direct"
+                            if not needs_ai:
+                                decision = compare_references(
+                                    self.config, vector, self._references, model_revision=self._backend.revision,
+                                    preparation_revision=evidence["preparation_revision"],
+                                    current_class_id=self._reducer.current_class_id,
+                                )
+                                observation = self._observation(evidence, observed, started=analysis_started,
+                                    class_id=decision.class_id, acceptance=decision.acceptance, similarity=decision.similarity,
+                                    margin=decision.margin, reference_ids=decision.reference_ids, reason=decision.reason)
+                                needs_ai = self.config.strategy == "fallback" and decision.reason in {
+                                    "ambiguous_classes", "low_similarity",
+                                }
+                                if not needs_ai:
+                                    ai_pending = None
+                                    self._reducer.observe(observation)
+                            if needs_ai:
+                                deferred = self._observation(evidence, observed, started=analysis_started,
+                                    method="multimodal" if self.config.strategy == "direct" else "local",
+                                    reason="multimodal_pending")
+                                self._reducer.await_multimodal(deferred)
+                                prepared_frame.flags.writeable = False
+                                ai_pending = prepared_frame, evidence, observed, token, analysis_started
                     except asyncio.CancelledError:
                         raise
                     except VisualRegionUnavailable:
                         if active[3] == self._token:
                             self._invalidate("region_unavailable")
                             pending = None
+                            ai_pending = None
                     except PipelinePreviewError:
                         if active[3] == self._token:
                             self._invalidate("input_unobservable")
                             pending = None
+                            ai_pending = None
                     except Exception:
                         context.metrics.record_error(RuntimeError("visual_state_local_analysis_failed"))
                         if active[3] == self._token:
                             self._invalidate("local_analysis_failed")
                             pending = None
+                            ai_pending = None
                             failed = True
                     worker = active = None
+                if ai_worker is not None and ai_worker in ready:
+                    _, evidence, observed, token, started = ai_active
+                    try:
+                        result = ai_worker.result()
+                        previous = self._reducer.snapshot().last_analysis
+                        superseded = previous is not None and (
+                            previous.sample.capture_instance != evidence["sample"]["capture_instance"]
+                            or (previous.sample.generation, previous.sample.sequence) >= (
+                                evidence["sample"]["generation"], evidence["sample"]["sequence"]))
+                        if self._fresh(observed, token) and not superseded:
+                            observation, revision = self._multimodal_result(result, evidence, observed, started)
+                            if revision is not None:
+                                if self._ai_revision is not None and revision != self._ai_revision:
+                                    self._reducer = VisualStateReducer(self.config, runtime_epoch=uuid.uuid4().hex, clock=self._clock)
+                                    observation = observation.model_copy(update={"runtime_epoch": self._reducer.runtime_epoch})
+                                self._ai_revision = revision
+                            self._reducer.observe(observation)
+                            if observation.region_quality != "valid":
+                                self._token += 1
+                                pending = ai_pending = None
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        context.metrics.record_error(RuntimeError("visual_state_multimodal_analysis_failed"))
+                        if self._fresh(observed, token):
+                            self._reducer.observe(self._observation(evidence, observed, started=started,
+                                method="multimodal", reason="visual_state_multimodal_analysis_failed"))
+                            failed = True
+                    ai_worker = ai_active = None
+                if ai_worker is None and ai_pending is not None:
+                    ai_active, ai_pending = ai_pending, None
+                    prepared_frame, evidence, observed, token, started = ai_active
+                    if self._fresh(observed, token):
+                        self._reducer.await_multimodal(self._observation(evidence, observed, started=started,
+                            method="multimodal", reason="multimodal_pending"))
+                        ai_worker = asyncio.create_task(self._infer_multimodal(prepared_frame, observed))
+                    else:
+                        ai_active = None
                 if worker is None and pending is not None and self._clock() >= next_evaluation:
                     active, pending = pending, None
                     frozen, evidence, observed, token = active
@@ -284,11 +426,23 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     else:
                         active = None
         finally:
+            self._closed.set()
             reader.cancel()
             if worker is not None:
                 worker.cancel()
-            await asyncio.gather(reader, *([worker] if worker else []), return_exceptions=True)
+            if ai_worker is not None:
+                ai_worker.cancel()
+            cleanup = asyncio.gather(*(task for task in (reader, worker, ai_worker) if task is not None), return_exceptions=True)
+            cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            cleanup.result()
             await self.shutdown()
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def shutdown(self):
         self._closed.set()

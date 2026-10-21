@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -42,6 +44,7 @@ class VisualStateInferenceResult(BaseModel):
     model: str = ""
     attempts: list[AiAttempt] = Field(default_factory=list)
     retry_at: float | None = None
+    configuration_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class _VisualCallPolicy(BaseModel):
@@ -164,10 +167,23 @@ class AiRouter:
                             request=request, image=image, reference_images=reference_images,
                             attempt_deadline=attempt_deadline, attempt=attempt)
                         if observation is None:
+                            if attempt.error == "visual_state_configuration_changed":
+                                return VisualStateInferenceResult(reason=attempt.error, attempts=attempts)
                             continue
                         attempt.ok = True
+                        try:
+                            current = await self.settings()
+                        except Exception:
+                            return VisualStateInferenceResult(reason="visual_state_configuration_unavailable", attempts=attempts)
+                        if current.profile_by_id(profile.id) != profile or current.provider_by_id(provider.id) != provider:
+                            return VisualStateInferenceResult(reason="visual_state_configuration_changed", attempts=attempts)
+                        revision = hashlib.sha256(json.dumps({
+                            "profile": profile.model_dump(exclude={"name"}),
+                            "provider": provider.model_dump(exclude={"name", "api_key"}),
+                        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                         return VisualStateInferenceResult(observation=observation, profile_id=profile.id,
-                            provider_id=provider.id, model=profile.model, attempts=attempts)
+                            provider_id=provider.id, model=profile.model, attempts=attempts,
+                            configuration_revision=revision)
             except TimeoutError:
                 attempt.error = "visual_state_deadline" if time.monotonic() >= deadline else "visual_state_attempt_timeout"
             except asyncio.CancelledError:
@@ -216,6 +232,12 @@ class AiRouter:
             if paused is not None:
                 attempt.error, attempt.retry_at = paused["reason"], paused["retry_at"]
                 return None
+            if await self.settings() != settings:
+                attempt.error = "visual_state_configuration_changed"
+                return None
+            remaining = attempt_deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
             runtime = build_provider(provider, profile.model_copy(update={"timeout_seconds": remaining}))
             sent = True
             observation = await runtime.classify_prepared_visual_state(request=prepared, encoded=encoded)

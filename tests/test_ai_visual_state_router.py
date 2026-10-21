@@ -68,12 +68,83 @@ def test_success_is_validated_and_attributed_by_router(tmp_path, monkeypatch):
         assert result.observation.class_id == "closed"
         assert (result.profile_id, result.provider_id, result.model) == ("first", "local", "first")
         assert len(result.attempts) == 1 and result.attempts[0].ok
+        assert len(result.configuration_revision) == 64
         assert result.attempts[0].latency_ms > 0
         assert len(calls) == 1 and len(calls[0][1]) == 1
         assert (await router.usage_snapshot())["profiles"]["first"]["day"] == 1
         await router.shutdown()
         assert not router._visual_jobs
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["model", "temperature", "credential", "disabled"])
+def test_profile_or_connection_change_during_inference_discards_result(tmp_path, monkeypatch, change):
+    store = Store()
+
+    class Provider:
+        async def classify_prepared_visual_state(self, **_kwargs):
+            if change == "credential":
+                store.raw["providers"][0]["api_key"] = "changed-secret"
+            elif change == "disabled":
+                store.raw["profiles"][0]["enabled"] = False
+            else:
+                store.raw["profiles"][0][change] = "other-model" if change == "model" else .5
+            return observation()
+
+    monkeypatch.setattr("toposync_ext_ai.router.build_provider", lambda *_: Provider())
+
+    async def scenario():
+        router = AiRouter(config_store=store, data_dir=tmp_path)
+        result = await router.classify_visual_state(**arguments())
+        assert result.reason == "visual_state_configuration_changed" and result.observation is None
+        assert result.configuration_revision is None and len(result.attempts) == 1
+        assert (await router.usage_snapshot())["profiles"]["first"]["day"] == 1
+        assert "changed-secret" not in result.model_dump_json()
+        await router.shutdown()
+    asyncio.run(scenario())
+
+
+def test_revocation_during_preparation_cannot_start_transport_or_alternative(tmp_path, monkeypatch):
+    import toposync_ext_ai.router as module
+    store = Store()
+    prepare = module.prepare_visual_state
+
+    async def revoke(**arguments):
+        result = await prepare(**arguments)
+        store.raw["providers"][0]["enabled"] = False
+        return result
+
+    monkeypatch.setattr(module, "prepare_visual_state", revoke)
+    monkeypatch.setattr(module, "build_provider", lambda *_: pytest.fail("revoked provider must not send"))
+
+    async def scenario():
+        router = AiRouter(config_store=store, data_dir=tmp_path)
+        result = await router.classify_visual_state(**arguments(max_attempts=3))
+        assert result.reason == "visual_state_configuration_changed" and result.observation is None
+        assert len(result.attempts) == 1 and not result.attempts[0].ok
+        await router.shutdown()
+    asyncio.run(scenario())
+
+
+def test_configuration_read_failure_after_valid_response_does_not_try_another_model(monkeypatch):
+    store = Store()
+    calls = []
+
+    class Provider:
+        async def classify_prepared_visual_state(self, **_kwargs):
+            calls.append(1)
+            store.raw = {"unexpected_configuration_field": True}
+            return observation()
+
+    monkeypatch.setattr("toposync_ext_ai.router.build_provider", lambda *_: Provider())
+
+    async def scenario():
+        router = AiRouter(config_store=store)
+        result = await router.classify_visual_state(**arguments(max_attempts=3))
+        assert result.reason == "visual_state_configuration_unavailable" and result.observation is None
+        assert len(result.attempts) == 1 and calls == [1]
+        await router.shutdown()
     asyncio.run(scenario())
 
 

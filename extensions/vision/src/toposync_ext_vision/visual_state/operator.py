@@ -55,6 +55,16 @@ def visual_state_cadence_diagnostics(config, context):
         warning("visual_state_cadence_too_slow",
                 f"A configured observation interval of {interval:g} ms exceeds confirmation or validity limits.",
                 "Reduce the interval or explicitly revise the temporal policy; fast response remains unqualified.", identifier)
+    if config.strategy == "direct":
+        warning("visual_state_ai_latency_unverified", "Direct AI response time has not been qualified for this sensor.",
+                "Measure the selected profile; the effective deadline cannot exceed the image's remaining useful age.", "visual_state")
+        for period, duration_ms in (("minute", 60_000), ("hour", 3_600_000), ("day", 86_400_000)):
+            count = getattr(config.ai_limits, f"requests_per_{period}")
+            if count is not None and (duration_ms / count > config.temporal.maximum_gap_ms
+                                      or duration_ms / count >= config.temporal.validity_ms):
+                warning("visual_state_ai_budget_too_low", "The sensor AI budget cannot sustain the configured confirmation and validity intervals.",
+                        "Choose a compatible temporal policy and explicit budget; shared profile limits may reduce the effective cadence further.", "visual_state")
+                break
     return diagnostics
 
 
@@ -66,12 +76,11 @@ def visual_state_diagnostics(config, context):
         parsed.validate_activation()
         if context.get("processing_server_id", "local") != "local":
             raise ValueError("visual sensors currently require local execution")
-        if parsed.strategy != "examples":
-            raise ValueError("multimodal execution is not available yet")
-        manifest = build_default_model_registry().get_manifest(parsed.model_id)
-        if (manifest is None or manifest.task != "embedding" or manifest.postprocess.type != "image_embedding"
-                or not manifest.resolve_artifact_path().is_file()):
-            raise ValueError("the configured image embedding model is unavailable")
+        if parsed.strategy != "direct":
+            manifest = build_default_model_registry().get_manifest(parsed.model_id)
+            if (manifest is None or manifest.task != "embedding" or manifest.postprocess.type != "image_embedding"
+                    or not manifest.resolve_artifact_path().is_file()):
+                raise ValueError("the configured image embedding model is unavailable")
     except (ValueError, OSError) as error:
         return [*diagnostics, OperatorDiagnostic(severity="error", code="visual_state_not_ready", message=str(error),
                                    suggestion="Configure compatible references, a verified model and its calibrated comparison policy.")]
@@ -83,7 +92,7 @@ def register_visual_state_operator(registry):
         return
     registry.register_operator(
         operator_id="vision.visual_state", config_model=VisualStateConfig,
-        description="Experimental local visual state with private examples, temporal confirmation and expiring evidence.",
+        description="Experimental visual state with private examples, optional multimodal analysis, temporal confirmation and expiring evidence.",
         defaults={"sensor_id": "unconfigured", "reference_revision": "unconfigured", "model_revision": "unconfigured",
                   "classes": [{"class_id": key, "key": key, "label": label}
                               for key, label in (("state_1", "State 1"), ("state_2", "State 2"))]},

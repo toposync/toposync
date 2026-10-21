@@ -79,7 +79,7 @@ def test_capture_runner_and_runtime_receive_identical_canonical_pixels_with_real
         try:
             snapshot = await runner.run(owner='owner', configuration=configuration, pipeline=prefix, registry=registry,
                                         dependencies=original.dependencies, capture=True)
-            _, observed = await runtime._analyze(context, packet)
+            _, observed, _ = await runtime._analyze(context, packet)
             with Image.open(io.BytesIO(snapshot['image'])) as image:
                 np.testing.assert_array_equal(np.asarray(image)[:, :, ::-1], captured_inputs[0])
             assert snapshot['evidence']['sample'] == observed['sample']
@@ -136,7 +136,8 @@ def test_prepared_service_response_must_match_revision_sample_and_freshness(tmp_
     asyncio.run(scenario())
 
 
-def test_region_loss_reconfirms_on_return_and_slow_preparation_does_not_delay_expiry(tmp_path):
+@pytest.mark.parametrize('strategy', ['examples', 'direct'])
+def test_region_loss_reconfirms_on_return_and_slow_preparation_does_not_delay_expiry(tmp_path, strategy):
     async def scenario():
         original, context, clock, store, saved = await harness(tmp_path)
         prefix = reference_input_pipeline(saved, 'state')
@@ -161,7 +162,17 @@ def test_region_loss_reconfirms_on_return_and_slow_preparation_does_not_delay_ex
                     'reference': region.reference.model_dump(), '_image': arguments['image']}
 
         original.dependencies.services.register('cameras.visual_region.prepare', prepare)
-        runtime = VisualStateRuntime(draft.configuration.model_dump(), original.dependencies,
+        ai_calls = []
+
+        async def classify(**arguments):
+            ai_calls.append(arguments)
+            return {'configuration_revision': 'a' * 64,
+                    'observation': {'observable': True, 'class_id': 'red', 'reason': 'Visible red state',
+                                   'declared_confidence': None, 'reference_ids': []}}
+
+        original.dependencies.services.register('ai.infer.classify_visual_state', classify)
+        configuration = draft.configuration.model_copy(update={'strategy': strategy, 'ai_profile_id': 'visual'})
+        runtime = VisualStateRuntime(configuration.model_dump(), original.dependencies,
             preview_input_pipeline=prefix, clock=clock, unix_clock=clock.unix)
         await runtime.prepare(context)
         task = asyncio.create_task(runtime.run(context))
@@ -200,6 +211,8 @@ def test_region_loss_reconfirms_on_return_and_slow_preparation_does_not_delay_ex
             release.set()
             await until(lambda: runtime._reducer.snapshot().reason == 'input_unobservable')
             assert runtime._reducer.snapshot().class_id is None
+            assert len(ai_calls) == (4 if strategy == 'direct' else 0)
+            assert runtime._backend is None if strategy == 'direct' else runtime._backend is not None
         finally:
             release.set()
             context.cancel_event.set()

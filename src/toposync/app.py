@@ -104,6 +104,7 @@ from toposync.runtime.pipelines.preview import (
     PipelinePreviewError,
     build_preview_registry,
     prepare_preview_pipeline,
+    reference_capture_evidence,
     resolve_preview_packet_image,
 )
 from toposync.runtime.pipelines.operators_sinks import ImageStorageFormat, _encode_image_bytes
@@ -838,6 +839,7 @@ class PipelinePreviewFallbackSnapshotRequest(BaseModel):
 
 class PipelinePreviewFrameRequest(BaseModel):
     pipeline: Pipeline
+    purpose: Literal["preview", "reference"] = "preview"
     fallback_snapshot: PipelinePreviewFallbackSnapshotRequest | None = None
     timeout_seconds: float = Field(default=12.0, ge=0.5, le=60.0)
     format: ImageStorageFormat = "png"
@@ -1159,11 +1161,12 @@ def _guess_media_type(path: str) -> str:
 def _build_preview_runtime_dependencies(
     request: Request,
     *,
+    pipeline: Pipeline,
     collector: Callable[[Any, str, str], Awaitable[None] | None],
 ) -> PipelineRuntimeDependencies:
     orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
     if orchestrator is not None and hasattr(orchestrator, "_build_runtime_dependencies"):
-        deps = orchestrator._build_runtime_dependencies(origin_inbox=None)
+        deps = orchestrator._build_runtime_dependencies(origin_inbox=None, pipelines=[pipeline])
     else:
         config_store: ConfigStore = request.app.state.config_store
         deps = PipelineRuntimeDependencies(
@@ -3769,6 +3772,10 @@ def create_app() -> FastAPI:
         request: Request, body: PipelinePreviewFrameRequest
     ) -> Response:
         _require(request, action="core:pipelines:read")
+        reference_capture = body.purpose == "reference"
+        if reference_capture:
+            _inspection_owner(request)
+            _require(request, action="core:pipelines:write")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
 
@@ -3776,12 +3783,12 @@ def create_app() -> FastAPI:
             check_cancelled()
             try:
                 preview_pipeline = prepare_preview_pipeline(
-                    pipeline=body.pipeline, registry=registry
+                    pipeline=body.pipeline, registry=registry, reference_capture=reference_capture
                 )
             except PipelinePreviewError as exc:
                 fallback_response = _pipeline_preview_fallback_response(
                     request,
-                    body.fallback_snapshot,
+                    None if reference_capture else body.fallback_snapshot,
                 )
                 if fallback_response is not None:
                     return fallback_response
@@ -3799,16 +3806,32 @@ def create_app() -> FastAPI:
             check_cancelled()
             loop = asyncio.get_running_loop()
             captured_image: asyncio.Future[Any] = loop.create_future()
+            last_capture_issue: str | None = None
 
             async def _collector(packet: Any, _node_id: str, _pipeline_name: str) -> None:
+                nonlocal last_capture_issue
                 if captured_image.done():
                     return
                 image = resolve_preview_packet_image(packet)
                 if image is None:
                     return
-                captured_image.set_result(image)
+                if reference_capture:
+                    try:
+                        reference_capture_evidence(packet, body.pipeline)
+                    except PipelinePreviewError as exc:
+                        last_capture_issue = exc.code
+                        return
+                    image = image.copy()
+                captured_image.set_result((image, packet))
 
-            deps = _build_preview_runtime_dependencies(request, collector=_collector)
+            deps = _build_preview_runtime_dependencies(request, pipeline=preview_pipeline, collector=_collector)
+            if reference_capture:
+                deps.pipeline_snapshot_store = None
+                deps.pipeline_stats_store = None
+                deps.pipeline_telemetry_store = None
+                deps.pipeline_storage_manager = None
+                deps.pipeline_observability_sink = None
+                deps.inspection_store = None
             preview_registry = build_preview_registry(registry)
             runtime = PipelineRuntime(
                 compiled=compiled,
@@ -3821,20 +3844,20 @@ def create_app() -> FastAPI:
                 check_cancelled()
                 await runtime.start()
                 try:
-                    image = await asyncio.wait_for(
+                    image, captured_packet = await asyncio.wait_for(
                         captured_image,
                         timeout=float(body.timeout_seconds),
                     )
                 except TimeoutError as exc:
                     fallback_response = _pipeline_preview_fallback_response(
                         request,
-                        body.fallback_snapshot,
+                        None if reference_capture else body.fallback_snapshot,
                     )
                     if fallback_response is not None:
                         return fallback_response
                     raise HTTPException(
                         status_code=504,
-                        detail=(
+                        detail=last_capture_issue or (
                             "Timed out waiting for a preview frame. Check the camera source or leave the pipeline "
                             "running until this point so a stored snapshot can be collected."
                         ),
@@ -3846,7 +3869,7 @@ def create_app() -> FastAPI:
             if image is None:
                 fallback_response = _pipeline_preview_fallback_response(
                     request,
-                    body.fallback_snapshot,
+                    None if reference_capture else body.fallback_snapshot,
                 )
                 if fallback_response is not None:
                     return fallback_response
@@ -3864,12 +3887,20 @@ def create_app() -> FastAPI:
                 fmt=str(body.format or "png"),
                 jpeg_quality=int(body.jpeg_quality),
             )
+            capture_headers = {}
+            if reference_capture:
+                try:
+                    evidence = reference_capture_evidence(captured_packet, body.pipeline)
+                except PipelinePreviewError as exc:
+                    raise HTTPException(status_code=409, detail=exc.code) from exc
+                capture_headers["X-Toposync-Capture-Evidence"] = json.dumps(evidence, separators=(",", ":"))
             return Response(
                 content=blob,
                 media_type=mime_type,
                 headers={
                     "Cache-Control": "no-store",
                     "X-Toposync-Pipeline-Preview-Mode": "runtime",
+                    **capture_headers,
                 },
             )
 

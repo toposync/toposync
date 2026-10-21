@@ -62,15 +62,16 @@ export function CameraObservationPresetModal({
   const selectableCategories = preset === "area_presence" || preset === "area_entry";
   const visitor = preset === "doorbell_visitor";
   const audio = preset === "audio_anomaly";
+  const visual = preset === "visual_state";
   const cat = preset === "cat_litter_use" || preset === "cat_drinking";
   const RegionEditor = ui?.CameraRegionEditor;
   const regionAvailable = Boolean(RegionEditor) && sources.find(source => source.id === sourceId)?.origin?.has_ptz !== true;
   const regionReady = Boolean(regionAvailable && region && region.snapshot_binding.camera_id === camera.id && region.snapshot_binding.source_id === sourceId);
   const selectedSignal = signals.find(item => JSON.stringify([item.topic, item.item_name]) === signalId);
   const area = visitor || preset === "area_presence" || preset === "area_entry" || preset === "area_group_entry";
-  if (!open || (!area && !audio && preset !== "cat_litter_use" && preset !== "cat_drinking")) return null;
+  if (!open || (!area && !audio && !visual && preset !== "cat_litter_use" && preset !== "cat_drinking")) return null;
   const selectedArea = mappedCompositions.flatMap(composition => (composition.areas ?? []).map(item => ({...item, compositionId: composition.id}))).find(item => JSON.stringify([item.compositionId, item.id]) === areaId);
-  const key = audio ? "ext.cameras.audioRecipe" : visitor ? "ext.cameras.visitor" : area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
+  const key = visual ? "ext.cameras.visualState" : audio ? "ext.cameras.audioRecipe" : visitor ? "ext.cameras.visitor" : area ? `ext.cameras.area.${preset === "area_presence" ? "presence" : preset === "area_group_entry" ? "group" : "entry"}` : `ext.cameras.cat.${preset === "cat_litter_use" ? "litter" : "water"}`;
   async function save(): Promise<void> {
     if (saving || !sourceId || !preset || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && (!reference || (peerId && (!selectedPeer || !peerReference)))) || (selectableCategories && categories.length === 0) || (cat && !regionReady)) return;
     setSaving(true);
@@ -100,7 +101,7 @@ export function CameraObservationPresetModal({
         area_categories: selectableCategories ? categories : undefined,
         preset, source_id: sourceId, pipeline_name: name.trim(), enabled: false,
         event_topic: selectedSignal?.topic, event_item_name: selectedSignal?.item_name,
-        processing_server_id: serverId, area_id: selectedArea?.id ?? "", composition_id: selectedArea?.compositionId ?? "",
+        processing_server_id: visual ? "local" : serverId, area_id: selectedArea?.id ?? "", composition_id: selectedArea?.compositionId ?? "",
       });
       onCreated(result.pipeline_name);
       onClose();
@@ -113,13 +114,13 @@ export function CameraObservationPresetModal({
   return <><SubModal open={open && !regionEditorOpen} title={t(`${key}.title`)} onClose={() => { if (!saving) onClose(); }}
     panelStyle={{ width: "min(540px, calc(100vw - 28px))" }}>
     <p>{t(`${key}.description`)}</p>
-    <p>{t(audio ? "ext.cameras.audioRecipe.limits" : "ext.cameras.cat.preview")}</p>
+    <p>{t(visual ? "ext.cameras.visualState.setup" : audio ? "ext.cameras.audioRecipe.limits" : "ext.cameras.cat.preview")}</p>
     {sources.length > 1 ? <div className="field">
       <label className="label" htmlFor="cat-recipe-source">{t("ext.cameras.cat.source")}</label>
       <select id="cat-recipe-source" className="input" value={sourceId} onChange={(event) => { setSourceId(event.target.value); setReference(null); }} disabled={saving}>
         {sources.map((source) => <option key={source.id} value={source.id}>{source.name || source.id}</option>)}
       </select>
-    </div> : audio && sources.length === 1 ? <p><strong>{t("ext.cameras.cat.source")}: </strong>{camera.name || camera.id} · {sources[0].name || sources[0].id}</p> : null}
+    </div> : (audio || visual) && sources.length === 1 ? <p><strong>{t("ext.cameras.cat.source")}: </strong>{camera.name || camera.id} · {sources[0].name || sources[0].id}</p> : null}
     {audio && <label className="field"><span className="label">{t("ext.cameras.audioRecipe.reference")}</span>
       <input key={sourceId} type="file" accept=".wav,audio/wav" disabled={saving} style={{ maxWidth: "100%" }}
         onChange={event => { setReference(event.target.files?.[0] ?? null); setError(null); }} />
@@ -161,7 +162,7 @@ export function CameraObservationPresetModal({
           {(composition.areas ?? []).filter(item => item.vertices_count >= 3).map(item => <option key={item.id} value={JSON.stringify([composition.id, item.id])}>{item.name || item.id}</option>)}
         </optgroup>)}
       </select>
-    </label> : !audio ? <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.profile")}</p> : null}
+    </label> : cat ? <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.profile")}</p> : null}
     {selectableCategories && <fieldset disabled={saving} style={{ margin: "0 0 16px", padding: 0, border: 0, minWidth: 0 }}>
       <legend className="label" style={{ padding: 0 }}>{t("ext.cameras.area.categories")}</legend>
       {(["person", "cat", "dog"] as const).map(category => <label key={category} style={{ display: "inline-flex", alignItems: "center", gap: 8, minHeight: 44, marginRight: 16 }}>
@@ -180,17 +181,17 @@ export function CameraObservationPresetModal({
     </label>}
     <details><summary>{t("ext.cameras.cat.advanced")}</summary>
       <div style={{ display: "grid", gap: "var(--space-4)", paddingTop: "var(--space-3)" }}>
-      <label className="field"><span className="label">{t("ext.cameras.pipeline_preset.processing_server", {}, "Processing server")}</span>
+      {!visual && <label className="field"><span className="label">{t("ext.cameras.pipeline_preset.processing_server", {}, "Processing server")}</span>
         <select className="input" value={serverId} onChange={event => setServerId(event.target.value)} disabled={saving}>
           {processingServers.map(server => <option key={server.id} value={server.id}>{server.name || server.id}</option>)}
         </select>
-      </label>
+      </label>}
       <div className="field"><label className="label" htmlFor="cat-recipe-name">{t("ext.cameras.cat.name")}</label>
         <input id="cat-recipe-name" className="input" maxLength={160} placeholder={t("ext.cameras.recipe.automatic_name")} value={name} onChange={(event) => setName(event.target.value)} disabled={saving} />
       </div>
       </div>
     </details>
-    {preset ? <CameraOnvifRecipeOptimization camera={camera} sourceId={sourceId} preset={preset} processingServerId={serverId} t={t} disabled={saving} onChange={() => {}} /> : null}
+    {preset && !visual ? <CameraOnvifRecipeOptimization camera={camera} sourceId={sourceId} preset={preset} processingServerId={serverId} t={t} disabled={saving} onChange={() => {}} /> : null}
     <p className="settingsStatusMuted" style={{ whiteSpace: "normal", overflow: "visible" }}>{t("ext.cameras.cat.paused")}</p>
     {error ? <p role="alert" className="errorText">{error}</p> : null}
     <button className="primaryButton" type="button" disabled={saving || !sourceId || (area && !selectedArea) || (visitor && !selectedSignal) || (audio && (!reference || (peerId && (!selectedPeer || !peerReference)))) || (selectableCategories && categories.length === 0) || (cat && !regionReady)} onClick={() => void save()}>

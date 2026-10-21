@@ -67,6 +67,7 @@ from .pipeline_templates import (
     build_pipeline_graph_v2,
     build_person_vehicle_interaction_graph,
     build_cat_activity_graph,
+    build_visual_state_graph,
     CameraObservationRegion,
     CAT_ACTIVITY_RECIPES,
 )
@@ -138,6 +139,7 @@ CLIENT_CLOSED_REQUEST_STATUS = 499
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 PIPELINE_NAME_MAX_LENGTH = 120
 CAMERA_PIPELINE_PRESETS = (
+    "visual_state",
     "audio_anomaly",
     "area_presence",
     "area_entry",
@@ -228,6 +230,7 @@ async def _raise_if_request_disconnected(request: Request) -> None:
 
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 PRESET_PIPELINE_NAME_PARTS = {
+    "visual_state": "sensor_visual",
     "audio_anomaly": "som_acima_da_referencia",
     "area_presence": "presenca_em_area_definida",
     "area_entry": "entrada_em_area_definida",
@@ -244,6 +247,7 @@ PRESET_PIPELINE_NAME_PARTS = {
     "person_vehicle_interaction": "interacao_pessoa_veiculo",
 }
 PRESET_PIPELINE_LABELS = {
+    "visual_state": "Sensor visual",
     "audio_anomaly": "Som acima da referência",
     "area_presence": "Presença em área",
     "area_entry": "Entrada em área",
@@ -746,6 +750,7 @@ class AudioPeerSource(BaseModel):
 class CameraPipelinePresetRequest(BaseModel):
     onvif_optimization: CameraOnvifOptimization | None = None
     preset: Literal[
+        "visual_state",
         "audio_anomaly",
         "area_presence",
         "area_entry",
@@ -5541,6 +5546,9 @@ class CamerasExtension(BaseExtension):
                     graph_uid=graph_uid, categories=area_categories, notification_title=notification_title,
                     notification_description=notification_description, notification_priority=notification_priority,
                 )
+            if preset == "visual_state":
+                return build_visual_state_graph(camera_id=camera_id, source_id=source_id, graph_uid=graph_uid,
+                    sensor_configuration=registry.get("vision.visual_state").definition.defaults)
             if preset in CAT_ACTIVITY_RECIPES:
                 return build_cat_activity_graph(
                     preset=preset, camera_id=camera_id, source_id=source_id, graph_uid=graph_uid,
@@ -6052,6 +6060,14 @@ class CamerasExtension(BaseExtension):
                     detail=f"preset must be one of: {', '.join(CAMERA_PIPELINE_PRESETS)}",
                 )
 
+            if preset == "visual_state":
+                if str(body.processing_server_id or "local").strip() != "local":
+                    raise HTTPException(400, "Visual sensors currently require local execution")
+                if body.enable_ptz_attention:
+                    raise HTTPException(400, "Visual sensors use passive observation")
+                if request.app.state.pipeline_operator_registry.get("vision.visual_state") is None:
+                    raise HTTPException(409, "Visual sensor operator is unavailable")
+
             if body.observation_region is not None and preset not in CAT_ACTIVITY_RECIPES:
                 raise HTTPException(400, "observation_region requires a cat activity recipe")
             if body.observation_region is not None and body.enable_ptz_attention:
@@ -6215,7 +6231,7 @@ class CamerasExtension(BaseExtension):
             detection_model_id = (
                 str(body.model_id or "").strip() or DEFAULT_CAMERA_DETECTION_MODEL_ID
             )
-            if preset not in CAT_ACTIVITY_RECIPES and preset != "audio_anomaly":
+            if preset not in CAT_ACTIVITY_RECIPES and preset not in {"audio_anomaly", "visual_state"}:
                 await _ensure_camera_preset_detection_model_ready(
                     store,
                     processing_server_id=processing_server_id,

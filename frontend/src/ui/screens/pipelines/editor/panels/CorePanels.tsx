@@ -1055,7 +1055,7 @@ export function VelocityThrottleConfigCard({
           className="pipelinesInput"
           min={0.01}
           max={3600}
-          step={0.1}
+          step="any"
           value={Number.isFinite(movingIntervalSeconds) ? movingIntervalSeconds : 2.0}
           onChange={(nextValue) => {
             onUpdateConfig((prev) => ({
@@ -1072,7 +1072,7 @@ export function VelocityThrottleConfigCard({
           className="pipelinesInput"
           min={0.01}
           max={3600}
-          step={1.0}
+          step="any"
           value={Number.isFinite(stoppedIntervalSeconds) ? stoppedIntervalSeconds : 300.0}
           onChange={(nextValue) => {
             onUpdateConfig((prev) => ({

@@ -153,8 +153,12 @@ const visualStateMessages: Record<string, [string, string]> = {
   request_failed: ["The operation could not be confirmed. Recover the capture or reload the draft before continuing.", "Não foi possível confirmar a operação. Recupere a captura ou recarregue o rascunho antes de continuar."],
 };
 export const visualStateTranslations: TranslationBundle = {
-  en: Object.fromEntries(Object.entries(visualStateMessages).map(([key, value]) => [`ext.vision.visualState.${key}`, value[0]])),
-  "pt-BR": Object.fromEntries(Object.entries(visualStateMessages).map(([key, value]) => [`ext.vision.visualState.${key}`, value[1]])),
+  en: { ...Object.fromEntries(Object.entries(visualStateMessages).map(([key, value]) => [`ext.vision.visualState.${key}`, value[0]])),
+    "core.ui.pipelines.operator_name.vision.visual_state": "Visual sensor",
+    "core.ui.pipelines.operator_description.vision.visual_state": "Recognize visible states with private examples, temporal confirmation and expiring evidence." },
+  "pt-BR": { ...Object.fromEntries(Object.entries(visualStateMessages).map(([key, value]) => [`ext.vision.visualState.${key}`, value[1]])),
+    "core.ui.pipelines.operator_name.vision.visual_state": "Sensor visual",
+    "core.ui.pipelines.operator_description.vision.visual_state": "Reconhece estados visíveis com exemplos privados, confirmação temporal e evidência com validade." },
 };
 const messages: Record<string, [string, string]> = {
   historyCategory: ["Detected object", "Objeto detectado"],

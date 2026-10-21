@@ -1903,3 +1903,41 @@ def test_generated_stopped_recipe_preserves_arrival(tmp_path, monkeypatch, prese
     outputs, _ = asyncio.run(replay(monkeypatch, positions, area=True,
         stationary_config=stationary, velocity_config=velocity))
     assert len([p for p in outputs if p.lifecycle == Lifecycle.OPEN]) == 1
+
+
+def test_visual_sensor_recipe_persists_continuous_disabled_draft_without_detection_model(tmp_path, monkeypatch):
+    from toposync.runtime.config_store import Pipeline
+    from toposync.runtime.pipelines.recommendations import analyze_compiled_pipeline
+    from toposync_ext_vision.visual_state.schemas import VisualStateConfig
+
+    with _create_client(tmp_path, monkeypatch, patch_model_readiness=False) as client:
+        _configure_camera(client)
+        path = "/api/cameras/cameras/cam1/pipelines/presets"
+        body = {"preset": "visual_state", "source_id": "main", "enabled": True}
+        preview = client.post(f"{path}/preview", json=body)
+        assert preview.status_code == 200, preview.text
+        created = client.post(path, json=body)
+        assert created.status_code == 200, created.text
+        saved = client.get(f"/api/pipelines/{created.json()['pipeline_name']}").json()
+        assert saved["enabled"] is False and saved["processing_server_id"] == "local"
+        assert saved["display_name"] == "Sensor visual · Entrada Principal"
+        assert _operator_ids(saved) == ["camera.source", "camera.motion_gate", "core.velocity_throttle", "vision.visual_state"]
+        assert _node_config(saved, "camera.source") == {"camera_id": "cam1", "source_id": "main", "fps": 8.0}
+        assert _node_config(saved, "camera.motion_gate")["emit_when_idle"] is True
+        for edge in saved["graph"]["edges"]:
+            assert edge["queue"]["max_items"] == 1 and edge["queue"]["drop_policy"] == "latest_only"
+        registry = client.app.state.pipeline_operator_registry
+        compiler = client.app.state.pipeline_graph_compiler
+        compiled = compiler.compile_pipeline(Pipeline.model_validate(saved))
+        alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+        codes = {item.code for item in alerts if item.node_id == "sensor"}
+        assert "visual_state_not_ready" in codes
+        assert not {"visual_state_motion_dependency", "visual_state_cadence_too_slow", "visual_state_event_dependency", "visual_state_serial_limits", "visual_state_cadence_unverified"} & codes
+        defaults = registry.get("vision.visual_state").definition.defaults
+        with pytest.raises(ValueError, match="individual sensor identifier"):
+            VisualStateConfig.model_validate(defaults).validate_activation()
+        assert client.post(path, json={**body, "processing_server_id": "remote"}).status_code == 400
+        assert client.post(path, json={**body, "enable_ptz_attention": True}).status_code == 400
+        assert client.post(path, json={**body, "source_id": "missing"}).status_code == 409
+        registry._items.pop("vision.visual_state")
+        assert client.post(path, json=body).status_code == 409

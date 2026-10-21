@@ -100,15 +100,22 @@ def test_real_sensor_reconciles_without_motion_or_onvif_and_expires_after_input_
         local_time = SimpleNamespace(monotonic=clock, time=clock.unix)
         monkeypatch.setattr(camera_operators, "time", local_time)
         monkeypatch.setattr(core_operators, "time", local_time)
-        motion = MotionGateRuntime({"emit_when_idle": True}, PipelineRuntimeDependencies())
-        throttle = VelocityThrottleRuntime({"moving_interval_seconds": .1, "stopped_interval_seconds": .5,
-                                            "moving_field": "metadata.motion_gate_open", "key_field": "stream_id"})
+        from toposync_ext_cameras.pipeline_templates import build_visual_state_graph
+        graph = build_visual_state_graph(camera_id="synthetic", source_id="main", graph_uid="sensor",
+            sensor_configuration=runtime.config.model_dump(mode="json"))
+        settings = {item["id"]: item["config"] for item in graph["nodes"]}
+        motion = MotionGateRuntime(settings["motion"], PipelineRuntimeDependencies())
+        throttle = VelocityThrottleRuntime(settings["cadence"])
         await runtime.prepare(context)
         task = asyncio.create_task(runtime.run(context))
-        seen = []
+        seen, observed_at = [], []
+        changed_at = None
+        confirmed_at = None
         try:
             for sequence in range(1, 25):
-                clock.now += .1
+                clock.now += 1 / settings["source"]["fps"]
+                if sequence == 12:
+                    changed_at = clock.now
                 packet = frame(clock, sequence, "red" if sequence < 12 else "blue").with_lifecycle(Lifecycle.UPDATE)
                 gated = await motion.process_packet(packet, None)
                 assert gated and gated[0].metadata["motion_gate_open"] is False
@@ -117,6 +124,11 @@ def test_real_sensor_reconciles_without_motion_or_onvif_and_expires_after_input_
                     await until(lambda: runtime._reducer._last_seen is not None
                                 and runtime._reducer._last_seen.sample.sequence == sequence)
                     seen.append(runtime._reducer.tick().class_id)
+                    observed_at.append(clock.now)
+                    if seen[-1] == "blue" and confirmed_at is None:
+                        confirmed_at = clock.now
+            assert all(current - previous == .5 for previous, current in zip(observed_at, observed_at[1:]))
+            assert confirmed_at is not None and changed_at is not None and confirmed_at - changed_at <= 1
             assert "red" in seen and seen[-1] == "blue"
             assert not any(packet.payload.get("onvif") for packet in context.packets)
             clock.now += 2.1

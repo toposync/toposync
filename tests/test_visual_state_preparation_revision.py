@@ -283,3 +283,122 @@ def test_cancelled_capture_keeps_admission_until_native_encoding_finishes(tmp_pa
             await context.scheduler.shutdown()
             store.close()
     asyncio.run(scenario())
+
+
+def test_compiled_sensor_rejects_changed_source_resolution_and_reconfirms_after_return(tmp_path):
+    import cv2
+    from toposync.runtime.pipelines.compiler import PipelineGraphCompiler
+    from toposync.runtime.pipelines.execution import BaseOperatorRuntime, PipelineRuntime, SinkRuntime
+    from toposync.runtime.pipelines.operator_registry import OperatorRegistry
+    from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+    from toposync_ext_cameras.processing.visual_region import rasterize_region
+    from toposync_ext_vision.visual_state.operator import register_visual_state_operator
+
+    async def scenario():
+        (tmp_path / 'sensor').mkdir()
+        original, context, _, store, saved = await harness(tmp_path / 'sensor')
+        service, supplied, image, _, counts = setup(tmp_path / 'panorama')
+        region = CanonicalRegionConfig.model_validate({**supplied.model_dump(), 'evidence_timeout_seconds': 3})
+        prefix = reference_input_pipeline(saved, 'state')
+        configuration = canonical_configuration(original.config, prefix, region)
+        configuration = configuration.model_copy(update={'temporal': configuration.temporal.model_copy(update={
+            'maximum_frame_age_ms': 3000, 'validity_ms': 3000})})
+        preparations = []
+
+        async def prepare(**arguments):
+            result = await service.prepare(**arguments)
+            preparations.append((arguments['evidence']['sequence'], result['status']))
+            return result
+
+        original.dependencies.services.register('cameras.visual_region.prepare', prepare)
+        mask = rasterize_region(region.strokes, 960, 540)
+        scenes = {}
+        for color, channels in [('red', (0, 0, 255)), ('blue', (255, 0, 0))]:
+            scenes[color] = image.copy()
+            scenes[color][mask > 0] = channels
+
+        def sample(sequence, color='red', resized=False):
+            pixels = cv2.resize(scenes[color], (640, 360)) if resized else scenes[color]
+            packet = replace(frame(RealClock(), sequence), stream_id=configuration.source_identity)
+            return replace(packet, artifacts={'main': Artifact(name='main', data=pixels,
+                metadata={'image_geometry': image_geometry(pixels.shape[1], pixels.shape[0], packet.payload['capture_evidence'])})})
+
+        draft = store.create_draft(configuration)
+        for sequence, color in enumerate(('red', 'blue'), 1):
+            pixels, evidence = await prepare_visual_frame(configuration, prefix, sample(sequence, color), original.dependencies.services)
+            data = io.BytesIO()
+            Image.fromarray(pixels[:, :, ::-1]).save(data, format='PNG')
+            draft, _ = store.capture(draft.draft_id, color, data.getvalue(), ReferenceEvidence.model_validate(evidence),
+                operation_id=color, expected_revision=draft.revision)
+        configuration = draft.configuration
+        images_embedded = []
+
+        class Backend:
+            def __init__(self, manifest):
+                self.delegate = original._backend_factory(manifest)
+                self.revision = self.delegate.revision
+            def embed(self, image):
+                images_embedded.append(image.shape)
+                return self.delegate.embed(image)
+            def close(self):
+                self.delegate.close()
+
+        sensor = VisualStateRuntime(configuration.model_dump(), original.dependencies, backend_factory=Backend)
+        inputs, outputs = asyncio.Queue(), []
+
+        class Source(BaseOperatorRuntime):
+            async def run(self, context):
+                while not context.is_cancelled():
+                    await context.emit(await inputs.get())
+
+        class Sink(SinkRuntime):
+            async def process_packet(self, packet, context):
+                outputs.append(packet.payload['visual_state'])
+                return []
+
+        registry = OperatorRegistry()
+        registry.register_operator(operator_id='camera.source', inputs=[], outputs=[{'name': 'out'}],
+            output_modalities=['video'], runtime_factory=lambda *_: Source())
+        registry.register_operator(operator_id='test.states', inputs=[{'name': 'in'}], outputs=[],
+            input_modalities=['data'], runtime_factory=lambda *_: Sink())
+        register_visual_state_operator(registry)
+        registry._items['vision.visual_state'] = replace(registry.get('vision.visual_state'), runtime_factory=lambda *_: sensor)
+        saved.graph = build_pipeline_graph_v2(graph_uid='sensor', nodes=[*prefix.graph['nodes'],
+            {'id': 'state', 'operator': 'vision.visual_state', 'config': configuration.model_dump(mode='json')},
+            {'id': 'sink', 'operator': 'test.states', 'config': {}}], edges=[
+            {'from': {'node': 'source', 'port': 'out'}, 'to': {'node': 'state', 'port': 'in'}, 'traffic': {'modality': 'video'}},
+            {'from': {'node': 'state', 'port': 'out'}, 'to': {'node': 'sink', 'port': 'in'}, 'traffic': {'modality': 'data'}}])
+        await original.dependencies.config_store.replace_pipeline('sensor', saved)
+        runtime = PipelineRuntime(PipelineGraphCompiler(registry).compile_pipeline(saved), registry, original.dependencies)
+
+        async def observe(sequence, color='red'):
+            await asyncio.sleep(.26)
+            await inputs.put(sample(sequence, color))
+            await until(lambda: outputs and outputs[-1].get('last_analysis') is not None
+                        and outputs[-1]['last_analysis']['sample']['sequence'] == sequence)
+
+        try:
+            await runtime.start()
+            await observe(10)
+            await observe(11)
+            assert outputs[-1]['class_key'] == 'red'
+            embedded = len(images_embedded)
+            for sequence in (12, 13):
+                await inputs.put(sample(sequence, 'blue', resized=True))
+                await until(lambda: (sequence, 'unavailable') in preparations)
+                await until(lambda: outputs[-1]['reason'] == 'region_unavailable')
+                await until(lambda: outputs[-1]['processing_status'] == 'idle')
+            assert len(images_embedded) == embedded
+            assert outputs[-1]['class_key'] is None and outputs[-1]['valid_for_ms'] == 0
+            assert not any(item['class_key'] == 'blue' for item in outputs)
+            await observe(14, 'blue')
+            assert outputs[-1]['status'] == 'pending' and outputs[-1]['class_key'] is None
+            await observe(15, 'blue')
+            assert outputs[-1]['class_key'] == 'blue'
+            assert counts == {'capture': 0, 'motion': 0}
+            assert all(shape[0] <= region.maximum_side and shape[1] <= region.maximum_side for shape in images_embedded)
+        finally:
+            await runtime.stop()
+            await context.scheduler.shutdown()
+            store.close()
+    asyncio.run(scenario())

@@ -6,6 +6,10 @@ import { onvifTranslations } from "./settings/onvifTranslations";
 
 export const camerasTranslations = {
   en: {
+    "ext.cameras.visualState.title": "Visual sensor",
+    "ext.cameras.visualState.description": "Recognize visible states using examples from this camera, such as an open or closed door.",
+    "ext.cameras.visualState.steps": "Configure region, states and photos in the operator",
+    "ext.cameras.visualState.setup": "Save disabled, then open the Visual sensor operator. Choose the region, add photos for each state and calibrate the local model. The recipe also observes without motion; response time must be measured before use.",
     "ext.cameras.automatic.status.video_healthy": "Video has recent frames",
     "ext.cameras.automatic.status.video_starting": "Video is starting",
     "ext.cameras.automatic.status.video_stale": "No recent video frame",
@@ -867,6 +871,10 @@ export const camerasTranslations = {
     "ext.cameras.action.loading": "Loading...",
   },
   "pt-BR": {
+    "ext.cameras.visualState.title": "Sensor visual",
+    "ext.cameras.visualState.description": "Reconheça estados visíveis com exemplos desta câmera, como uma porta aberta ou fechada.",
+    "ext.cameras.visualState.steps": "Configure região, estados e fotos no operador",
+    "ext.cameras.visualState.setup": "Salve desativado e abra o operador Sensor visual. Escolha a região, adicione fotos de cada estado e calibre o modelo local. A receita observa também sem movimento; o tempo de resposta precisa ser medido antes do uso.",
     "ext.cameras.automatic.status.video_healthy": "Vídeo com quadros recentes",
     "ext.cameras.automatic.status.video_starting": "Vídeo em preparação",
     "ext.cameras.automatic.status.video_stale": "Sem quadro recente de vídeo",

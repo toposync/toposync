@@ -458,6 +458,7 @@ export type CameraContextsResponse = {
 };
 
 export type CameraPipelinePreset =
+  | "visual_state"
   | "audio_anomaly"
   | "area_presence"
   | "area_entry"

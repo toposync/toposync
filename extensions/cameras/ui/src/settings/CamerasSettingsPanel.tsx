@@ -212,6 +212,9 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
   stepsKey: string;
   stepsFallback: string;
 }[] = [
+  { id: "visual_state", requiresMapping: false, titleKey: "ext.cameras.visualState.title", titleFallback: "Sensor visual",
+    descriptionKey: "ext.cameras.visualState.description", descriptionFallback: "Reconheça estados visíveis com exemplos da câmera.",
+    stepsKey: "ext.cameras.visualState.steps", stepsFallback: "Configure região, estados e fotos no operador" },
   { id: "audio_anomaly", requiresMapping: false, titleKey: "ext.cameras.audioRecipe.title", titleFallback: "Som acima da referência",
     descriptionKey: "ext.cameras.audioRecipe.description", descriptionFallback: "Compare o som com uma referência normal da fonte.",
     stepsKey: "ext.cameras.audioRecipe.steps", stepsFallback: "Escolha uma referência e salve desativado" },
@@ -2083,13 +2086,13 @@ function CamerasSettingsPanelContent({
         ) : null}
       </SubModal>
 
-      {activeCamera && (pipelinePresetOpen === "audio_anomaly" || pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry" || pipelinePresetOpen === "doorbell_visitor") ? (
+      {activeCamera && (pipelinePresetOpen === "visual_state" || pipelinePresetOpen === "audio_anomaly" || pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry" || pipelinePresetOpen === "doorbell_visitor") ? (
         <CameraObservationPresetModal ui={ui} cameras={cameras} open preset={pipelinePresetOpen} camera={activeCamera}
           activeSourceId={activeSourceId} mappedCompositions={mappedCompositions}
           processingServers={processingServers} i18n={i18n} onClose={() => setPipelinePresetOpen(null)}
           onCreated={handlePipelineCreated} />
       ) : null}
-      {activeCamera && pipelinePresetOpen !== "audio_anomaly" && pipelinePresetOpen !== "cat_litter_use" && pipelinePresetOpen !== "cat_drinking" && pipelinePresetOpen !== "area_presence" && pipelinePresetOpen !== "area_entry" && pipelinePresetOpen !== "area_group_entry" && pipelinePresetOpen !== "doorbell_visitor" ? (
+      {activeCamera && pipelinePresetOpen !== "visual_state" && pipelinePresetOpen !== "audio_anomaly" && pipelinePresetOpen !== "cat_litter_use" && pipelinePresetOpen !== "cat_drinking" && pipelinePresetOpen !== "area_presence" && pipelinePresetOpen !== "area_entry" && pipelinePresetOpen !== "area_group_entry" && pipelinePresetOpen !== "doorbell_visitor" ? (
         <CameraPipelinePresetModal
           open={Boolean(pipelinePresetOpen)}
           preset={pipelinePresetOpen}

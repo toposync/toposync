@@ -30,13 +30,14 @@ class VisionExtension(BaseExtension):
         self._identity_maintenance_task = None
         self._identity_lock = threading.Lock()
         self._association_repository = None
+        self._visual_reference_store = None
 
     def capabilities(self) -> dict[str, Any]:
         return {
             "auth": {
                 "action": "core:extension:use",
                 "resource_type": "core:extension",
-                "api_prefixes": ["/api/vision/identities", "/api/vision/history", "/api/vision/associations"],
+                "api_prefixes": ["/api/vision/identities", "/api/vision/history", "/api/vision/associations", "/api/vision/visual-state"],
             }
         }
 
@@ -78,6 +79,19 @@ class VisionExtension(BaseExtension):
         from .history import create_history_router
 
         app.include_router(create_identity_router(identity_store))
+        from .visual_state.api import create_visual_reference_router
+        from .visual_state.store import VisualReferenceStore
+
+        def visual_reference_store():
+            if configured_data_dir is None:
+                raise OSError("visual references require an explicit data directory")
+            with self._identity_lock:
+                if self._visual_reference_store is None:
+                    self._visual_reference_store = VisualReferenceStore(Path(configured_data_dir) / "visual-references", scope="installation")
+                return self._visual_reference_store
+
+        app.include_router(create_visual_reference_router(visual_reference_store))
+        services.register("vision.visual_references", visual_reference_store)
         from .association_api import AssociationRepository, create_association_router
 
         def association_repository():
@@ -226,3 +240,7 @@ class VisionExtension(BaseExtension):
             store, self._identity_store = self._identity_store, None
         if store is not None:
             store.close()
+        with self._identity_lock:
+            references, self._visual_reference_store = self._visual_reference_store, None
+        if references is not None:
+            references.close()

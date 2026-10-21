@@ -148,6 +148,7 @@ class StoredReference(VisualStateModel):
     height: int = Field(strict=True, gt=0)
     size_bytes: int = Field(strict=True, gt=0)
     created_at: Timestamp
+    created_by: Identifier | None = None
     evidence: ReferenceEvidence
     label_origin: Literal["human", "multimodal"] = "human"
     status: Literal["confirmed", "suggestion"] = "confirmed"

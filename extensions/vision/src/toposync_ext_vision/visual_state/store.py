@@ -273,12 +273,16 @@ class VisualReferenceStore:
                 temporary.unlink(missing_ok=True)
 
     def capture(self, draft_id: str, class_id: str, data: bytes, evidence: ReferenceEvidence,
-                *, operation_id: str, expected_revision: int) -> tuple[ReferenceDraft, StoredReference]:
+                *, operation_id: str, expected_revision: int, actor_id: str | None = None) -> tuple[ReferenceDraft, StoredReference]:
         TypeAdapter(Identifier).validate_python(operation_id)
+        if actor_id is not None:
+            TypeAdapter(Identifier).validate_python(actor_id)
         if not isinstance(data, bytes) or not 0 < len(data) <= self.limits.image_bytes:
             raise ReferenceLimit("image byte limit exceeded")
-        fingerprint = hashlib.sha256(json.dumps([class_id, hashlib.sha256(data).hexdigest(),
-                                                evidence.model_dump()], sort_keys=True).encode()).hexdigest()
+        operation = [class_id, hashlib.sha256(data).hexdigest(), evidence.model_dump()]
+        if actor_id is not None:
+            operation.append(actor_id)
+        fingerprint = hashlib.sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
         with self._transaction():
             draft = self._draft(draft_id)
             operation = self._connection.execute(
@@ -308,7 +312,7 @@ class VisualReferenceStore:
             self._write_image(digest, encoded)
             reference = StoredReference(reference_id=uuid.uuid4().hex, class_id=class_id, sha256=digest,
                                         width=width, height=height, size_bytes=len(encoded),
-                                        created_at=self._now(), evidence=evidence)
+                                        created_at=self._now(), created_by=actor_id, evidence=evidence)
             self._connection.execute("INSERT INTO reference VALUES (?,?,?)", (
                 reference.reference_id, reference.model_dump_json(), reference.created_at,
             ))

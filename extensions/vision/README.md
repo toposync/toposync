@@ -33,6 +33,16 @@ A capture reset closes the old relation and starts fresh confirmation; a late cl
 from the old generation cannot terminate the new relation. Publication freshness
 does not prove physical camera latency or synchronized remote clocks.
 
+## Visual reference API
+
+The visual sensor foundation exposes `/api/vision/visual-state/drafts` for creating and reading draft class configurations. `PUT /drafts/{draft_id}` requires the current `expected_revision`; removing a reference from the configuration is a logical removal, and reattaching its identifier supports undo while the draft remains valid. Drafts expire after one hour. The sensor operator and class gallery are not yet exposed in the product.
+
+Reference capture uses the host preview endpoint with `purpose: "reference"`. It accepts a restricted local camera path, preserves privacy controls, and returns PNG pixels, capture evidence and an opaque receipt. The receipt binds the exact bytes, authenticated user and preparation to the server process for 60 seconds. Restarting the process invalidates pending receipts. Receipt timing does not certify physical camera exposure or PTZ pose.
+
+Upload the unmodified PNG to `POST /drafts/{draft_id}/captures` with query parameters `class_id`, `operation_id` and `expected_revision`, and the `X-Toposync-Capture-Receipt` header. Retry with the same operation identifier to recover an accepted write without duplicating the reference. A conflict requires refreshing the draft; an expired receipt requires recapture. Uploads are limited to 8 MiB, two in flight and a 15-second body deadline.
+
+All reference routes require the installation owner, extension access and pipeline read/write permission as appropriate. Owners share the installation reference store; these routes do not grant member access through camera-specific permissions. Images live under the private `visual-references` data directory, outside generic `/files` serving. `GET /drafts/{draft_id}/references/{reference_id}/image` only serves references linked to the active draft, defaults to a 160-pixel thumbnail, and sends `Cache-Control: private, no-store`; `thumbnail=false` returns the normalized original.
+
 ## Dependencies
 
 - The default `toposync` application bundle includes the first-party ONNX Runtime CPU stack.

@@ -102,7 +102,7 @@ def register_visual_state_operator(registry):
         default_output_policy={"queue": {"max_items": 1, "drop_policy": "latest_only"}},
         execution_mode="thread_pool", max_concurrency=1, share_strategy="never",
         state_kind="stateful_per_stream", resource_kind="vision_model", ordering="strict",
-        preserves_lifecycle=False, capabilities=["vision"], produces_payload_keys=["visual_state"],
+        preserves_lifecycle=False, capabilities=["vision", "edit_precondition"], produces_payload_keys=["visual_state"],
         expression_hints=[payload_path_hint("payload.visual_state", value_type="object",
                                            description="Visual sensor state, evidence revision and remaining validity.")],
         ui={"pipeline_group": "vision", "pipeline_level": "advanced"}, owner="com.toposync.vision",

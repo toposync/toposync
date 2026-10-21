@@ -35,6 +35,10 @@ class PipelineAlreadyExistsError(ValueError):
     pass
 
 
+class PipelineRevisionConflictError(PipelineAlreadyExistsError):
+    pass
+
+
 class Vector3(BaseModel):
     x: float = 0.0
     y: float = 0.0
@@ -497,7 +501,7 @@ class ConfigStore:
 
     def _check_validated_revision(self, snapshot: AppConfig) -> None:
         if self._config is not snapshot:
-            raise PipelineAlreadyExistsError(
+            raise PipelineRevisionConflictError(
                 "Configuration changed during pipeline validation; review it again"
             )
 
@@ -531,7 +535,7 @@ class ConfigStore:
             expected_stamp = await asyncio.to_thread(_path_stamp, self._paths.config_path)
             await self._protect_pipeline_resources(cfg)
             if await asyncio.to_thread(_path_stamp, self._paths.config_path) != expected_stamp:
-                raise PipelineAlreadyExistsError("Configuration changed while preserving pipeline resources; review it again")
+                raise PipelineRevisionConflictError("Configuration changed while preserving pipeline resources; review it again")
         stamp = await asyncio.to_thread(
             _atomic_write_json, self._paths.config_path, cfg.model_dump()
         )
@@ -583,7 +587,7 @@ class ConfigStore:
             # Resource failures are not corrupt JSON and must never quarantine the file.
             await self._protect_pipeline_resources(cfg, loading=True)
             if self._pipeline_resource_guards and await asyncio.to_thread(_path_stamp, self._paths.config_path) != current_stamp:
-                raise PipelineAlreadyExistsError("Configuration changed while preserving pipeline resources; review it again")
+                raise PipelineRevisionConflictError("Configuration changed while preserving pipeline resources; review it again")
             self._config = cfg
             self._config_stamp = current_stamp
             return cfg
@@ -948,7 +952,7 @@ class ConfigStore:
             if idx < 0:
                 raise KeyError(name)
             if expected_pipeline is not None and existing_pipeline != expected_pipeline:
-                raise PipelineAlreadyExistsError("Pipeline changed since preview; review it again")
+                raise PipelineRevisionConflictError("Pipeline changed since preview; review it again")
 
             if (
                 existing_pipeline is not None

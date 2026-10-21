@@ -1145,6 +1145,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.modes.json": "JSON",
     "core.ui.pipelines.modes.python_one_way": "Python (one-way)",
     "core.ui.pipelines.confirm_delete": "Delete pipeline '{{name}}'?",
+    "core.ui.pipelines.save_conflict": "This pipeline changed elsewhere. Nothing was overwritten. Your rejected draft is preserved below. Load the saved version and review your changes before saving again.",
+    "core.ui.pipelines.saving": "Saving…",
+    "core.ui.pipelines.conflict_draft": "Preserved draft (select and copy to recover changes)",
+    "core.ui.pipelines.conflict_reload": "Load saved version; keep rejected draft below",
     "core.ui.pipelines.error.no_selection": "No pipeline selected.",
 
     "core.ui.pipelines.duplicate.title": "Duplicate pipeline",
@@ -3913,6 +3917,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.modes.json": "JSON",
     "core.ui.pipelines.modes.python_one_way": "Python (sem volta)",
     "core.ui.pipelines.confirm_delete": "Excluir fluxo '{{name}}'?",
+    "core.ui.pipelines.save_conflict": "Este fluxo mudou em outra edição. Nada foi sobrescrito. Seu rascunho recusado está preservado abaixo. Carregue a versão salva e revise as alterações antes de salvar novamente.",
+    "core.ui.pipelines.saving": "Salvando…",
+    "core.ui.pipelines.conflict_draft": "Rascunho preservado (selecione e copie para recuperar alterações)",
+    "core.ui.pipelines.conflict_reload": "Carregar versão salva; manter rascunho recusado abaixo",
     "core.ui.pipelines.error.no_selection": "Nenhum fluxo selecionado.",
 
     "core.ui.pipelines.duplicate.title": "Duplicar fluxo",

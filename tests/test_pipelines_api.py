@@ -739,6 +739,8 @@ def test_pipeline_writes_require_models_only_when_enabling(tmp_path, monkeypatch
         client.portal.call(orchestrator._reconcile)
         assert "missing_model" in orchestrator.status()["activation_errors"]
         assert orchestrator.status()["pipelines"] == []
+        # External edits invalidate the editor snapshot, including when stopping.
+        pipeline = client.get("/api/pipelines/missing_model").json()
         pipeline["enabled"] = False
         stopped = client.put("/api/pipelines/missing_model", json=pipeline)
         assert stopped.status_code == 200, stopped.text

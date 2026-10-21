@@ -162,6 +162,7 @@ export type AccessOptionsPayload = {
 
 export type Pipeline = {
   name: string;
+  revision?: string;
   display_name?: string;
   enabled?: boolean;
   processing_server_id?: string;
@@ -2157,10 +2158,14 @@ export async function createPipeline(pipeline: Pipeline): Promise<Pipeline> {
 
 export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pipeline> {
   return requestJson<Pipeline>(
-    `/api/pipelines/${encodeURIComponent(name)}`,
-    jsonRequest("PUT", pipeline),
+    resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}`),
+    jsonRequest("PUT", pipeline, { signal: AbortSignal.timeout(30_000) }),
     `Failed to save pipeline ${name}`,
   );
+}
+
+export async function getPipeline(name: string): Promise<Pipeline> {
+  return requestJson<Pipeline>(resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}`), { signal: AbortSignal.timeout(30_000) }, "Failed to load pipeline");
 }
 
 export async function duplicatePipeline(name: string, newName: string, displayName = ""): Promise<Pipeline> {

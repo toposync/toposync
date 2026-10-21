@@ -89,6 +89,22 @@ Changed sensor configurations must reference intact images with compatible
 classes, source and preparation. A failed write preserves both the previous and
 newly reserved images.
 
+Pipeline list/read/create/update responses include a content-based `revision`.
+Send that unchanged with `PUT /api/pipelines/{name}`. Visual operators opt into
+the generic `edit_precondition` capability: missing revisions return HTTP428;
+stale revisions return HTTP409 `pipeline_revision_conflict`, including when
+removing the operator. The comparison is checked again under the configuration
+write lock. Revisions are response metadata, not persisted configuration fields;
+external file edits change them, while unrelated settings do not.
+
+The editor preserves a rejected draft and offers loading the saved version.
+Its recovery text remains available to copy while reviewing the current version;
+it is cleared after a successful save. It is held in the open page, so copy it
+before closing or reloading that page. Saving temporarily disables editing and
+uses bounded requests. A timeout does not prove the server rejected the write:
+read the saved version before retrying. Clients editing ordinary legacy pipelines
+may omit revisions; supplied revisions are always checked.
+
 Startup and external configuration reload protect available references even when
 a restoration is incomplete. This does not validate or repair missing images;
 reopening an incomplete gallery reports an error. Expired drafts can be collected

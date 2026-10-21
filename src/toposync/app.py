@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.responses import StreamingResponse
 from toposync.runtime.pipelines.inspection import PipelineInspectionStore
 from toposync.runtime.pipelines.capture_receipts import CaptureReceipts
+from toposync.runtime.pipelines.editing import PipelineEditRequest, PipelineRead, pipeline_revision
 from toposync.runtime.pipelines.inspection_api import install_inspection_routes
 from toposync.runtime.pipelines.demands import ResourceDemandRegistry
 from toposync.runtime.pipelines.demand_api import install_demand_routes
@@ -45,6 +46,7 @@ from toposync.runtime.config_store import (
     ConfigStore,
     Pipeline,
     PipelineAlreadyExistsError,
+    PipelineRevisionConflictError,
     PipelineValidationError,
     PROCESSING_SERVERS_KEY,
     ProcessingServer,
@@ -526,7 +528,7 @@ class ExtensionOperationResponse(BaseModel):
 
 
 class PipelinesListResponse(BaseModel):
-    pipelines: list[Pipeline]
+    pipelines: list[PipelineRead]
 
 
 class ProcessingServersListResponse(BaseModel):
@@ -3549,7 +3551,7 @@ def create_app() -> FastAPI:
         _require(request, action="core:pipelines:read")
         config_store: ConfigStore = request.app.state.config_store
         pipelines = await config_store.list_pipelines()
-        return PipelinesListResponse(pipelines=pipelines)
+        return PipelinesListResponse(pipelines=[PipelineRead.from_pipeline(pipeline) for pipeline in pipelines])
 
     @app.get("/api/pipelines/operators", response_model=OperatorsListResponse)
     async def list_pipeline_operators(request: Request) -> OperatorsListResponse:
@@ -4201,7 +4203,7 @@ def create_app() -> FastAPI:
             return source.rstrip() + f"\n\nPIPELINE = {source_name}\n"
         return source
 
-    @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
+    @app.post("/api/pipelines", response_model=PipelineRead, status_code=201)
     async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:
         _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
@@ -4243,13 +4245,13 @@ def create_app() -> FastAPI:
                     orchestrator.trigger_reload()
                 except Exception:
                     pass
-            return saved
+            return PipelineRead.from_pipeline(saved)
         except GraphCompileError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @app.post("/api/pipelines/{pipeline_name}/duplicate", response_model=Pipeline, status_code=201)
+    @app.post("/api/pipelines/{pipeline_name}/duplicate", response_model=PipelineRead, status_code=201)
     async def duplicate_pipeline(
         request: Request,
         pipeline_name: str,
@@ -4313,9 +4315,9 @@ def create_app() -> FastAPI:
                 orchestrator.trigger_reload()
             except Exception:
                 pass
-        return saved
+        return PipelineRead.from_pipeline(saved)
 
-    @app.get("/api/pipelines/{pipeline_name}", response_model=Pipeline)
+    @app.get("/api/pipelines/{pipeline_name}", response_model=PipelineRead)
     async def get_pipeline(request: Request, pipeline_name: str) -> Pipeline:
         _require(request, action="core:pipelines:read")
         config_store: ConfigStore = request.app.state.config_store
@@ -4325,7 +4327,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if pipeline is None:
             raise HTTPException(status_code=404, detail="Unknown pipeline")
-        return pipeline
+        return PipelineRead.from_pipeline(pipeline)
 
     @app.get("/api/pipelines/{pipeline_name}/stats", response_model=PipelineStatsResponse)
     async def get_pipeline_stats(request: Request, pipeline_name: str) -> PipelineStatsResponse:
@@ -4683,13 +4685,20 @@ def create_app() -> FastAPI:
             limiter=request.app.state.pipeline_telemetry_read_limiters["pipeline_image_markers"],
         )
 
-    @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
-    async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:
+    @app.put("/api/pipelines/{pipeline_name}", response_model=PipelineRead)
+    async def replace_pipeline(request: Request, pipeline_name: str, body: PipelineEditRequest) -> Pipeline:
         _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         try:
+            expected = await config_store.get_pipeline(pipeline_name)
+            if expected is None:
+                raise HTTPException(404, detail="Unknown pipeline")
+            if body.revision is not None and body.revision != pipeline_revision(expected):
+                raise HTTPException(409, detail="pipeline_revision_conflict")
+            revision = body.revision
+            body = Pipeline.model_validate(body.model_dump(exclude={"revision"}))
             if str(getattr(body, "editor_mode", "json")) == "python":
                 source = str(getattr(body, "python_source", "") or "")
                 if not source.strip():
@@ -4707,11 +4716,20 @@ def create_app() -> FastAPI:
                 except PythonDslCompileError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
+            # Operators opt in; old clients can still edit ordinary legacy pipelines.
+            if revision is None and any(
+                registered and "edit_precondition" in registered.definition.capabilities
+                for pipeline in (expected, body)
+                for nodes in [pipeline.graph.get("nodes", [])] if isinstance(nodes, (list, tuple))
+                for node in nodes if isinstance(node, dict)
+                for registered in [registry.get(str(node.get("operator", "")))]
+            ):
+                raise HTTPException(428, detail="pipeline_revision_required")
             await _validate_publish_video_host_affinity(config_store, body)
             _validate_client_pipeline(request, body)
             catalog = [item for item in await config_store.list_pipelines() if item.name not in {body.name, pipeline_name}] + [body]
             compiler.compile_many([body], catalog=catalog)
-            saved = await config_store.replace_pipeline(pipeline_name, body)
+            saved = await config_store.replace_pipeline(pipeline_name, body, expected_pipeline=expected)
             await _emit_pipeline_lifecycle_event(
                 request,
                 "core.pipeline.saved",
@@ -4726,7 +4744,9 @@ def create_app() -> FastAPI:
                     orchestrator.trigger_reload()
                 except Exception:
                     pass
-            return saved
+            return PipelineRead.from_pipeline(saved)
+        except PipelineRevisionConflictError as exc:
+            raise HTTPException(409, detail="pipeline_revision_conflict") from exc
         except GraphCompileError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineValidationError as exc:

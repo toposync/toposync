@@ -67,3 +67,35 @@ with Home Assistant Cloud relay/TURN in a real environment.
 When native WebRTC is enabled, Home Assistant treats the entity as a WebRTC
 camera path. Keep it off unless losing the normal stream-component/HLS fallback
 is acceptable for that installation.
+
+## Experimental visual state coordinator
+
+Each configured Toposync connection owns a `ToposyncVisualStateCoordinator` in
+`hass.data[DOMAIN][entry_id][DATA_VISUAL_STATE_COORDINATOR]`. It reads
+`/api/vision/visual-state/states` once during setup and polls at a one-second
+interval while it has subscribers. The Home Assistant coordinator serializes
+refreshes; each request has a two-second deadline. Missing endpoint support and
+HTTP 401/403 use a thirty-second retry interval. Access denial requires checking
+the integration token and explicit `visual_state:<sensor_id>` result grants;
+this does not automatically grant access or replace camera configuration.
+
+The receiver validates the envelope, class mapping, sample identity and revisions.
+It rejects reordered snapshots and retired execution epochs. Remaining validity
+is reduced by the entire request duration using the receiver's monotonic clock.
+Repeated evidence can only shorten its existing deadline. An independent timer
+clears the current class when that deadline expires, including during a blocked
+request. Network, authorization and malformed-response failures clear current
+values as unavailable; expiration in an accessible installation is unknown.
+Neither is a negative class. A restart begins with no restored current value.
+
+Unloading cancels polling, the active HTTP request and the expiration timer.
+Responses arriving after cancellation or their request deadline cannot restore a
+value. Replay fences retain at most 128 retired server epochs and 128 retired
+runtime epochs per configured sensor; exceeding either bound fails closed until
+the integration is reloaded. No stale fence is silently evicted. Removed sensor
+histories are released with the latest complete inventory.
+
+The coordinator has been exercised with Home Assistant 2026.10.2 in an isolated
+environment, including a loopback HTTP timeout. Native visual sensor entities,
+mapping configuration and a complete Home Assistant installation trial are
+separate delivery steps. These checks do not qualify physical alarm use.

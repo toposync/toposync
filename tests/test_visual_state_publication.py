@@ -165,6 +165,9 @@ def test_extension_shutdown_and_shutdown_during_inventory_fail_closed(client, mo
 
 
 def test_authenticated_endpoint_reads_real_runtime_and_never_rejuvenates_sample(client, monkeypatch, tmp_path):  # noqa: F811
+    from test_home_assistant_visual_state_receiver import VisualStateReceiver
+
+    receiver = VisualStateReceiver()
     publication = client.portal.call(client.app.state.services.call, "vision.visual_states")
     async def start():
         runtime, context, clock, store, saved = await harness(tmp_path)
@@ -182,15 +185,24 @@ def test_authenticated_endpoint_reads_real_runtime_and_never_rejuvenates_sample(
     try:
         client.portal.call(send, runtime, context, clock, 1)
         client.portal.call(send, runtime, context, clock, 2)
-        first = client.get("/api/vision/visual-state/states").json()["states"][0]["state"]
+        payload = client.get("/api/vision/visual-state/states").json()
+        first = payload["states"][0]["state"]
+        receiver.apply(payload, started=100, received=100.1)
+        assert receiver.data["sensor"]["state"]["class_key"] == "red"
         assert first["status"] == "confirmed" and first["class_key"] == "red"
         clock.now += .4
-        second = client.get("/api/vision/visual-state/states").json()["states"][0]["state"]
+        payload = client.get("/api/vision/visual-state/states").json()
+        second = payload["states"][0]["state"]
+        receiver.apply(payload, started=100.4, received=100.5)
+        assert receiver.deadlines["sensor"] == 102
         assert second["valid_for_ms"] == first["valid_for_ms"] - 400
         assert second["sample"] == first["sample"] and second["runtime_epoch"] == first["runtime_epoch"]
         assert runtime._last_sample == (0, 2)
         client.portal.call(runtime.shutdown)
-        stopped = client.get("/api/vision/visual-state/states").json()["states"][0]["state"]
+        payload = client.get("/api/vision/visual-state/states").json()
+        stopped = payload["states"][0]["state"]
+        receiver.apply(payload, started=100.6, received=100.7)
+        assert receiver.data["sensor"]["state"]["class_key"] is None
         assert stopped["status"] == "unavailable" and stopped["class_key"] is None and stopped["valid_for_ms"] == 0
     finally:
         client.portal.call(stop)

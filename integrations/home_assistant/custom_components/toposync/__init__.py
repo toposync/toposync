@@ -15,11 +15,13 @@ from .const import (
     DATA_FRONTEND_REGISTERED,
     DATA_MANIFEST,
     DATA_MANIFEST_CACHE,
+    DATA_VISUAL_STATE_COORDINATOR,
     DATA_PUBLIC_URL,
     DOMAIN,
 )
 from .frontend import async_setup_frontend, async_unload_frontend
 from .manifest import ToposyncManifestCache
+from .coordinator import ToposyncVisualStateCoordinator
 
 PLATFORMS = [Platform.CAMERA]
 
@@ -36,10 +38,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         manifest = await client.get_cameras_manifest()
     except ToposyncApiError:
         manifest = {"cameras": []}
+    visual_states = ToposyncVisualStateCoordinator(hass, entry, client)
+    await visual_states.async_refresh()
     domain_data[entry.entry_id] = {
         DATA_CLIENT: client,
         DATA_MANIFEST: manifest,
         DATA_MANIFEST_CACHE: ToposyncManifestCache(client, manifest=manifest),
+        DATA_VISUAL_STATE_COORDINATOR: visual_states,
         DATA_AUTH_STATUS: auth_status,
         DATA_PUBLIC_URL: str(
             entry.data.get(CONF_PUBLIC_URL) or entry.data[CONF_URL]
@@ -56,6 +61,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         domain_data = hass.data.get(DOMAIN, {})
+        if coordinator := domain_data.get(entry.entry_id, {}).get(DATA_VISUAL_STATE_COORDINATOR):
+            await coordinator.async_shutdown()
         domain_data.pop(entry.entry_id, None)
         remaining_entries = [
             value

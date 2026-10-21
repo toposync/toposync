@@ -12,8 +12,11 @@ from .onnxruntime_backend import (
     resolve_onnxruntime_execution_providers,
 )
 from .catalog import collect_vision_runtime_backends, runtime_backend_status_by_id
+from .embedding import OnnxRuntimeEmbeddingBackend, build_embedding_backend
 
 __all__ = [
+    "OnnxRuntimeEmbeddingBackend",
+    "build_embedding_backend",
     "OnnxRuntimeClassificationBackend",
     "OnnxRuntimeDetectorBackend",
     "OnnxRuntimeSegmentationBackend",

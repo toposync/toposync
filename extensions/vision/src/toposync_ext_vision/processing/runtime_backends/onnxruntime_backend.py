@@ -237,6 +237,7 @@ class _OnnxRuntimeSessionBackend:
         *,
         task: str,
         supported_postprocess: set[str],
+        model_data: bytes | None = None,
     ) -> None:
         if manifest.runtime != "onnxruntime":
             raise RuntimeError(
@@ -270,7 +271,7 @@ class _OnnxRuntimeSessionBackend:
         options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         options.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self._session = ort.InferenceSession(
-            str(model_path), sess_options=options, providers=self._providers
+            model_data if model_data is not None else str(model_path), sess_options=options, providers=self._providers
         )
         session_inputs = self._session.get_inputs()
         if not session_inputs:

@@ -19,6 +19,7 @@ from .diagnostics import collect_vision_diagnostics, get_last_benchmark, record_
 from .runtime_backends import (
     build_classifier_backend,
     build_detector_backend,
+    build_embedding_backend,
     build_pose_backend,
     build_segmenter_backend,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "collect_vision_diagnostics",
     "available_tracker_backends",
     "build_classifier_backend",
+    "build_embedding_backend",
     "build_tracker_backend",
     "get_last_benchmark",
     "normalize_bbox01",

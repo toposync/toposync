@@ -63,6 +63,7 @@ class ModelPostprocessSpec(BaseModel):
     confidence_threshold_default: float | None = Field(default=None, ge=0.0, le=1.0)
     iou_threshold_default: float | None = Field(default=None, ge=0.0, le=1.0)
     output_name: str = ""
+    embedding_dimension: int | None = Field(default=None, strict=True, ge=1, le=16384)
     label_output_name: str = ""
     mask_output_name: str = ""
     box_format: Literal["xyxy01", "xyxy_pixels", "cxcywh01"] = "xyxy01"

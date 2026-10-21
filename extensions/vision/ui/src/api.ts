@@ -2,6 +2,7 @@ import { requestJson, resolveToposyncUrl } from "@toposync/plugin-api";
 import type { PipelineReferenceEvidence, PipelineReferenceFrame } from "@toposync/plugin-api";
 import type { VisualConfiguration, VisualDraft, VisualModel, VisualPreview } from "./visualState";
 import type { VisualAiOptions } from "./visualStateAi";
+import type { VisualSuggestion, VisualSuggestions } from "./visualStateSuggestions";
 export type Species = "person" | "cat" | "dog";
 export type Identity = { id: string; name: string; species: Species; references: number; occurrences: number; representative_id: string | null };
 export type GalleryData = { identities: Identity[]; revision: number; permissions: { curate: boolean; history: boolean } };
@@ -16,6 +17,16 @@ export const photoUrl = (id: string) => resolveToposyncUrl(`${base}/observations
 export const changed = () => window.dispatchEvent(new Event("toposync:identity-gallery-changed"));
 
 const visualBase = "/api/vision/visual-state/drafts";
+export const readVisualSuggestions = (draftId: string, offset: number, signal?: AbortSignal) => requestJson<VisualSuggestions>(
+  `${visualBase}/${encodeURIComponent(draftId)}/suggestions?offset=${offset}`, { signal });
+export const reviewVisualSuggestion = (draft: VisualDraft, item: VisualSuggestion, action: "accept" | "reject" | "undo",
+  operationId: string, classId: string | null, signal?: AbortSignal) => requestJson<{ draft: VisualDraft; suggestion: Omit<VisualSuggestion, "compatible"> }>(
+  `${visualBase}/${encodeURIComponent(draft.draft_id)}/suggestions/${encodeURIComponent(item.suggestion_id)}/review`, {
+    method: "POST", headers: { "content-type": "application/json" }, signal,
+    body: JSON.stringify({ action, operation_id: operationId, expected_revision: draft.revision, expected_suggestion_revision: item.revision, class_id: classId }),
+  });
+export const visualSuggestionUrl = (draftId: string, suggestionId: string, thumbnail = true) => resolveToposyncUrl(
+  `${visualBase}/${encodeURIComponent(draftId)}/suggestions/${encodeURIComponent(suggestionId)}/image?thumbnail=${thumbnail}`);
 export const readVisualAiOptions = (sensorId: string, signal?: AbortSignal) => requestJson<VisualAiOptions>(
   `/api/vision/visual-state/ai-options?sensor_id=${encodeURIComponent(sensorId)}`, { signal });
 export async function captureVisualFrame(configuration: VisualConfiguration, pipeline: unknown, signal: AbortSignal): Promise<PipelineReferenceFrame> {

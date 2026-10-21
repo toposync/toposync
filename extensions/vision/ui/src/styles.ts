@@ -40,6 +40,8 @@ export const styles = `
 .visualStatePanel .identityField {justify-content:stretch;min-width:0}
 .visualStatePanel textarea {box-sizing:border-box;width:100%;max-width:100%;resize:vertical;font:inherit;line-height:1.5}
 .visualStatePhotos {display:flex;gap:8px;flex-wrap:wrap}
+.visualSuggestionCard p,.visualSuggestionCard strong,.visualSuggestionCard dd {overflow-wrap:anywhere;min-width:0}
+.visualSuggestionCard dd {margin-inline-start:12px}
 .visualStatePhoto {display:grid;gap:4px;width:88px;min-width:0}
 .visualStatePhoto .identityPhotoButton {height:66px;width:88px;padding:0;overflow:hidden;border-radius:8px;border:1px solid var(--border);background:var(--panel)}
 .visualStatePhoto img {display:block;width:100%;height:100%;object-fit:contain}

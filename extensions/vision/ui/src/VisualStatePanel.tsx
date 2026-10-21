@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { activateModalFocus, type HostI18n, type HostUi, type PipelineReferenceCapture, type PipelineReferenceFrame } from "@toposync/plugin-api";
-import { captureVisualFrame, captureVisualReference, createVisualDraft, readVisualDraft, testVisualState, updateVisualDraft, visualReferenceUrl } from "./api";
+import { captureVisualFrame, captureVisualReference, createVisualDraft, readVisualDraft, readVisualSuggestions, reviewVisualSuggestion, testVisualState, updateVisualDraft, visualReferenceUrl } from "./api";
 import { bindVisualConfiguration, newVisualClass, newVisualConfiguration, replaceVisualRegion, restoreVisualReferences, visualClassDefaults, visualClassesValid, visualSource, type VisualClass, type VisualConfiguration, type VisualDraft } from "./visualState";
 import { styles } from "./styles";
 import { VisualStateModelSettings } from "./VisualStateModelSettings";
@@ -9,11 +9,14 @@ import { VisualStatePreviewResult } from "./VisualStatePreviewResult";
 import { VisualStateRegionSettings } from "./VisualStateRegionSettings";
 import { VisualStateAiSettings } from "./VisualStateAiSettings";
 import { visualTestReady } from "./visualStateAi";
+import { VisualStateSuggestions } from "./VisualSuggestionReview";
+import { restoreApprovedSuggestion, type VisualSuggestion, type VisualSuggestions } from "./visualStateSuggestions";
 import type { VisualPreview } from "./visualState";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
   referenceCapture?: PipelineReferenceCapture; showAdvanced?: boolean; ui?: Pick<HostUi, "ImageMaskEditor"> };
 type PendingCapture = { draft: VisualDraft; classId: string; operationId: string; frame: PipelineReferenceFrame };
+type PendingReview = { draft: VisualDraft; item: VisualSuggestion; action: "accept" | "reject" | "undo"; classId: string | null; operationId: string };
 
 function PhotoDialog({ url, label, close, t }: { url: string; label: string; close: () => void; t: (key: string) => string }) {
   const panel = useRef<HTMLDivElement>(null);
@@ -40,7 +43,11 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const [error, setError] = useState<string | null>(null);
   const [undo, setUndo] = useState<VisualConfiguration | null>(null);
   const [pending, setPending] = useState<PendingCapture | null>(null);
-  const [photo, setPhoto] = useState<{ id: string; label: string } | null>(null);
+  const [photo, setPhoto] = useState<{ url: string; label: string } | null>(null);
+  const [suggestions, setSuggestions] = useState<{ data: VisualSuggestions; draftId: string; context: string; offset: number } | null>(null);
+  const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
+  const [reviewed, setReviewed] = useState(false);
+  const [suggestionSettingsDirty, setSuggestionSettingsDirty] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [aiSettingsDirty, setAiSettingsDirty] = useState(false);
   const [aiReady, setAiReady] = useState(false);
@@ -63,11 +70,11 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   useEffect(() => {
     if (!readonly && unconfigured) replaceConfig(value);
   }, [config.sensor_id, readonly]);
-  useEffect(() => { setDraft(null); setUndo(null); setPhoto(null); }, [value.sensor_id]);
+  useEffect(() => { setDraft(null); setUndo(null); setPhoto(null); setSuggestions(null); setPendingReview(null); setReviewed(false); }, [value.sensor_id]);
 
   const classes = Array.isArray(value.classes) ? value.classes : [];
   const valid = classes.every(item => item && typeof item === "object") && visualClassesValid(classes);
-  const disabled = readonly || busy !== null;
+  const disabled = readonly || busy !== null || pendingReview !== null;
   const changed = (next: VisualConfiguration) => { setError(null); replaceConfig(next); };
   const updateClass = (classId: string, patch: Partial<VisualClass>) => changed({ ...value,
     classes: classes.map(item => item.class_id === classId ? { ...item, ...patch } : item) });
@@ -96,6 +103,24 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     const result = previous && previous.expires_at * 1000 > Date.now()
       ? await updateVisualDraft(previous, configuration, signal) : await createVisualDraft(configuration, signal);
     signal.throwIfAborted(); draftRef.current = result; setDraft(result); return result;
+  }
+  function refreshSuggestions(offset: number) {
+    void run("suggestions", async signal => {
+      const current = await synchronize(value, signal);
+      const data = await readVisualSuggestions(current.draft_id, offset, signal); signal.throwIfAborted();
+      setSuggestions({ data, draftId: current.draft_id, context, offset }); setReviewed(false);
+    });
+  }
+  async function submitReview(candidate: PendingReview, signal: AbortSignal) {
+    const result = await reviewVisualSuggestion(candidate.draft, candidate.item, candidate.action, candidate.operationId, candidate.classId, signal);
+    signal.throwIfAborted(); draftRef.current = result.draft; setDraft(result.draft); setPendingReview(null); setUndo(null);
+    // Refresh explicitly after a write: the server's summary and pagination may have changed.
+    setSuggestions(null); setReviewed(true); changed(result.draft.configuration);
+  }
+  function review(item: VisualSuggestion, action: PendingReview["action"], classId: string | null) {
+    if (disabled || !draft || !suggestions || suggestions.context !== context || suggestions.draftId !== draft.draft_id) return;
+    const candidate = { draft, item, action, classId, operationId: crypto.randomUUID() };
+    setPendingReview(candidate); void run("review", signal => submitReview(candidate, signal));
   }
   function mutate(next: VisualConfiguration, remember = true) {
     void run("save", async signal => {
@@ -129,15 +154,29 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     {unavailable && <p role="status">{t(unavailable)}</p>}
     {error && <div role="alert"><p>{t(error)}</p>
       {pending && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("retry", signal => upload(pending, signal))}>{t("retry_capture")}</button>}
-      {draft && error !== "region_unavailable" && !error.startsWith("visual_preview_") && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("reload", async signal => {
+      {!pendingReview && draft && error !== "region_unavailable" && !error.startsWith("visual_preview_") && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("reload", async signal => {
         const current = await readVisualDraft(draft.draft_id, signal); signal.throwIfAborted();
         setUndo(value); draftRef.current = current; setDraft(current); changed(current.configuration);
       })}>{t("reload")}</button>}
-      {error === "reference_conflict" && <button className="chipButton" type="button" disabled={disabled || !valid} onClick={() => void run("reopen", async signal => {
+      {!pendingReview && error === "reference_conflict" && <button className="chipButton" type="button" disabled={disabled || !valid} onClick={() => void run("reopen", async signal => {
         const current = await createVisualDraft(value, signal); signal.throwIfAborted();
         draftRef.current = current; setDraft(current); setPending(null); changed(current.configuration);
       })}>{t("reopen")}</button>}
     </div>}
+    {pendingReview && !busy && <div role="status"><p>{t("suggestions_uncertain")}</p>
+      <button type="button" className="chipButton" disabled={readonly} onClick={() => void run("review", signal => submitReview(pendingReview, signal))}>{t("suggestions_retry")}</button>
+      <button type="button" className="chipButton" disabled={readonly} onClick={() => void run("recover", async signal => {
+        const current = await readVisualDraft(pendingReview.draft.draft_id, signal); signal.throwIfAborted();
+        setUndo(value); draftRef.current = current; setDraft(current); setSuggestions(null); setPendingReview(null); changed(current.configuration);
+      })}>{t("suggestions_recover")}</button>
+      <button type="button" className="chipButton" disabled={readonly || !valid} onClick={() => void run("reopen", async signal => {
+        const current = await createVisualDraft(value, signal); signal.throwIfAborted();
+        const data = await readVisualSuggestions(current.draft_id, 0, signal); signal.throwIfAborted();
+        draftRef.current = current; setDraft(current); setPendingReview(null);
+        setSuggestions({ data, draftId: current.draft_id, context, offset: 0 });
+      })}>{t("suggestions_reopen")}</button>
+    </div>}
+    {reviewed && <p role="status">{t("suggestions_reviewed")}</p>}
     {busy && <div role="status">{t(busy === "test" ? "testing" : "working")} <button type="button" className="chipButton" onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setPending(null); }}>{t("cancel")}</button></div>}
     {!valid && <p role="alert">{t("invalid_classes")}</p>}
     <fieldset disabled={disabled}>
@@ -173,7 +212,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       <div className="visualStatePhotos" aria-label={`${t("references")} ${category.label}`}>
         {(Array.isArray(category.reference_ids) ? category.reference_ids : []).map((reference, photoIndex) => <div className="visualStatePhoto" key={reference}>
           <button type="button" className="identityPhotoButton" disabled={!draft} aria-label={`${t("enlarge")} ${category.label}, ${photoIndex + 1}`}
-            onClick={() => setPhoto({ id: reference, label: `${category.label}, ${photoIndex + 1}` })}>
+            onClick={() => { if (draft) setPhoto({ url: visualReferenceUrl(draft.draft_id, reference, false), label: `${category.label}, ${photoIndex + 1}` }); }}>
             {draft ? <img src={visualReferenceUrl(draft.draft_id, reference)} alt={`${category.label}, ${photoIndex + 1}`} loading="lazy"
               onError={() => setError("reference_conflict")} /> : <span>{t("load_references")}</span>}
           </button>
@@ -193,20 +232,26 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       {hasReferences && !draft && <button type="button" className="chipButton" disabled={disabled || !valid} onClick={() => void run("load", async signal => { await synchronize(value, signal); })}>{t("load_references")}</button>}
       {undo && <button type="button" className="chipButton" disabled={disabled} onClick={() => { mutate(restoreVisualReferences(value, undo), false); }}>{t("undo")}</button>}
     </div>
+    <VisualStateSuggestions value={value} change={changed} disabled={disabled || !valid || settingsDirty || aiSettingsDirty}
+      stale={suggestions?.context !== context || suggestions?.draftId !== draft?.draft_id} advanced={showAdvanced}
+      editing={setSuggestionSettingsDirty} data={suggestions?.data ?? null} draftId={suggestions?.draftId ?? null}
+      offset={suggestions?.offset ?? 0} refresh={refreshSuggestions} review={review}
+      restore={item => { try { mutate(restoreApprovedSuggestion(value, item)); } catch { setError("reference_conflict"); } }}
+      enlarge={(url, label) => setPhoto({ url, label })} t={t} />
     {value.strategy !== "direct" && <VisualStateModelSettings value={value} change={changed} disabled={disabled} t={t} />}
     <VisualStateDecisionSettings value={value} change={changed} disabled={disabled} editing={setSettingsDirty} t={t} />
     <fieldset disabled={disabled}>
       <legend>{t("preview_title")}</legend><p className="identityMuted">{t("preview_help")}</p>
       {!inputPipeline && <p role="status">{t("preview_host_unavailable")}</p>}
-      <button type="button" className="chipButton" disabled={!inputPipeline || !regionCompatible || !valid || settingsDirty || aiSettingsDirty
+      <button type="button" className="chipButton" disabled={!inputPipeline || !regionCompatible || !valid || settingsDirty || aiSettingsDirty || suggestionSettingsDirty
         || !visualTestReady(value) || (value.strategy !== "examples" && !aiReady)}
         onClick={() => void run("test", async signal => {
           const result = await testVisualState(value, inputPipeline, signal); signal.throwIfAborted();
           setPreview({ result, classes: structuredClone(classes), context, pipeline: pipelineContext });
         })}>{t("test_now")}</button>
       {preview && <VisualStatePreviewResult result={preview.result} classes={preview.classes}
-        stale={preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty || aiSettingsDirty} t={t} />}
+        stale={preview.context !== context || preview.pipeline !== pipelineContext || settingsDirty || aiSettingsDirty || suggestionSettingsDirty} t={t} />}
     </fieldset>
-    {photo && draft && <PhotoDialog url={visualReferenceUrl(draft.draft_id, photo.id, false)} label={photo.label} close={closePhoto} t={t} />}
+    {photo && <PhotoDialog url={photo.url} label={photo.label} close={closePhoto} t={t} />}
   </section>;
 }

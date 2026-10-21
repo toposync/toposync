@@ -197,7 +197,22 @@ def _write_segmentation_manifest(path: Path, model_path: Path) -> Path:
 
 
 def test_onnxruntime_disables_native_telemetry_before_creating_sessions(tmp_path, monkeypatch):
-    import onnxruntime as ort
+    import builtins
+    import os
+
+    monkeypatch.setenv("ORT_DISABLE_TELEMETRY", "0")
+    original_import = builtins.__import__
+    imports = []
+
+    def checked_import(name, *args, **kwargs):
+        if name == "onnxruntime":
+            assert os.environ["ORT_DISABLE_TELEMETRY"] == "1"
+            imports.append(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", checked_import)
+    ort = ort_backend_mod._import_onnxruntime()
+    assert imports
     calls = []
     disable, session = ort.disable_telemetry_events, ort.InferenceSession
 

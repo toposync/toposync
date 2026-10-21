@@ -22,6 +22,8 @@ from ..parsers import (
 
 
 def _import_onnxruntime():
+    # ORT initializes its POSIX uploader during import, before the Python disable API can run.
+    os.environ["ORT_DISABLE_TELEMETRY"] = "1"
     try:
         import onnxruntime as ort  # type: ignore
     except Exception as exc:  # noqa: BLE001

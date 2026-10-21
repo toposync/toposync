@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal, cast
@@ -28,6 +29,7 @@ from .settings import AiExtensionSettings, AiLimitSettings, AiProfileConfig, AiP
 from .usage import AiUsageLimiter
 from .jev import CONNECTION_TEST_TEXT, describe_connection, evaluate_event_text
 from .visual_state import Identifier, VisualStateRequest, VisualStateResponse, validate_visual_response
+from .failure_policy import failure_decision, failure_scopes
 
 
 class VisualStateInferenceResult(BaseModel):
@@ -39,6 +41,7 @@ class VisualStateInferenceResult(BaseModel):
     provider_id: str = ""
     model: str = ""
     attempts: list[AiAttempt] = Field(default_factory=list)
+    retry_at: float | None = None
 
 
 class _VisualCallPolicy(BaseModel):
@@ -156,29 +159,12 @@ class AiRouter:
                 async with asyncio.timeout(max(0, attempt_deadline - time.monotonic())):
                     async with self._limiter.slot(profile_id=profile.id, limits=settings.limits,
                             budget_group=budget_group, sensor_id=policy.sensor_id, sensor_limits=policy.sensor_limits):
-                        prepared, encoded = await prepare_visual_state(profile=profile, image=image,
-                            classes=request.model_dump()["classes"], reference_images=reference_images,
-                            scene_description=request.scene_description)
-                        if time.monotonic() >= attempt_deadline:
-                            raise TimeoutError
-                        allowed, reason = await self._limiter.check_and_increment(
-                            profile_id=profile.id, limits=settings.limits, budget_group=budget_group,
-                            budget_group_profile_ids=members, sensor_id=policy.sensor_id, sensor_limits=policy.sensor_limits)
-                        if not allowed:
-                            attempt.error = reason
+                        observation = await self._visual_provider_attempt(profile=profile, provider=provider,
+                            settings=settings, budget_group=budget_group, members=members, policy=policy,
+                            request=request, image=image, reference_images=reference_images,
+                            attempt_deadline=attempt_deadline, attempt=attempt)
+                        if observation is None:
                             continue
-                        remaining = attempt_deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise TimeoutError
-                        effective = profile.model_copy(update={"timeout_seconds": remaining})
-                        runtime = build_provider(provider, effective)
-                        observation = await runtime.classify_prepared_visual_state(request=prepared, encoded=encoded)
-                        if asyncio.current_task().cancelling():
-                            raise asyncio.CancelledError
-                        if time.monotonic() >= attempt_deadline:
-                            raise TimeoutError
-                        observation = validate_visual_response(
-                            observation.model_dump() if isinstance(observation, VisualStateResponse) else observation, request)
                         attempt.ok = True
                         return VisualStateInferenceResult(observation=observation, profile_id=profile.id,
                             provider_id=provider.id, model=profile.model, attempts=attempts)
@@ -193,10 +179,88 @@ class AiRouter:
                         "visual_state_reference_mismatch", "visual_state_image_limit", "invalid_visual_state_image",
                         "invalid_visual_state_response", "visual_state_response_encoding",
                         "visual_state_response_too_large", "visual_state_transport_unsupported"}
-                attempt.error = str(exc) if str(exc) in safe else "visual_state_provider_failed"
+                attempt.error = attempt.error or (str(exc) if str(exc) in safe else "visual_state_provider_failed")
             finally:
                 attempt.latency_ms = max(0, (time.monotonic() - started) * 1000)
-        return VisualStateInferenceResult(reason=attempts[-1].error or "all_ai_profiles_failed", attempts=attempts)
+        return VisualStateInferenceResult(reason=attempts[-1].error or "all_ai_profiles_failed", attempts=attempts,
+                                          retry_at=attempts[-1].retry_at)
+
+    async def _visual_provider_attempt(self, *, profile, provider, settings, budget_group, members, policy,
+                                       request, image, reference_images, attempt_deadline, attempt):
+        ticket, paused = await self._limiter.begin_attempt(failure_scopes(profile, provider, budget_group))
+        if ticket is None:
+            attempt.error, attempt.retry_at = paused["reason"], paused["retry_at"]
+            return None
+        sent = success = False
+        failure = None
+        try:
+            prepared, encoded = await prepare_visual_state(profile=profile, image=image,
+                classes=request.model_dump()["classes"], reference_images=reference_images,
+                scene_description=request.scene_description)
+            if time.monotonic() >= attempt_deadline:
+                raise TimeoutError
+            paused = await self._limiter.recheck_attempt(ticket)
+            if paused is not None:
+                attempt.error, attempt.retry_at = paused["reason"], paused["retry_at"]
+                return None
+            allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id,
+                limits=settings.limits, budget_group=budget_group, budget_group_profile_ids=members,
+                sensor_id=policy.sensor_id, sensor_limits=policy.sensor_limits)
+            if not allowed:
+                attempt.error = reason
+                return None
+            remaining = attempt_deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            paused = await self._limiter.recheck_attempt(ticket)
+            if paused is not None:
+                attempt.error, attempt.retry_at = paused["reason"], paused["retry_at"]
+                return None
+            runtime = build_provider(provider, profile.model_copy(update={"timeout_seconds": remaining}))
+            sent = True
+            observation = await runtime.classify_prepared_visual_state(request=prepared, encoded=encoded)
+            if asyncio.current_task().cancelling():
+                raise asyncio.CancelledError
+            if time.monotonic() >= attempt_deadline:
+                raise TimeoutError
+            observation = validate_visual_response(
+                observation.model_dump() if isinstance(observation, VisualStateResponse) else observation, request)
+            success = True
+            return observation
+        except BaseException as exc:
+            if sent:
+                failure = failure_decision(exc, now=time.time())
+                if failure.reason != "visual_state_provider_failed":
+                    attempt.error = failure.reason
+            raise
+        finally:
+            paused = await self._limiter.finish_attempt(ticket, failure=failure, success=success)
+            if paused is not None:
+                attempt.retry_at = paused["retry_at"]
+
+    @asynccontextmanager
+    async def _shared_failure_guard(self, profile, provider, group):
+        scopes = {key: revision for key, revision in failure_scopes(profile, provider, group).items()
+                  if not key.startswith('["profile",')}
+        ticket, paused = await self._limiter.begin_attempt(scopes)
+        if ticket is None:
+            raise AiProviderError(paused["reason"])
+        failure = None
+        success = False
+        try:
+            yield ticket
+            success = ticket.transport_started
+        except BaseException as exc:
+            if ticket.transport_started:
+                failure = failure_decision(exc, now=time.time())
+            raise
+        finally:
+            await self._limiter.finish_attempt(ticket, failure=failure, success=success)
+
+    async def _require_attempt_available(self, ticket):
+        paused = await self._limiter.recheck_attempt(ticket)
+        if paused is not None:
+            raise AiProviderError(paused["reason"])
 
     async def settings(self) -> AiExtensionSettings:
         raw: dict[str, Any] = {}
@@ -324,35 +388,28 @@ class AiRouter:
                 continue
             budget_group = settings.budget_group_by_id(profile.budget_group_id)
             members = [item.id for item in settings.profiles if item.budget_group_id == profile.budget_group_id]
-            allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits,
-                budget_group=budget_group, budget_group_profile_ids=members)
-            if not allowed:
-                attempts.append(
-                    AiAttempt(
-                        profile_id=profile.id,
-                        provider_id=provider.id,
-                        provider_kind=provider.kind,
-                        model=profile.model,
-                        ok=False,
-                        error=reason,
-                    )
-                )
+            started = time.monotonic()
+            try:
+                async with self._limiter.slot(profile_id=profile.id, limits=settings.limits, budget_group=budget_group):
+                    async with self._shared_failure_guard(profile, provider, budget_group) as ticket:
+                        allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits,
+                            budget_group=budget_group, budget_group_profile_ids=members)
+                        if not allowed:
+                            raise AiProviderError(reason)
+                        await self._require_attempt_available(ticket)
+                        provider_runtime = build_provider(provider, profile)
+                        ticket.transport_started = True
+                        result = await getattr(provider_runtime, operation)(image=image, description=description)
+            except Exception as exc:  # noqa: BLE001
+                attempts.append(attempt_from_error(profile=profile, provider=provider, started=started, error=exc))
                 continue
-            async with self._limiter.slot(profile_id=profile.id, limits=settings.limits, budget_group=budget_group):
-                started = time.monotonic()
-                try:
-                    provider_runtime = build_provider(provider, profile)
-                    result = await getattr(provider_runtime, operation)(image=image, description=description)
-                except Exception as exc:  # noqa: BLE001
-                    attempts.append(attempt_from_error(profile=profile, provider=provider, started=started, error=exc))
-                    continue
-                attempts.append(attempt_from_success(profile=profile, provider=provider, started=started))
-                result.attempts = list(attempts)
-                last_result = result
-                if result.confidence >= min_confidence:
-                    return result
-                if not fallback_on_low_confidence:
-                    return result
+            attempts.append(attempt_from_success(profile=profile, provider=provider, started=started))
+            result.attempts = list(attempts)
+            last_result = result
+            if result.confidence >= min_confidence:
+                return result
+            if not fallback_on_low_confidence:
+                return result
 
         if last_result is not None:
             last_result.attempts = list(attempts)
@@ -374,13 +431,16 @@ class AiRouter:
             raise AiProviderError("Assistant currently requires a local Ollama profile")
         budget_group = settings.budget_group_by_id(profile.budget_group_id)
         members = [item.id for item in settings.profiles if item.budget_group_id == profile.budget_group_id]
-        allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits,
-            budget_group=budget_group, budget_group_profile_ids=members)
-        if not allowed:
-            raise AiProviderError(reason)
         async with asyncio.timeout(min(float(profile.timeout_seconds), 120.0)):
             async with self._limiter.slot(profile_id=profile.id, limits=settings.limits, budget_group=budget_group):
-                return await OllamaProvider(provider, profile).generate_json(messages=messages)
+                async with self._shared_failure_guard(profile, provider, budget_group) as ticket:
+                    allowed, reason = await self._limiter.check_and_increment(profile_id=profile.id, limits=settings.limits,
+                        budget_group=budget_group, budget_group_profile_ids=members)
+                    if not allowed:
+                        raise AiProviderError(reason)
+                    await self._require_attempt_available(ticket)
+                    ticket.transport_started = True
+                    return await OllamaProvider(provider, profile).generate_json(messages=messages)
 
     async def list_ollama_models(self, *, host: str | None = None) -> list[dict[str, Any]]:
         settings = await self.settings()

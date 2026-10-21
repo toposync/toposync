@@ -59,6 +59,7 @@ class AiAttempt(BaseModel):
     ok: bool
     latency_ms: float = 0.0
     error: str = ""
+    retry_at: float | None = None
 
 
 def _normalize_region_aliases(data: dict[str, Any]) -> None:

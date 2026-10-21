@@ -148,7 +148,7 @@ def test_legacy_usage_is_migrated_and_valid_json_tampering_is_detected(tmp_path)
             False, "month_limit")
         assert await limiter.check_and_increment(profile_id="second", limits=_limits()) == (True, "")
         data = json.loads(path.read_text())
-        assert data["schema_version"] == 2 and data["counters"][key] == 3
+        assert data["schema_version"] == 3 and data["counters"][key] == 3
         assert "checksum" in data
         data["counters"][key] = 0
         path.write_text(json.dumps(data))

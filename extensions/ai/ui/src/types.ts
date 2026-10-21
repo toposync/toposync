@@ -125,4 +125,6 @@ export type UsageSnapshot = {
   budget_groups: Record<string, Record<string, number>>;
   profiles: Record<string, Record<string, number>>;
   raw_counters: Record<string, number>;
+  pauses: Array<{ scope: "profile" | "provider" | "group"; id: string; reason: string;
+    retry_at: number | null; failures: number; recovery_pending: boolean }>;
 };

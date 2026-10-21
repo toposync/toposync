@@ -11,6 +11,7 @@ from toposync_ext_ai.providers import build_provider
 from toposync_ext_ai.settings import AiProfileConfig, AiProviderConfig
 from toposync_ext_ai.visual_state import VisualStateRequest
 from toposync_ext_ai.visual_transport import BoundedVisualTransport, VisualTransportError
+from toposync_ext_ai.failure_policy import failure_decision
 
 
 class Stream(httpx.AsyncByteStream):
@@ -139,8 +140,11 @@ def test_real_sdk_uses_bounded_per_call_client_without_hidden_retries(monkeypatc
                 observed = await provider.classify_prepared_visual_state(request=request, encoded=[])
                 assert observed.model_dump() == result
             else:
-                with pytest.raises(Exception):
+                with pytest.raises(Exception) as raised:
                     await provider.classify_prepared_visual_state(request=request, encoded=[])
+                if reply == "rate-limit":
+                    policy = failure_decision(raised.value, now=1792560000.0)
+                    assert policy.scope == "account" and policy.minimum_delay == 10
         finally:
             await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=2)
         assert len(calls) == 1

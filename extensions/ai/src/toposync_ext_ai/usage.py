@@ -10,15 +10,18 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Any, AsyncIterator
 
 from .settings import AiBudgetGroupConfig, AiLimitSettings
+from .failure_policy import FailureBackoff, FailureDecision, FailureTicket
 
 
 @dataclass(slots=True)
 class _UsageState:
     counters: dict[str, int] = field(default_factory=dict)
     last_timestamp: float = 0.0
+    backoffs: dict[str, FailureBackoff] = field(default_factory=dict)
 
 
 _PERIODS = {"minute": "%Y%m%d%H%M", "hour": "%Y%m%d%H", "day": "%Y%m%d", "month": "%Y%m"}
@@ -50,6 +53,134 @@ class AiUsageLimiter:
         self._active: dict[tuple[str, str], int] = {}
         self._claims: dict[tuple[str, str], int] = {}
         self._capacity: dict[tuple[str, str], int] = {}
+        self._failure_probes: dict[str, FailureTicket] = {}
+        self._failure_generation = 0
+        self._failure_deadlines: dict[str, tuple[int, float]] = {}
+
+    def _retry_remaining(self, key, state):
+        if state.retry_at is None:
+            return None
+        cached = self._failure_deadlines.get(key)
+        if cached is None or cached[0] != state.generation:
+            remaining = max(0, state.retry_at - max(time.time(), self._state.last_timestamp))
+            cached = (state.generation, _monotonic() + remaining)
+            self._failure_deadlines[key] = cached
+        return max(0, cached[1] - _monotonic())
+
+    def _pause_info(self, key, state):
+        remaining = self._retry_remaining(key, state)
+        return {"reason": state.reason, "retry_at": None if remaining is None else time.time() + remaining}
+
+    async def begin_attempt(self, scopes: dict[str, str]):
+        await self._ensure_loaded()
+        async with self._lock:
+            if self._error:
+                return None, {"reason": self._error, "retry_at": None}
+            changed = False
+            for key, revision in scopes.items():
+                state = self._state.backoffs.get(key)
+                if state is not None and state.revision != revision:
+                    del self._state.backoffs[key]
+                    self._failure_deadlines.pop(key, None)
+                    changed = True
+            if changed:
+                await self._persist_locked()
+                if self._error:
+                    return None, {"reason": self._error, "retry_at": None}
+            for key in scopes:
+                state = self._state.backoffs.get(key)
+                if state is not None:
+                    remaining = self._retry_remaining(key, state)
+                    if remaining is None or remaining > 0:
+                        return None, self._pause_info(key, state)
+                if key in self._failure_probes:
+                    return None, {"reason": "visual_state_recovery_pending", "retry_at": None}
+            ticket = FailureTicket(dict(scopes), {key: self._state.backoffs[key].generation
+                                   if key in self._state.backoffs else 0 for key in scopes})
+            for key in scopes:
+                if key in self._state.backoffs:
+                    self._failure_probes[key] = ticket
+                    ticket.probes.add(key)
+            return ticket, None
+
+    async def recheck_attempt(self, ticket):
+        async with self._lock:
+            if self._error:
+                return {"reason": self._error, "retry_at": None}
+            for key, revision in ticket.scopes.items():
+                state = self._state.backoffs.get(key)
+                if state is not None and state.revision == revision and (
+                    state.generation != ticket.generations[key] or self._retry_remaining(key, state) is None
+                    or self._retry_remaining(key, state) > 0
+                ):
+                    return self._pause_info(key, state)
+                if key in self._failure_probes and self._failure_probes[key] is not ticket:
+                    return {"reason": "visual_state_recovery_pending", "retry_at": None}
+            return None
+
+    async def finish_attempt(self, ticket, *, failure: FailureDecision | None = None, success=False):
+        # Persist/release even if caller cancellation repeats during storage or lock acquisition.
+        task = asyncio.create_task(self._finish_attempt(ticket, failure=failure, success=success))
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        result = task.result()
+        if cancelled:
+            raise asyncio.CancelledError
+        return result
+
+    async def _finish_attempt(self, ticket, *, failure, success):
+        async with self._lock:
+            if ticket.closed:
+                return
+            ticket.closed = True
+            changed = False
+            try:
+                if failure is not None:
+                    kind = failure.scope
+                    if kind == "account":
+                        kind = "group" if any(json.loads(key)[0] == "group" for key in ticket.scopes) else "provider"
+                    keys = ticket.probes | {key for key in ticket.scopes if json.loads(key)[0] == kind}
+                    now = max(time.time(), self._state.last_timestamp)
+                    self._state.last_timestamp = now
+                    for key in keys:
+                        previous = self._state.backoffs.get(key)
+                        if previous is not None and previous.revision != ticket.scopes[key]:
+                            continue
+                        failures = min(16, (previous.failures if previous else 0) + 1)
+                        delay = max(failure.minimum_delay, min(60, 2 ** (failures - 1)))
+                        previous_remaining = self._retry_remaining(key, previous) if previous is not None else 0
+                        delay = max(delay, previous_remaining or 0)
+                        until = None if failure.configuration_required else now + delay
+                        if previous is not None:
+                            until = None if previous.retry_at is None or until is None else max(until, previous.retry_at)
+                        self._failure_generation += 1
+                        self._state.backoffs[key] = FailureBackoff(revision=ticket.scopes[key],
+                            generation=self._failure_generation, failures=failures,
+                            reason=previous.reason if previous is not None and previous.retry_at is None else failure.reason,
+                            retry_at=until)
+                        self._failure_deadlines[key] = (self._failure_generation, _monotonic() + delay)
+                        changed = True
+                elif success:
+                    for key, generation in ticket.generations.items():
+                        state = self._state.backoffs.get(key)
+                        if state is not None and state.generation == generation and state.revision == ticket.scopes[key]:
+                            del self._state.backoffs[key]
+                            self._failure_deadlines.pop(key, None)
+                            changed = True
+                if changed:
+                    await self._persist_locked()
+                states = [(key, self._state.backoffs[key]) for key in ticket.scopes if key in self._state.backoffs]
+                if states:
+                    key, state = max(states, key=lambda item: float("inf") if item[1].retry_at is None else item[1].retry_at)
+                    return self._pause_info(key, state)
+            finally:
+                for key in ticket.probes:
+                    if self._failure_probes.get(key) is ticket:
+                        del self._failure_probes[key]
 
     @staticmethod
     def _scopes(*, profile_id: str, limits: AiLimitSettings,
@@ -120,10 +251,14 @@ class AiUsageLimiter:
         async with self._lock:
             out: dict[str, Any] = {"available": not bool(self._error), "error": self._error,
                                   "persistent": self._path is not None, "profiles": {}, "budget_groups": {},
-                                  "raw_counters": {} if self._error else dict(self._state.counters)}
+                                  "raw_counters": {} if self._error else dict(self._state.counters), "pauses": []}
             if self._error:
                 return out
             now = max(time.time(), self._state.last_timestamp)
+            out["pauses"] = [{"scope": json.loads(key)[0], "id": json.loads(key)[1], **self._pause_info(key, state),
+                              "failures": state.failures,
+                              "recovery_pending": key in self._failure_probes}
+                             for key, state in self._state.backoffs.items()]
             for kind, identifiers, target in [("profile", profile_ids or [], "profiles"),
                                                ("group", budget_group_ids or [], "budget_groups")]:
                 for identifier in identifiers:
@@ -207,6 +342,7 @@ class AiUsageLimiter:
                 state = await self._storage_call(self._read_state)
                 if state is not None:
                     self._state = state
+                    self._failure_generation = max((item.generation for item in state.backoffs.values()), default=0)
             self._loaded = True
 
     def _read_state(self) -> _UsageState:
@@ -218,16 +354,19 @@ class AiUsageLimiter:
         if len(raw) > 4 * 1024 * 1024:
             raise ValueError("usage storage exceeds capacity")
         data = json.loads(raw, object_pairs_hook=_unique_object)
-        if not isinstance(data, dict) or set(data) - {"schema_version", "last_timestamp", "counters", "checksum"}:
+        if not isinstance(data, dict) or set(data) - {"schema_version", "last_timestamp", "counters", "checksum", "backoffs"}:
             raise ValueError("invalid usage storage")
         version = data.get("schema_version", 1)
         counters, timestamp = data.get("counters"), data.get("last_timestamp", 0.0)
-        if type(version) is not int or version not in (1, 2) or not isinstance(counters, dict):
+        if type(version) is not int or version not in (1, 2, 3) or not isinstance(counters, dict):
             raise ValueError("invalid usage schema")
-        if version == 2:
+        if version >= 2:
             checksum = data.pop("checksum", None)
-            if set(data) != {"schema_version", "last_timestamp", "counters"} or checksum != self._checksum(data):
+            fields = {"schema_version", "last_timestamp", "counters"} | ({"backoffs"} if version == 3 else set())
+            if set(data) != fields or checksum != self._checksum(data):
                 raise ValueError("usage integrity check failed")
+        elif "backoffs" in data:
+            raise ValueError("invalid legacy usage storage")
         if type(timestamp) not in (float, int) or not math.isfinite(timestamp) or timestamp < 0:
             raise ValueError("invalid usage timestamp")
         if any(not isinstance(key, str) or not key or len(key) > 1024 or type(value) is not int or value < 0
@@ -238,14 +377,26 @@ class AiUsageLimiter:
             if len(stamp) != {"minute": 12, "hour": 10, "day": 8, "month": 6}[period] or not stamp.isascii() or not stamp.isdigit():
                 raise ValueError("invalid usage period")
             time.strptime(stamp, _PERIODS[period])
-        return _UsageState(counters=counters, last_timestamp=float(timestamp))
+        backoffs = data.get("backoffs", {})
+        if not isinstance(backoffs, dict) or len(backoffs) > 4096:
+            raise ValueError("invalid backoff storage")
+        for key in backoffs:
+            scope = json.loads(key)
+            if (not isinstance(scope, list) or len(scope) != 2 or scope[0] not in {"profile", "provider", "group"}
+                    or not isinstance(scope[1], str) or not scope[1] or len(scope[1]) > 256):
+                raise ValueError("invalid backoff scope")
+        return _UsageState(counters=counters, last_timestamp=float(timestamp),
+                           backoffs={key: FailureBackoff.model_validate(value) for key, value in backoffs.items()})
 
     async def _persist_locked(self) -> None:
         if self._path is not None:
             await self._storage_call(self._write_state)
 
     def _write_state(self) -> None:
-        data = {"schema_version": 2, "last_timestamp": self._state.last_timestamp, "counters": self._state.counters}
+        if len(self._state.backoffs) > 4096:
+            raise ValueError("backoff storage exceeds capacity")
+        data = {"schema_version": 3, "last_timestamp": self._state.last_timestamp, "counters": self._state.counters,
+                "backoffs": {key: value.model_dump() for key, value in self._state.backoffs.items()}}
         data["checksum"] = self._checksum(data)
         payload = json.dumps(data, ensure_ascii=True, allow_nan=False).encode()
         if len(payload) > 4 * 1024 * 1024:

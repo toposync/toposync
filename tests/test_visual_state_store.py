@@ -37,7 +37,7 @@ def config():
 def evidence():
     return ReferenceEvidence(source_identity="camera:synthetic", preparation_revision="p1",
                              sample={"capture_instance": "capture", "generation": 0, "sequence": 1},
-                             observed_at=1000.0, freshness_basis="receipt")
+                             observed_at=1000.0, freshness_basis="receipt", prepared_region=True)
 
 
 @pytest.fixture
@@ -109,6 +109,26 @@ def test_retry_is_idempotent_even_with_original_revision(store, config, evidence
     with pytest.raises(ReferenceConflict, match="different content"):
         store.capture(saved.draft_id, "a", image_bytes("blue"), evidence,
                       operation_id="operation", expected_revision=saved.revision)
+
+
+def test_region_claim_requires_prepared_pixels_before_decoding(store, config, evidence, monkeypatch):
+    draft = store.create_draft(config)
+    evidence = evidence.model_copy(update={"prepared_region": False})
+    monkeypatch.setattr(store, "_prepare_image", lambda _: pytest.fail("must reject before decoding"))
+    with pytest.raises(ReferenceConflict, match="context changed"):
+        store.capture(draft.draft_id, "a", b"not decoded", evidence,
+                      operation_id="no-region", expected_revision=0)
+    assert store.get_draft(draft.draft_id).revision == 0
+
+
+def test_full_image_reference_cannot_be_relabelled_as_a_prepared_region(store, config, evidence):
+    full = config.model_copy(update={"region_id": None, "use_full_image": True})
+    saved, _ = capture(store, full, evidence.model_copy(update={"prepared_region": False}))
+    claimed = saved.configuration.model_copy(update={"region_id": "pretend", "use_full_image": False})
+    with pytest.raises(ReferenceConflict, match="incompatible"):
+        store.create_draft(claimed)
+    with pytest.raises(ReferenceConflict, match="incompatible"):
+        store.update_draft(saved.draft_id, claimed, expected_revision=saved.revision)
 
 
 def test_retry_after_removal_does_not_undo_removal(store, config, evidence):

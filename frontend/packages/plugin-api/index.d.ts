@@ -219,6 +219,7 @@ export type PipelineReferenceEvidence = {
   observed_at: number;
   freshness_basis: "capture" | "receipt";
   historical_fallback: false;
+  prepared_region: boolean;
 };
 
 export type PipelineReferenceFrame = { blob: Blob; evidence: PipelineReferenceEvidence; receipt: string };

@@ -3,14 +3,18 @@ import type { ToposyncHost } from "@toposync/plugin-api";
 import { Gallery, NotificationIdentity, supportsRecognition } from "./Gallery";
 import { CategoryHistoryFilter, categoryHistoryEndpoint, DetectedCategorySummary, detectedCategoryCounts, HistoryFilter, historyEndpoint, HistorySelectionSummary } from "./HistoryFilter";
 import { ModelSetup } from "./ModelSetup";
-import { translations } from "./translations";
+import { translations, visualStateTranslations } from "./translations";
 import { manualResultTranslations } from "./ManualAssociationResult";
 import { Association, AssociationSummary, associationTranslations } from "./Association";
 import { RecognitionPolicyPanel, RecognitionPolicySummary } from "./RecognitionPolicy";
+import { VisualStatePanel } from "./VisualStatePanel";
 export function activate(host: ToposyncHost): void {
   host.i18n.registerTranslations(translations);
+  host.i18n.registerTranslations(visualStateTranslations);
   host.i18n.registerTranslations(associationTranslations);
   host.i18n.registerTranslations(manualResultTranslations);
+  host.registerPipelineOperatorPanel({ id: "vision.visual_state.panel", operatorId: "vision.visual_state",
+    render: context => <VisualStatePanel {...context} /> });
   host.registerPipelineOperatorPanel({ id: "vision.associate_entities.panel", operatorId: "vision.associate_entities", renderSummary: config => <AssociationSummary i18n={host.i18n} config={config} />, render: context => <Association i18n={context.i18n} config={context.purpose === "automatic" ? { ...context.config, scope: context.stepUid } : context.config} configurationOnly={context.purpose === "automatic"} recognitionAllowed={context.purpose !== "automatic" || context.observationCapability === "vision.recognition"} updateConfig={patch => context.updateConfig(context.purpose === "automatic" ? { ...patch, scope: context.stepUid } : patch)} /> });
   host.registerNotificationHistoryFilter?.({
     id: "com.toposync.vision.categories", endpoint: categoryHistoryEndpoint,

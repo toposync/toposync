@@ -159,7 +159,8 @@ class VisualReferenceStore:
                 reference = self._reference(reference_id)
                 if (reference.class_id != category.class_id or reference.status != "confirmed"
                         or reference.evidence.source_identity != config.source_identity
-                        or reference.evidence.preparation_revision != config.preparation_revision):
+                        or reference.evidence.preparation_revision != config.preparation_revision
+                        or (config.region_id is not None and not reference.evidence.prepared_region)):
                     raise ReferenceConflict("reference is incompatible with configuration")
                 self._read_image(reference)
                 references.append(reference_id)
@@ -305,7 +306,8 @@ class VisualReferenceStore:
             if self._connection.execute("SELECT count(*) FROM reference").fetchone()[0] >= self.limits.references:
                 raise ReferenceLimit("stored reference limit reached")
             if (evidence.source_identity != config.source_identity
-                    or evidence.preparation_revision != config.preparation_revision):
+                    or evidence.preparation_revision != config.preparation_revision
+                    or (config.region_id is not None and not evidence.prepared_region)):
                 raise ReferenceConflict("capture context changed")
             encoded, width, height = self._prepare_image(data)
             digest = hashlib.sha256(encoded).hexdigest()

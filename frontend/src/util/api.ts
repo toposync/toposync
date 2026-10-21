@@ -2530,7 +2530,8 @@ export async function fetchPipelineReferenceFrame(
         || !Number.isSafeInteger(sample.generation) || sample.generation < 0
         || !Number.isSafeInteger(sample.sequence) || sample.sequence <= 0
         || !Number.isFinite(evidence.observed_at) || evidence.observed_at < 0
-        || !["capture", "receipt"].includes(evidence.freshness_basis) || evidence.historical_fallback !== false) {
+        || !["capture", "receipt"].includes(evidence.freshness_basis) || evidence.historical_fallback !== false
+        || typeof evidence.prepared_region !== "boolean") {
       throw new Error("Invalid capture evidence");
     }
   } catch {

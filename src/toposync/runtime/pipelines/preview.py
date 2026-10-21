@@ -303,6 +303,7 @@ def reference_capture_evidence(packet: Packet, pipeline: Pipeline, *, maximum_ag
         "observed_at": (time.time() if now_unix is None else now_unix) - freshness.age_seconds,
         "freshness_basis": "capture" if freshness.basis == "physical_capture" else "receipt",
         "historical_fallback": False,
+        "prepared_region": any(node.get("operator") == "camera.image_crop" for node in pipeline.graph["nodes"]),
     }
 
 

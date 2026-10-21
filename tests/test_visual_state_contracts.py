@@ -83,6 +83,18 @@ def test_draft_can_be_saved_before_references_but_cannot_activate(configuration:
         draft.validate_activation()
 
 
+def test_unbound_draft_allows_class_setup_but_never_claims_existing_references(configuration):
+    configuration.update(source_identity=None, preparation_revision=None, region_id=None)
+    for category in configuration["classes"]:
+        category["reference_ids"] = []
+    draft = VisualStateConfig.model_validate(configuration)
+    with pytest.raises(ValueError, match="verified source"):
+        draft.validate_activation()
+    configuration["classes"][0]["reference_ids"] = ["old"]
+    with pytest.raises(ValueError, match="verified source"):
+        VisualStateConfig.model_validate(configuration)
+
+
 def test_direct_mode_requires_explicit_profile_and_visual_evidence(configuration: dict) -> None:
     configuration.update(strategy="direct", model_id=None, comparison=None)
     with pytest.raises(ValueError, match="profile"):

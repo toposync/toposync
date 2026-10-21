@@ -13,7 +13,7 @@ from toposync.runtime.pipelines.capture_receipts import CaptureReceipts
 
 def config(evidence):
     return {"sensor_id": "sensor", "source_identity": evidence["source_identity"],
-            "region_id": "door", "preparation_revision": evidence["preparation_revision"],
+            "use_full_image": True, "preparation_revision": evidence["preparation_revision"],
             "reference_revision": "initial", "model_revision": "pending",
             "classes": [{"class_id": key, "key": key, "label": key} for key in ("open", "closed")]}
 

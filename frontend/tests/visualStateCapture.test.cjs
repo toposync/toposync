@@ -150,7 +150,7 @@ function apiHarness(evidence) {
 }
 const evidence = { source_identity: 'camera:actual-camera:night', preparation_revision: 'a'.repeat(64),
   sample: { capture_instance: 'decoder', generation: 0, sequence: 1 }, observed_at: 1000,
-  freshness_basis: 'receipt', historical_fallback: false };
+  freshness_basis: 'receipt', historical_fallback: false, prepared_region: true };
 test('capture transport preserves ingress, abort and server evidence without historical fallback', async () => {
   const h = apiHarness(evidence), signal = new AbortController().signal;
   const result = await h.api({ ...resolve().request, fallback_snapshot: { pipeline_name: 'old' } }, signal);
@@ -165,6 +165,7 @@ test('capture transport preserves ingress, abort and server evidence without his
 });
 test('missing or invalid evidence fails closed for older hosts and invalid responses', async () => {
   for (const invalid of [undefined, null, {}, { ...evidence, historical_fallback: true },
+    { ...evidence, prepared_region: undefined }, { ...evidence, prepared_region: "true" },
     { ...evidence, sample: { ...evidence.sample, sequence: 0 } },
     { ...evidence, sample: { ...evidence.sample, generation: '1' } },
     { ...evidence, observed_at: '1000' }, { ...evidence, preparation_revision: 'unknown' }]) {

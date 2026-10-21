@@ -77,10 +77,10 @@ class VisualStateClass(VisualStateModel):
 class VisualStateConfig(VisualStateModel):
     schema_version: Literal[1] = 1
     sensor_id: Identifier
-    source_identity: Name
+    source_identity: Name | None = None
     region_id: Identifier | None = None
     use_full_image: bool = Field(default=False, strict=True)
-    preparation_revision: Revision
+    preparation_revision: Revision | None = None
     reference_revision: Revision
     model_revision: Revision
     input_artifact_name: Name = "main"
@@ -94,13 +94,19 @@ class VisualStateConfig(VisualStateModel):
 
     @model_validator(mode="after")
     def validate_configuration(self) -> Self:
-        if (self.region_id is not None) == self.use_full_image:
+        if self.region_id is not None and self.use_full_image:
+            raise ValueError("select a prepared region or explicitly use the full image")
+        if (self.source_identity is None) != (self.preparation_revision is None):
+            raise ValueError("source and preparation must be bound together")
+        if self.source_identity is not None and self.region_id is None and not self.use_full_image:
             raise ValueError("select a prepared region or explicitly use the full image")
         if len({item.class_id for item in self.classes}) != len(self.classes):
             raise ValueError("class identifiers must be unique")
         if len({item.key for item in self.classes}) != len(self.classes):
             raise ValueError("class keys must be unique")
         references = [reference for item in self.classes for reference in item.reference_ids]
+        if references and self.source_identity is None:
+            raise ValueError("references require a verified source and preparation")
         if len(references) > 300:
             raise ValueError("at most 300 references are allowed per sensor")
         if len(references) != len(set(references)):
@@ -111,6 +117,8 @@ class VisualStateConfig(VisualStateModel):
 
     def validate_activation(self) -> None:
         """Drafts may lack examples/resources; activation must not silently fill them."""
+        if self.source_identity is None:
+            raise ValueError("activation requires a verified source and preparation")
         active = [item for item in self.classes if item.enabled]
         if self.strategy != "direct":
             if self.model_id is None or self.comparison is None:
@@ -138,6 +146,7 @@ class ReferenceEvidence(VisualStateModel):
     observed_at: Timestamp
     freshness_basis: Literal["capture", "receipt"]
     historical_fallback: Literal[False] = False
+    prepared_region: bool = Field(default=False, strict=True)
 
 
 class StoredReference(VisualStateModel):

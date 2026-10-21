@@ -34,5 +34,17 @@ export const styles = `
 .identityGallery .identityChoice {border:1px solid var(--border);border-radius:8px;padding:8px;min-height:48px;cursor:pointer}
 .identityGallery .identityChoice.isSelected {border-color:var(--accent)}
 .identityGallery .identityChoice .identityPortrait {width:48px;height:48px}
-@media(max-width:480px){.identityGallery .identityGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.identityGallery .identityActions button{flex:1 1 120px}.identityGallery .identityForm{padding:12px}}
+.visualStatePanel .visualStateClass {border:1px solid var(--border);border-radius:10px;padding:12px;gap:10px}
+.visualStatePanel legend {font-weight:600;padding:0 5px}
+.visualStatePanel .visualStateName {flex:1;min-width:150px}
+.visualStatePanel .identityField {justify-content:stretch;min-width:0}
+.visualStatePanel textarea {box-sizing:border-box;width:100%;max-width:100%;resize:vertical;font:inherit;line-height:1.5}
+.visualStatePhotos {display:flex;gap:8px;flex-wrap:wrap}
+.visualStatePhoto {display:grid;gap:4px;width:88px;min-width:0}
+.visualStatePhoto .identityPhotoButton {height:66px;width:88px;padding:0;overflow:hidden;border-radius:8px;border:1px solid var(--border);background:var(--panel)}
+.visualStatePhoto img {display:block;width:100%;height:100%;object-fit:contain}
+.visualReferenceDialog {max-width:min(900px,95vw)}
+.visualReferenceDialog > img {display:block;max-width:100%;max-height:70vh;object-fit:contain;margin:auto}
+.visualStatePanel fieldset:disabled {opacity:.7}
+@media(max-width:480px){.identityGallery .identityGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.identityGallery .identityActions button{flex:1 1 120px}.identityGallery .identityForm{padding:12px}.visualStatePanel .visualStateName{flex-basis:100%}}
 `;

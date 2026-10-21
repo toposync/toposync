@@ -83,6 +83,12 @@ class VisualAiLimits(VisualStateModel):
     requests_per_month: int | None = Field(default=None, strict=True, ge=1)
 
 
+class SuggestionPolicy(VisualStateModel):
+    mode: Literal["off", "review"] = "review"
+    maximum_pending: int = Field(default=20, strict=True, ge=1, le=100)
+    retention_days: int = Field(default=7, strict=True, ge=1, le=30)
+
+
 class VisualStateConfig(VisualStateModel):
     schema_version: Literal[1] = 1
     sensor_id: Identifier
@@ -107,6 +113,7 @@ class VisualStateConfig(VisualStateModel):
     ai_allow_remote_images: bool = Field(default=False, strict=True)
     ai_references_per_class: int = Field(default=2, strict=True, ge=1, le=30)
     ai_limits: VisualAiLimits = Field(default_factory=VisualAiLimits)
+    suggestions: SuggestionPolicy = Field(default_factory=SuggestionPolicy)
 
     @model_validator(mode="after")
     def validate_configuration(self) -> Self:
@@ -173,6 +180,21 @@ class ReferenceEvidence(VisualStateModel):
     prepared_region: bool = Field(default=False, strict=True)
 
 
+class SuggestionProvenance(VisualStateModel):
+    runtime_epoch: Identifier
+    proposed_class_id: Identifier
+    configuration_digest: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    reference_revision: Revision
+    model_revision: Revision
+    ai_configuration_revision: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    profile_id: Identifier
+    provider_id: Identifier
+    model: Name
+    reason: str = Field(min_length=1, max_length=320)
+    declared_confidence: float | None = Field(default=None, ge=0, le=1)
+    input_reference_ids: tuple[Identifier, ...] = Field(default=(), max_length=300)
+
+
 class StoredReference(VisualStateModel):
     reference_id: Identifier
     class_id: Identifier
@@ -185,6 +207,30 @@ class StoredReference(VisualStateModel):
     evidence: ReferenceEvidence
     label_origin: Literal["human", "multimodal"] = "human"
     status: Literal["confirmed", "suggestion"] = "confirmed"
+    suggestion_id: Identifier | None = None
+    provenance: SuggestionProvenance | None = None
+
+
+class SuggestionReview(VisualStateModel):
+    operation_id: Identifier
+    fingerprint: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    action: Literal["accept", "reject", "undo"]
+    actor_id: Identifier
+    reviewed_at: Timestamp
+    class_id: Identifier | None = None
+    reference_id: Identifier | None = None
+    draft_id: Identifier
+
+
+class VisualSuggestion(VisualStateModel):
+    suggestion_id: Identifier
+    sensor_id: Identifier
+    context_digest: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    reference: StoredReference
+    status: Literal["pending", "accepted", "rejected", "expired"] = "pending"
+    revision: Counter = 0
+    expires_at: Timestamp
+    reviews: tuple[SuggestionReview, ...] = Field(default=(), max_length=64)
 
 
 class ReferenceDraft(VisualStateModel):

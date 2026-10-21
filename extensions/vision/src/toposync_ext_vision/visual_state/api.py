@@ -5,7 +5,7 @@ import io
 import json
 import sqlite3
 from contextlib import contextmanager
-from typing import Callable
+from typing import Callable, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from PIL import Image
@@ -32,6 +32,14 @@ class DraftUpdate(VisualStateModel):
 class VisualCaptureRequest(VisualStateModel):
     configuration: VisualStateConfig
     pipeline: Pipeline
+
+
+class SuggestionReviewRequest(VisualStateModel):
+    action: Literal["accept", "reject", "undo"]
+    operation_id: Identifier
+    expected_revision: Counter
+    expected_suggestion_revision: Counter
+    class_id: Identifier | None = None
 
 
 class VisualPreviewRequest(VisualCaptureRequest):
@@ -65,6 +73,17 @@ def _storage_errors():
         raise HTTPException(422, detail={"code": "reference_configuration_invalid"}) from error
     except (OSError, sqlite3.Error) as error:
         raise HTTPException(503, detail={"code": "reference_storage_unavailable"}) from error
+
+
+def _private_image(data: bytes, thumbnail: bool) -> Response:
+    if thumbnail:
+        with Image.open(io.BytesIO(data)) as image:
+            image.thumbnail((160, 160))
+            output = io.BytesIO()
+            image.save(output, format="PNG")
+            data = output.getvalue()
+    return Response(data, media_type="image/png", headers={"Cache-Control": "private, no-store",
+                                                            "X-Content-Type-Options": "nosniff"})
 
 
 def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore], preview_runner: VisualStatePreviewRunner) -> APIRouter:
@@ -212,6 +231,33 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
         finally:
             uploads.release()
 
+    @router.get("/drafts/{draft_id}/suggestions")
+    def suggestions(request: Request, draft_id: Identifier, response: Response, offset: int = Query(default=0, ge=0, le=3000)):
+        _authorize(request)
+        response.headers["Cache-Control"] = "private, no-store"
+        with _storage_errors():
+            store = get_store()
+            items = store.list_suggestions(draft_id, offset=offset)
+            context = store._suggestion_context(store.get_draft(draft_id).configuration)
+            return {"items": [{**item.model_dump(mode="json"), "compatible": item.context_digest == context} for item in items],
+                    "summary": store.suggestion_summary(draft_id), "next_offset": offset + 100 if len(items) == 100 else None}
+
+    @router.post("/drafts/{draft_id}/suggestions/{suggestion_id}/review")
+    def review_suggestion(request: Request, draft_id: Identifier, suggestion_id: Identifier, body: SuggestionReviewRequest, response: Response):
+        actor = _authorize(request, write=True)
+        response.headers["Cache-Control"] = "private, no-store"
+        if body.action != "accept" and body.class_id is not None:
+            raise HTTPException(422, detail="invalid_suggestion_review")
+        with _storage_errors():
+            draft, suggestion = get_store().review_suggestion(draft_id, suggestion_id, actor_id=actor, **body.model_dump())
+            return {"draft": draft, "suggestion": suggestion}
+
+    @router.get("/drafts/{draft_id}/suggestions/{suggestion_id}/image")
+    def suggestion_image(request: Request, draft_id: Identifier, suggestion_id: Identifier, thumbnail: bool = True):
+        _authorize(request)
+        with _storage_errors():
+            return _private_image(get_store().read_suggestion_image(draft_id, suggestion_id), thumbnail)
+
     @router.get("/drafts/{draft_id}/references/{reference_id}/image")
     def image(request: Request, draft_id: Identifier, reference_id: Identifier, thumbnail: bool = True):
         _authorize(request)
@@ -221,13 +267,6 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
             if not any(reference_id in category.reference_ids for category in draft.configuration.classes):
                 raise HTTPException(404, detail="reference_not_in_draft")
             _, data = store.read_image(reference_id)
-            if thumbnail:
-                with Image.open(io.BytesIO(data)) as image:
-                    image.thumbnail((160, 160))
-                    output = io.BytesIO()
-                    image.save(output, format="PNG")
-                    data = output.getvalue()
-            return Response(data, media_type="image/png", headers={"Cache-Control": "private, no-store",
-                                                                     "X-Content-Type-Options": "nosniff"})
+            return _private_image(data, thumbnail)
 
     return router

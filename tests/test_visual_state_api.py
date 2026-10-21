@@ -32,6 +32,52 @@ def test_ai_options_use_owner_authorization_and_safe_service_errors(client):  # 
     assert calls == ["door", "broken"]
 
 
+def test_suggestion_review_authorization_private_images_conflict_and_undo(client):  # noqa: F811
+    from test_visual_state_suggestions import candidate
+    from test_visual_state_store import image_bytes
+    from toposync_ext_vision.visual_state.schemas import ReferenceEvidence, VisualStateConfig
+
+    store = client.portal.call(client.app.state.services.call, "vision.visual_references")
+    evidence = ReferenceEvidence(source_identity="camera:synthetic", preparation_revision="fixture",
+        sample={"capture_instance": "capture", "generation": 0, "sequence": 1},
+        observed_at=store._clock(), freshness_basis="receipt")
+    configuration = VisualStateConfig.model_validate(config(evidence.model_dump()))
+    configuration, _, _, suggestion = candidate(store, configuration, evidence, class_id="open")
+    draft = store.create_draft(configuration)
+    base = f"/api/vision/visual-state/drafts/{draft.draft_id}/suggestions"
+    response = client.get(base)
+    assert response.status_code == 200 and response.headers["cache-control"] == "private, no-store"
+    assert response.json()["items"][0]["compatible"] is True
+    assert response.json()["summary"]["pending"] == 1
+    assert response.json()["summary"]["maximum_per_class"] == 10
+    assert response.json()["next_offset"] is None
+    image_url = base + f"/{suggestion.suggestion_id}/image"
+    image = client.get(image_url)
+    assert image.status_code == 200 and image.headers["cache-control"] == "private, no-store"
+    assert image.headers["x-content-type-options"] == "nosniff"
+    assert client.get(image_url + "?thumbnail=false").content == image_bytes()
+    body = {"action": "accept", "operation_id": "accept", "expected_revision": 0,
+            "expected_suggestion_revision": 0, "class_id": "closed"}
+    route = base + f"/{suggestion.suggestion_id}/review"
+    accepted = client.post(route, json=body)
+    assert accepted.status_code == 200, accepted.text
+    result = accepted.json()
+    assert client.post(route, json=body).json() == result
+    assert result["suggestion"]["reviews"][0]["actor_id"] == client.get("/api/auth/status").json()["user"]["id"]
+    assert client.post(route, json={**body, "operation_id": "another"}).status_code == 409
+    assert client.post(route, json={**body, "actor_id": "forged"}).status_code == 422
+    assert client.post(route, json={**body, "action": "reject"}).status_code == 422
+    assert client.get(base + "?offset=-1").status_code == 422
+    assert client.post(base, json={"image": "client upload"}).status_code == 405
+    undone = client.post(route, json={"action": "undo", "operation_id": "undo", "expected_revision": 1,
+                                    "expected_suggestion_revision": 1})
+    assert undone.status_code == 200
+    assert undone.json()["draft"]["configuration"]["classes"][1]["reference_ids"] == []
+    client.post("/api/auth/logout")
+    assert client.get(base).status_code == client.get(image_url).status_code == 401
+    assert client.post(route, json=body).status_code == 401
+
+
 def test_models_report_declared_revisions_without_opening_weights_or_reference_storage(client, tmp_path, monkeypatch):  # noqa: F811
     from toposync_ext_vision.processing.runtime_backends.embedding import embedding_model_revision
     from toposync_ext_vision.processing.runtime_backends import onnxruntime_backend

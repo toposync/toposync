@@ -359,3 +359,58 @@ def test_receipts_reject_malformed_tokens_and_different_bytes():
     now[0] = 160
     with pytest.raises(ValueError, match="receipt_invalid"):
         receipts.verify(token, "owner", b"pixels")
+
+
+def test_canonical_capture_endpoint_signs_actual_prepared_pixels_and_preserves_owner_checks(client, tmp_path):  # noqa: F811
+    import asyncio
+    from dataclasses import replace
+    from toposync.runtime.pipelines.execution import BaseOperatorRuntime
+    from toposync.runtime.pipelines.image_geometry import image_geometry
+    from toposync.runtime.pipelines.runtime import Artifact
+    from toposync_ext_cameras.pipelines.operators import register_camera_pipeline_operators
+    from test_camera_visual_region_service import setup
+    from test_visual_state_preview import RealClock
+    from test_visual_state_runtime import frame
+
+    service, region, source, _, counts = setup(tmp_path / 'panorama')
+    client.app.state.services.register('cameras.visual_region.prepare', service.prepare)
+    registry = client.app.state.pipeline_operator_registry
+    register_camera_pipeline_operators(registry)
+
+    class Source(BaseOperatorRuntime):
+        async def run(self, context):
+            sample = frame(RealClock(), 1)
+            sample = replace(sample, stream_id='camera:one:video', artifacts={'main': Artifact(name='main', data=source,
+                metadata={'image_geometry': image_geometry(960, 540, sample.payload['capture_evidence'])})})
+            await context.emit(sample)
+            while not context.is_cancelled():
+                await asyncio.sleep(.1)
+
+    registry._items['camera.source'] = replace(registry.get('camera.source'), runtime_factory=lambda *_: Source())
+    prefix = pipeline('camera.source')
+    prefix.graph['nodes'][0]['config'] = {'camera_id': 'one', 'source_id': 'video'}
+    configuration = {**config({'source_identity': None, 'preparation_revision': None}), 'use_full_image': False,
+        'canonical_region': {**region.model_dump(), 'evidence_timeout_seconds': 3, 'maximum_side': 128},
+        'temporal': {'maximum_frame_age_ms': 3000, 'validity_ms': 3000}}
+    payload = {'configuration': configuration, 'pipeline': prefix.model_dump(mode='json')}
+    response = client.post('/api/vision/visual-state/capture-frame', json=payload)
+    assert response.status_code == 200, response.text
+    assert response.headers['cache-control'] == 'no-store'
+    evidence = json.loads(response.headers['X-Toposync-Capture-Evidence'])
+    assert evidence['prepared_region'] and evidence['source_identity'] == 'camera:one:video'
+    with Image.open(io.BytesIO(response.content)) as image:
+        assert max(image.size) == 128
+    configuration.update(source_identity=evidence['source_identity'], preparation_revision=evidence['preparation_revision'], region_id='region')
+    draft = client.post('/api/vision/visual-state/drafts', json=configuration)
+    assert draft.status_code == 201, draft.text
+    prepared = {'draft': draft.json(), 'image': response.content, 'receipt': response.headers['X-Toposync-Capture-Receipt']}
+    saved = capture(client, prepared)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()['reference']['evidence'] == evidence
+    assert counts == {'capture': 0, 'motion': 0}
+    # Neither this endpoint nor a later upload can use an unsigned image as reference evidence.
+    assert capture(client, prepared, receipt='forged', operation='forged', revision=1).status_code == 409
+    source[:] = 0
+    assert client.post('/api/vision/visual-state/capture-frame', json=payload).status_code == 409
+    client.post('/api/auth/logout')
+    assert client.post('/api/vision/visual-state/capture-frame', json=payload).status_code == 401

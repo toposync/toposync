@@ -13,7 +13,7 @@ from PIL import Image
 from toposync.runtime.pipelines.execution import BaseOperatorRuntime
 from toposync.runtime.pipelines.preview import (
     PipelinePreviewError, freeze_reference_packet, reference_capture_evidence,
-    reference_input_pipeline, reference_preparation_revision,
+    reference_input_pipeline,
 )
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
@@ -21,6 +21,7 @@ from ..processing.runtime_backends import build_embedding_backend
 from ..registry import ModelRegistry, build_default_model_registry
 from .matching import ReferenceEmbedding, compare_references
 from .inspection import decision_visuals
+from .preparation import VisualRegionUnavailable, prepare_visual_frame, visual_preparation_revision
 from .schemas import Observation, VisualStateConfig
 from .state import VisualStateReducer
 
@@ -113,9 +114,12 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     or VisualStateConfig.model_validate(nodes[0]["config"]) != self.config):
                 raise ValueError("visual sensor configuration changed before execution")
             self._prefix = reference_input_pipeline(pipeline, node_id)
-        if reference_preparation_revision(self._prefix) != self.config.preparation_revision:
+        if visual_preparation_revision(self.config, self._prefix) != self.config.preparation_revision:
             raise ValueError("visual sensor preparation changed; capture compatible references")
-        if self.config.region_id is not None and not any(
+        if (self.config.canonical_region is not None
+                and "cameras.visual_region.prepare" not in self.dependencies.services.list_ids()):
+            raise ValueError("visual sensor canonical region service is unavailable")
+        if self.config.region_id is not None and self.config.canonical_region is None and not any(
             node["operator"] == "camera.image_crop" for node in self._prefix.graph["nodes"]
         ):
             raise ValueError("visual sensor region requires a prepared image crop")
@@ -183,6 +187,13 @@ class VisualStateRuntime(BaseOperatorRuntime):
         frozen.artifacts[self.config.input_artifact_name].data.flags.writeable = False
         return frozen, evidence, observed, self._token
 
+    async def _analyze(self, context, packet):
+        frame, evidence = await prepare_visual_frame(self.config, self._prefix, packet, self.dependencies.services,
+                                                     clock=self._clock, unix_clock=self._unix_clock)
+        vector = await context.run_blocking(self._native, self._backend.embed, frame, mode="thread_pool",
+            concurrency_key=f"vision.visual_state:{self.config.sensor_id}", max_concurrency=1)
+        return vector, evidence
+
     async def _publish(self, context, processing_status):
         state = self._reducer.tick().model_copy(update={"processing_status": processing_status})
         marker = (state.runtime_epoch, state.state_version, processing_status)
@@ -227,8 +238,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     reader = asyncio.create_task(context.read())
                 if worker is not None and worker in ready:
                     try:
-                        vector = worker.result()
-                        frozen, evidence, observed, token = active
+                        vector, evidence = worker.result()
+                        frozen, _, observed, token = active
                         if token == self._token:
                             decision = compare_references(
                                 self.config, vector, self._references, model_revision=self._backend.revision,
@@ -247,6 +258,14 @@ class VisualStateRuntime(BaseOperatorRuntime):
                             ))
                     except asyncio.CancelledError:
                         raise
+                    except VisualRegionUnavailable:
+                        if active[3] == self._token:
+                            self._invalidate("region_unavailable")
+                            pending = None
+                    except PipelinePreviewError:
+                        if active[3] == self._token:
+                            self._invalidate("input_unobservable")
+                            pending = None
                     except Exception:
                         context.metrics.record_error(RuntimeError("visual_state_local_analysis_failed"))
                         if active[3] == self._token:
@@ -258,12 +277,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     active, pending = pending, None
                     frozen, evidence, observed, token = active
                     if (self._clock() - observed) * 1000 <= self.config.temporal.maximum_frame_age_ms and token == self._token:
-                        frame = frozen.artifacts[self.config.input_artifact_name].data
                         analysis_started = self._clock()
-                        worker = asyncio.create_task(context.run_blocking(
-                            self._native, self._backend.embed, frame, mode="thread_pool",
-                            concurrency_key=f"vision.visual_state:{self.config.sensor_id}", max_concurrency=1,
-                        ))
+                        worker = asyncio.create_task(self._analyze(context, frozen))
                         next_evaluation = self._clock() + self.config.evaluation_interval_ms / 1000
                         failed = False
                     else:

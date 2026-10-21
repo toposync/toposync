@@ -36,6 +36,7 @@ const visualStateMessages: Record<string, [string, string]> = {
   reason_observation_expired: ["The last valid observation expired. The previous state is history only.", "A última observação válida expirou. O estado anterior é somente histórico."],
   reason_pending_expired: ["The previous state expired while the new result remained uncertain.", "O estado anterior expirou enquanto o novo resultado continuava incerto."],
   reason_input_unobservable: ["No valid, recent image of the prepared region was available.", "Não havia imagem válida e recente da região preparada."],
+  reason_region_unavailable: ["The selected region could not be located reliably in this image.", "Não foi possível localizar a região selecionada com segurança nesta imagem."],
   reason_source_mismatch: ["The image came from a different source than the references.", "A imagem veio de uma origem diferente das referências."],
   reason_capture_identity_churn: ["The capture restarted too often; restart the sensor after checking the source.", "A captura reiniciou vezes demais; reinicie o sensor após verificar a origem."],
   reason_capture_instance_changed: ["The capture instance changed; fresh confirmation is required.", "A instância de captura mudou; uma nova confirmação é necessária."],

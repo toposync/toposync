@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import sqlite3
 from contextlib import contextmanager
 from typing import Callable
@@ -18,6 +19,7 @@ from toposync.runtime.pipelines.preview import PipelinePreviewError
 from ..processing.runtime_backends.embedding import embedding_model_revision
 from ..registry import build_default_model_registry
 from .preview import VisualPreviewBusy, VisualStatePreviewRunner
+from .preparation import VisualRegionUnavailable
 from .schemas import Counter, Identifier, ReferenceEvidence, VisualStateConfig, VisualStateModel
 from .store import ReferenceConflict, ReferenceLimit, VisualReferenceStore
 
@@ -27,9 +29,12 @@ class DraftUpdate(VisualStateModel):
     configuration: VisualStateConfig
 
 
-class VisualPreviewRequest(VisualStateModel):
+class VisualCaptureRequest(VisualStateModel):
     configuration: VisualStateConfig
     pipeline: Pipeline
+
+
+class VisualPreviewRequest(VisualCaptureRequest):
     duration_ms: int = Field(default=3000, strict=True, ge=500, le=10_000)
 
 
@@ -66,8 +71,7 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
     router = APIRouter(prefix="/api/vision/visual-state")
     uploads = asyncio.Semaphore(2)
 
-    @router.post("/preview")
-    async def preview(request: Request, body: VisualPreviewRequest):
+    async def execute(request, body, *, capture=False):
         owner = _authorize(request, write=True)
         dependencies = PipelineRuntimeDependencies(config_store=request.app.state.config_store,
                                                    services=request.app.state.services)
@@ -79,7 +83,7 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
 
         task = asyncio.create_task(preview_runner.run(owner=owner, configuration=body.configuration,
             pipeline=body.pipeline, registry=request.app.state.pipeline_operator_registry,
-            dependencies=dependencies, duration_ms=body.duration_ms))
+            dependencies=dependencies, duration_ms=body.duration_ms if not capture else 0, capture=capture))
         disconnect = asyncio.create_task(disconnected())
         try:
             done, _ = await asyncio.wait({task, disconnect}, return_when=asyncio.FIRST_COMPLETED)
@@ -93,6 +97,8 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
                 raise HTTPException(409, detail={"code": "visual_preview_input_invalid", "reason": error.code}) from error
             except ReferenceConflict as error:
                 raise HTTPException(409, detail="reference_conflict") from error
+            except VisualRegionUnavailable as error:
+                raise HTTPException(409, detail="region_unavailable") from error
             except ValueError as error:
                 raise HTTPException(422, detail="visual_preview_configuration_invalid") from error
             except TimeoutError as error:
@@ -103,6 +109,21 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
             task.cancel()
             disconnect.cancel()
             await asyncio.gather(task, disconnect, return_exceptions=True)
+
+    @router.post("/preview")
+    async def preview(request: Request, body: VisualPreviewRequest):
+        return await execute(request, body)
+
+    @router.post("/capture-frame")
+    async def capture_frame(request: Request, body: VisualCaptureRequest):
+        owner = _authorize(request, write=True)
+        result = await execute(request, body, capture=True)
+        evidence = ReferenceEvidence.model_validate(result["evidence"]).model_dump(mode="json")
+        return Response(result["image"], media_type="image/png", headers={
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "X-Toposync-Capture-Evidence": json.dumps(evidence, separators=(",", ":")),
+            "X-Toposync-Capture-Receipt": request.app.state.capture_receipts.issue(owner, result["image"], evidence),
+        })
 
     @router.get("/models")
     def models(request: Request):

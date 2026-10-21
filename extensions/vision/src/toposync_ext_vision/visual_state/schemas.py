@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from toposync_ext_cameras.visual_region_models import CanonicalRegionConfig
 
 
 Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]+$", min_length=1, max_length=128)]
@@ -79,6 +80,7 @@ class VisualStateConfig(VisualStateModel):
     sensor_id: Identifier
     source_identity: Name | None = None
     region_id: Identifier | None = None
+    canonical_region: CanonicalRegionConfig | None = None
     use_full_image: bool = Field(default=False, strict=True)
     preparation_revision: Revision | None = None
     reference_revision: Revision
@@ -95,6 +97,12 @@ class VisualStateConfig(VisualStateModel):
 
     @model_validator(mode="after")
     def validate_configuration(self) -> Self:
+        if self.canonical_region is not None:
+            self.canonical_region.require_region()
+            if self.use_full_image:
+                raise ValueError("a canonical region cannot use the full image")
+            if self.source_identity is not None and self.region_id is None:
+                raise ValueError("a bound canonical region requires a region identifier")
         if self.region_id is not None and self.use_full_image:
             raise ValueError("select a prepared region or explicitly use the full image")
         if (self.source_identity is None) != (self.preparation_revision is None):

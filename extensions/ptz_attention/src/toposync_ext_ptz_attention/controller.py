@@ -94,6 +94,8 @@ class _DeviceRuntime:
     command_target_key: str = ""
     command_started_monotonic: float | None = None
     navigation_task: asyncio.Task | None = None
+    capture_owner_id: str = ""
+    capture_open_task: asyncio.Task | None = None
     motion_epoch: int | str | None = None
     settle_deadline: float = 0.0
     focused_since: float | None = None
@@ -931,7 +933,7 @@ class PtzAttentionController:
                 runtime = self._devices.get(device_id)
                 if runtime is None:
                     continue
-                if runtime.lease_id:
+                if runtime.lease_id or runtime.capture_owner_id:
                     released = await self._stop_and_release(
                         runtime,
                         profile=profiles_by_device[device_id],
@@ -1101,7 +1103,7 @@ class PtzAttentionController:
                 await self._fault(profile, runtime, "control_snapshot_invalid")
                 return
             if snapshot.get("active_lease") is not None or snapshot.get("state") == "manual_override":
-                self._enter_manual_override(profile, runtime, "other_controller_active", now=now)
+                await self._enter_manual_override(profile, runtime, "other_controller_active", now=now)
                 return
         if effective_mode(profile) in {"live_preset", "live_panorama"} and runtime.lease_id:
             await self._renew_if_due(profile, runtime, now)
@@ -1364,7 +1366,7 @@ class PtzAttentionController:
                 snapshot = await self.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
                     source_id=profile.source_id, refresh_physical=True)
                 if self._snapshot_confirms_other_owner(runtime, snapshot):
-                    self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                    await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
                     return False
                 if not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True:
                     raise ValueError("following ownership not verified")
@@ -1537,7 +1539,7 @@ class PtzAttentionController:
                 now=now,
             )
         except _LeaseOwnershipLostError:
-            self._enter_manual_override(
+            await self._enter_manual_override(
                 profile,
                 runtime,
                 "lease_lost_before_move",
@@ -1679,7 +1681,7 @@ class PtzAttentionController:
             )
             return False
         except _LeaseOwnershipLostError:
-            self._enter_manual_override(
+            await self._enter_manual_override(
                 profile,
                 runtime,
                 "lease_lost_before_return",
@@ -1735,7 +1737,7 @@ class PtzAttentionController:
             return
         if not self._snapshot_owns_lease(runtime, snapshot):
             if self._snapshot_confirms_other_owner(runtime, snapshot):
-                self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
             elif self._snapshot_confirms_not_owned(runtime, snapshot):
                 await self._fault(profile, runtime, "lease_lost_without_owner")
             return
@@ -1839,7 +1841,7 @@ class PtzAttentionController:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
                     runtime.navigation_task = None
-                    self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                    await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
                 elif not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True:
                     await self._fault(profile, runtime, "panorama_control_lost")
             except Exception:
@@ -1868,7 +1870,7 @@ class PtzAttentionController:
             snapshot = await self.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
                 source_id=profile.source_id, ptz_device_id=profile.ptz_device_id, refresh_physical=False)
             if self._snapshot_confirms_other_owner(runtime, snapshot):
-                self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
                 return
             if (not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True
                     or snapshot.get("geometry_safe") is not True or snapshot.get("motion_state") != "stable"
@@ -2023,6 +2025,12 @@ class PtzAttentionController:
             if self._snapshot_confirms_other_owner(runtime, readiness):
                 raise _LeaseOwnershipLostError("automation lease ownership changed")
             raise RuntimeError("automation lease ownership is unknown")
+        if runtime.capture_owner_id:
+            if not await self._release_session_capture(runtime):
+                raise RuntimeError("previous session capture cleanup failed")
+            remaining = budget_remaining()
+            if remaining is not None and remaining <= 0:
+                raise _CampaignExpiredError("campaign_expired")
         raw = await self.services.call(
             "cameras.control.acquire",
             camera_id=profile.camera_id,
@@ -2054,6 +2062,42 @@ class PtzAttentionController:
         remaining = budget_remaining()
         if remaining is not None and remaining <= 0:
             raise _CampaignExpiredError("campaign_expired")
+
+        if effective_mode(profile) == "live_panorama" and not runtime.capture_owner_id and all(
+            self.has_service(service) for service in ("cameras.capture.open", "cameras.capture.release_owner")
+        ):
+            runtime.capture_owner_id = f"ptz_attention_capture:{lease_id}:{runtime.fence}"
+            runtime.capture_open_task = asyncio.create_task(
+                self._open_session_capture(profile, runtime.capture_owner_id),
+                name=f"ptz-attention-capture:{profile.id}",
+            )
+
+    async def _open_session_capture(self, profile: AttentionProfile, owner_id: str) -> None:
+        try:
+            # Match panorama navigation demand so closing a move does not restart the decoder.
+            await self.services.call(
+                "cameras.capture.open", owner_id=owner_id,
+                camera_id=profile.camera_id, source_id=profile.source_id, fps=12.0,
+            )
+        except Exception:
+            _LOGGER.warning("PTZ attention capture warmup failed for profile=%s", profile.id, exc_info=True)
+
+    async def _release_session_capture(self, runtime: _DeviceRuntime) -> bool:
+        task, runtime.capture_open_task = runtime.capture_open_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if not runtime.capture_owner_id:
+            return True
+        try:
+            result = await self.services.call("cameras.capture.release_owner", owner_id=runtime.capture_owner_id)
+            if not isinstance(result, dict) or result.get("ok") is not True:
+                raise RuntimeError("capture release was not acknowledged")
+        except Exception:
+            _LOGGER.warning("PTZ attention capture cleanup failed for device=%s", runtime.ptz_device_id, exc_info=True)
+            return False
+        runtime.capture_owner_id = ""
+        return True
 
     async def _renew_if_due(
         self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float
@@ -2109,7 +2153,7 @@ class PtzAttentionController:
                 return
             if not self._snapshot_owns_lease(runtime, ownership_snapshot):
                 if self._snapshot_confirms_other_owner(runtime, ownership_snapshot):
-                    self._enter_manual_override(
+                    await self._enter_manual_override(
                         profile,
                         runtime,
                         "lease_lost",
@@ -2151,7 +2195,7 @@ class PtzAttentionController:
             return
         if not self._snapshot_owns_lease(runtime, snapshot):
             if self._snapshot_confirms_other_owner(runtime, snapshot):
-                self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
             elif self._snapshot_confirms_not_owned(runtime, snapshot):
                 await self._fault(profile, runtime, "lease_lost_without_owner")
             else:
@@ -2169,6 +2213,20 @@ class PtzAttentionController:
             )
 
     async def _stop_and_release(
+        self,
+        runtime: _DeviceRuntime,
+        *,
+        profile: AttentionProfile | None,
+        emergency: bool,
+    ) -> bool:
+        try:
+            released = await self._stop_and_release_control(runtime, profile=profile, emergency=emergency)
+        finally:
+            # Stop is attempted before waiting for capture startup or decoder cleanup.
+            capture_released = await self._release_session_capture(runtime)
+        return released and capture_released
+
+    async def _stop_and_release_control(
         self,
         runtime: _DeviceRuntime,
         *,
@@ -2306,7 +2364,7 @@ class PtzAttentionController:
             if released:
                 self._clear_command(runtime)
 
-    def _enter_manual_override(
+    async def _enter_manual_override(
         self,
         profile: AttentionProfile,
         runtime: _DeviceRuntime,
@@ -2325,7 +2383,9 @@ class PtzAttentionController:
         runtime.fault = str(reason)
         self._clear_command(runtime)
         self._set_state(runtime, "MANUAL_OVERRIDE", now)
-        self._record(profile, runtime, action="manual_override", reason=str(reason))
+        capture_released = await self._release_session_capture(runtime)
+        self._record(profile, runtime, action="manual_override", reason=str(reason),
+                     details={"capture_cleanup_confirmed": capture_released})
 
     async def _automation_readiness_lost(
         self,
@@ -2428,7 +2488,7 @@ class PtzAttentionController:
             runtime,
             snapshot,
         ):
-            self._enter_manual_override(
+            await self._enter_manual_override(
                 profile,
                 runtime,
                 "lease_lost_during_command",

@@ -302,6 +302,136 @@ def environment(mode="shadow", qualified=False, failure=None, blocked=False):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("finish", ["pause", "shutdown", "fault", "takeover", "expiry", "return"])
+async def test_session_capture_survives_navigation_and_is_released_at_session_end(finish):
+    clock, camera, services, _, calls, _, store, controller = environment(mode="live_panorama", qualified=True)
+    opened, released = [], []
+
+    async def open_capture(**request):
+        opened.append(request)
+        return {"lease_id": "capture"}
+
+    async def release_capture(**request):
+        released.append(request)
+        if finish != "takeover":
+            assert camera.lease is None, "Release capture after stopping/releasing control"
+        return {"ok": True}
+
+    services.register("cameras.capture.open", open_capture)
+    services.register("cameras.capture.release_owner", release_capture)
+    current = store.list_profiles()[0]
+    runtime = controller._runtime_for(current)
+    await controller.submit_intent(event(clock))
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    assert runtime.state == "FOCUSED"
+    await controller.submit_intent(event(clock, "higher", "high", x=-.5))
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    assert len(calls) == 2 and len(opened) == 1 and not released
+    assert opened[0] == {"owner_id": runtime.capture_owner_id, "camera_id": "front", "source_id": "wide", "fps": 12.0}
+    owner = runtime.capture_owner_id
+    if finish == "pause":
+        await controller.pause(current.id)
+    elif finish == "fault":
+        await controller._fault(current, runtime, "test failure")
+    elif finish == "takeover":
+        camera.lease = {"ptz_device_id": "front", "lease_id": "manual", "fence": 8}
+        runtime.next_renew_at = clock()
+        await controller.tick_once()
+        assert runtime.state == "MANUAL_OVERRIDE"
+        assert not camera.commands, "Do not Stop the new owner's camera"
+    elif finish == "expiry":
+        store.replace_profile(current.model_copy(update={"campaign_ends_at": clock() + 1}))
+        clock.advance(2)
+        await controller.tick_once()
+    elif finish == "return":
+        assert await controller.return_home(current.id)
+        await asyncio.sleep(0)
+        await controller.tick_once()
+    else:
+        await controller.shutdown()
+    assert released == [{"owner_id": owner}]
+    assert not runtime.capture_owner_id and runtime.capture_open_task is None
+    await controller.shutdown()
+    assert len(released) == 1
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opening", ["blocked", "failure"])
+async def test_session_capture_open_failure_or_cancellation_does_not_delay_stop(opening):
+    clock, camera, services, _, _, _, store, controller = environment(mode="live_panorama", qualified=True)
+    released = []
+    stop_before_cancellation = []
+
+    async def open_capture(**request):
+        if opening == "failure":
+            raise RuntimeError("video unavailable")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stop_before_cancellation.append(bool(camera.commands and camera.commands[-1]["command"]["kind"] == "stop"))
+
+    async def release_capture(**request):
+        released.append(request)
+        return {"ok": True}
+
+    services.register("cameras.capture.open", open_capture)
+    services.register("cameras.capture.release_owner", release_capture)
+    await controller.submit_intent(event(clock))
+    await asyncio.sleep(0)
+    await controller.pause(store.list_profiles()[0].id)
+    assert len(released) == 1
+    assert stop_before_cancellation == ([True] if opening == "blocked" else [])
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_shadow_does_not_open_session_capture():
+    clock, _, services, _, _, _, store, controller = environment()
+
+    async def unexpected(**request):
+        pytest.fail("shadow must not open or release capture")
+
+    services.register("cameras.capture.open", unexpected)
+    services.register("cameras.capture.release_owner", unexpected)
+    await controller.submit_intent(event(clock))
+    await asyncio.sleep(0)
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_capture_cleanup_failure_retains_owner_for_retry_on_profile_change():
+    clock, camera, services, _, _, _, store, controller = environment(mode="live_panorama", qualified=True)
+    releases = []
+
+    async def open_capture(**request):
+        return {"lease_id": "capture"}
+
+    async def release_capture(**request):
+        releases.append(request)
+        return {"ok": len(releases) > 1}
+
+    services.register("cameras.capture.open", open_capture)
+    services.register("cameras.capture.release_owner", release_capture)
+    current = store.list_profiles()[0]
+    runtime = controller._runtime_for(current)
+    await controller.submit_intent(event(clock))
+    await asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match="pause_cleanup_failed"):
+        await controller.pause(current.id)
+    assert runtime.capture_owner_id and not runtime.lease_id and camera.lease is None
+    await controller.synchronize_profile(current, None)
+    assert len(releases) == 2 and releases[0] == releases[1]
+    assert not runtime.capture_owner_id
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_shadow_arbitrates_and_returns_world_target_without_presets_or_camera_io():
     clock, camera, _, state, calls, _, store, controller = environment()
     await controller.submit_intent(event(clock))

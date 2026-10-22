@@ -28,6 +28,34 @@ async def acquire(hub, fps):
     )
 
 
+def test_session_consumer_avoids_decoder_restarts_between_navigation_moves():
+    async def scenario():
+        readers = []
+
+        def factory(*args, **kwargs):
+            reader = Reader(*args, **kwargs)
+            readers.append(reader)
+            return reader
+
+        hub = CameraHub(frame_grabber_factory=factory)
+        analysis = await acquire(hub, 5)
+        session = await acquire(hub, 12)
+        for _ in range(3):
+            navigation = await acquire(hub, 12)
+            await hub.release(key="camera:front", grabber=navigation)
+            assert analysis.target_fps == session.target_fps == 12
+            assert len(readers) == 2
+            assert not readers[-1].stopped
+        await hub.release(key="camera:front", grabber=session)
+        assert analysis.target_fps == 5
+        assert len(readers) == 3
+        await hub.release(key="camera:front", grabber=analysis)
+        assert await hub.snapshot() == []
+        assert all(reader.stopped for reader in readers)
+
+    asyncio.run(scenario())
+
+
 def test_last_high_frequency_consumer_leaving_restores_analysis_and_release_is_idempotent():
     async def scenario():
         readers = []

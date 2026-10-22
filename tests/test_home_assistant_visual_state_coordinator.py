@@ -138,12 +138,17 @@ def test_timeout_cannot_be_bypassed_by_a_client_returning_after_suppressed_cance
     asyncio.run(run())
 
 
-def test_setup_and_unload_wire_one_coordinator_and_keep_camera_data(tmp_path, monkeypatch):
+def load_integration():
     path = Path(__file__).resolve().parents[1] / "integrations/home_assistant/custom_components/toposync/__init__.py"
     loader = importlib.machinery.SourceFileLoader("integrations.home_assistant.custom_components.toposync.bootstrap", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader, is_package=False)
     integration = importlib.util.module_from_spec(spec)
     loader.exec_module(integration)
+    return integration
+
+
+def test_setup_and_unload_wire_one_coordinator_and_keep_camera_data(tmp_path, monkeypatch):
+    integration = load_integration()
 
     async def run():
         hass = HomeAssistant(str(tmp_path))
@@ -187,6 +192,37 @@ def test_setup_and_unload_wire_one_coordinator_and_keep_camera_data(tmp_path, mo
                 await callback()
             assert coordinator._closed and coordinator._expiry is None and coordinator._request is None
             assert "isolated" not in hass.data["toposync"] and frontend == ["setup", "unload"]
+        finally:
+            await hass.async_stop(force=True)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", [None, 408, 429, 500, 503, 599, 400, 401, 403, 404, 600])
+def test_setup_retries_only_transient_connection_failures(tmp_path, monkeypatch, status):
+    from homeassistant.exceptions import ConfigEntryNotReady
+    integration = load_integration()
+
+    async def run():
+        hass = HomeAssistant(str(tmp_path))
+        failure = ToposyncApiError("synthetic failure", status=status)
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+            async def get_auth_status(self):
+                raise failure
+        monkeypatch.setattr(integration, "ToposyncClient", Client)
+        monkeypatch.setattr(integration, "async_get_clientsession", lambda *_: None)
+        entry = SimpleNamespace(entry_id="isolated", data={"url": "http://unused.invalid"})
+        expected = ConfigEntryNotReady if status in {None, 408, 429, 500, 503, 599} else ToposyncApiError
+        try:
+            with pytest.raises(expected) as raised:
+                await integration.async_setup_entry(hass, entry)
+            if expected is ConfigEntryNotReady:
+                assert raised.value.__cause__ is failure
+                assert str(raised.value) == "Toposync is temporarily unavailable"
+            else:
+                assert raised.value is failure
+            assert "isolated" not in hass.data.get("toposync", {})
         finally:
             await hass.async_stop(force=True)
     asyncio.run(run())

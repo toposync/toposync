@@ -3,6 +3,7 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import ToposyncApiError, ToposyncClient
@@ -33,7 +34,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         url=entry.data[CONF_URL],
         token=entry.data.get(CONF_TOKEN, ""),
     )
-    auth_status = await client.get_auth_status()
+    try:
+        auth_status = await client.get_auth_status()
+    except ToposyncApiError as error:
+        if error.status is None or error.status in {408, 429} or 500 <= error.status < 600:
+            raise ConfigEntryNotReady("Toposync is temporarily unavailable") from error
+        raise
     try:
         manifest = await client.get_cameras_manifest()
     except ToposyncApiError:

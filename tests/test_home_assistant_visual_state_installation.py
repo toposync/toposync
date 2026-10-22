@@ -31,14 +31,34 @@ async def wait_for(predicate, timeout=10):
             await asyncio.sleep(.01)
 
 
+async def boot_home_assistant(directory, state_listener=None):
+    source = Path(__file__).resolve().parents[1] / "integrations/home_assistant/custom_components/toposync"
+    target = directory / "custom_components/toposync"
+    if not target.exists():
+        shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__"))
+    hass = HomeAssistant(str(directory))
+    if state_listener is not None:
+        hass.bus.async_listen("state_changed", state_listener)
+    hass.config.skip_pip = True
+    loader.async_setup(hass)
+    try:
+        configured = await bootstrap.async_from_config_dict({
+            "homeassistant": {"name": "Visual sensor laboratory", "latitude": 0, "longitude": 0,
+                              "elevation": 0, "unit_system": "metric", "time_zone": "UTC"},
+            "http": {"server_host": "127.0.0.1", "server_port": 8123}, "frontend": {},
+        }, hass)
+        assert configured is hass
+        await hass.async_start()
+        return hass
+    except BaseException:
+        await hass.async_stop(force=True)
+        raise
+
+
 def test_installed_integration_discovers_entities_expires_over_http_and_unloads(tmp_path):
     async def run():
-        source = Path(__file__).resolve().parents[1] / "integrations/home_assistant/custom_components/toposync"
         directory = tmp_path / "home-assistant"
-        shutil.copytree(source, directory / "custom_components/toposync", ignore=shutil.ignore_patterns("__pycache__"))
-        hass = HomeAssistant(str(directory))
-        hass.config.skip_pip = True
-        loader.async_setup(hass)
+        hass = None
         requests, service_calls = [], []
         version = 0
         server_epoch = "server-1"
@@ -82,13 +102,7 @@ def test_installed_integration_discovers_entities_expires_over_http_and_unloads(
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
         try:
-            configured = await bootstrap.async_from_config_dict({
-                "homeassistant": {"name": "Visual sensor laboratory", "latitude": 0, "longitude": 0,
-                                  "elevation": 0, "unit_system": "metric", "time_zone": "UTC"},
-                "http": {"server_host": "127.0.0.1", "server_port": 8123}, "frontend": {},
-            }, hass)
-            assert configured is hass
-            await hass.async_start()
+            hass = await boot_home_assistant(directory)
             result = await hass.config_entries.flow.async_init("toposync", context={"source": "user"}, data={
                 "url": f"http://127.0.0.1:{port}/ingress", "token": "synthetic-test-token",
             })
@@ -135,6 +149,9 @@ def test_installed_integration_discovers_entities_expires_over_http_and_unloads(
             assert await hass.config_entries.async_unload(entry.entry_id)
             await hass.async_block_till_done()
             assert all(hass.states.get(identifier).state == "unavailable" for identifier in entities.values())
+            await runner.cleanup()
+            assert not await hass.config_entries.async_setup(entry.entry_id)
+            assert entry.state.value == "setup_retry"
             assert not service_calls
             unsubscribe()
             (tmp_path / "installation-report.json").write_text(json.dumps({
@@ -146,7 +163,8 @@ def test_installed_integration_discovers_entities_expires_over_http_and_unloads(
             }, indent=2))
         finally:
             release.set()
-            await hass.async_stop(force=True)
+            if hass is not None:
+                await hass.async_stop(force=True)
             await runner.cleanup()
 
     asyncio.run(run())

@@ -138,6 +138,9 @@ sensor identifier and entity kind. Renaming a sensor or class does not change
 the entity identity. No value is restored from history at startup. Local expiry
 changes an entity to unknown without waiting for another response; transport
 failure, removal, lost permission or disabled publication makes it unavailable.
+At startup, connection failures and HTTP 408, 429 or 5xx responses use Home
+Assistant's automatic setup retry. Authentication and other permanent failures
+keep their existing error behavior.
 
 Previously created entities remain unavailable on removal or a change of kind.
 They can recover with the same identity when restored; neither the registry nor
@@ -148,8 +151,9 @@ events as a boolean value. Reconfirmation timestamps and sample counters are
 kept out of entity attributes to avoid a recorder change on every observation.
 
 The installed-integration test below exercises a complete Home Assistant application
-bootstrap and the normal configuration flow. Process restarts and abrupt producer
-termination remain separate checks; reloading an integration is not a process restart.
+bootstrap and the normal configuration flow. The separate process test restarts
+Home Assistant and abruptly terminates a synthetic HTTP producer; reloading an
+integration alone is not a process restart.
 These checks do not qualify physical alarm use.
 
 The entity and coordinator tests run against the official Home Assistant
@@ -170,6 +174,14 @@ observed state change, expiry while HTTP is blocked, transport timeout, unload,
 reload without restoring a valid historical value, identity preservation, recovery
 with a new producer epoch and HTTP 403. It asserts that no service is called.
 Home Assistant retains registered entities as unavailable after unloading them.
+
+`tests/test_home_assistant_visual_state_processes.py` starts the producer and Home
+Assistant in separate owned processes. It kills the producer, checks invalidation,
+replaces it with a new epoch and verifies recovery. It then restarts Home Assistant
+with its saved configuration while the producer is absent, verifies that history
+does not restore a valid value, and checks automatic recovery when the producer
+returns. Entity identities survive both restarts and no service is called. This
+does not exercise a complete Toposync server or its inference pipeline.
 
 Run from the repository root with Docker and Python 3.10 or later available. The image is pinned to
 Home Assistant 2026.10.2; the validated host uses Linux ARM64 inside Docker.
@@ -201,12 +213,14 @@ ordinary test collection must not start discovery on the developer's computer.
     -e PYTHONDONTWRITEBYTECODE=1 -w /workspace --entrypoint python \
     ghcr.io/home-assistant/home-assistant@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4 \
     -m pytest -q -p no:cacheprovider \
-    tests/test_home_assistant_visual_state_installation.py --basetemp /artifacts/data
+    tests/test_home_assistant_visual_state_installation.py \
+    tests/test_home_assistant_visual_state_processes.py --basetemp /artifacts/data
 )
 ```
 
-The test writes `installation-report.json` under its external test directory.
+The tests write `installation-report.json` and `process-report.json` under their
+external test directories.
 Its single transition measurement includes receiver polling and entity updates;
 it is not a latency percentile, a camera-to-entity measurement or a capacity claim.
 Full quality and performance qualification still require the representative corpus
-and the remaining process-failure trials.
+and measurements of the complete producer and inference path.

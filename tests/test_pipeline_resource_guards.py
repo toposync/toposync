@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+from toposync.runtime import config_store as storage
+
 from toposync.runtime.config_store import (
     ConfigStore, Pipeline, PipelineAlreadyExistsError, UserDataPaths,
 )
@@ -18,6 +20,120 @@ def store_at(path):
 
 def pipeline(name="sensor"):
     return Pipeline(name=name, enabled=False, graph={"schema_version": 2, "nodes": [], "edges": []})
+
+
+def test_reconciliation_observes_committed_file_and_retries_failure_without_rejecting_save(tmp_path):
+    async def run():
+        store = store_at(tmp_path)
+        calls = []
+        fail = False
+
+        async def guard(_previous, _proposed):
+            pass
+
+        async def reconcile(committed):
+            disk = json.loads(store.paths.config_path.read_text())
+            assert [p.name for p in committed] == [p['name'] for p in disk['pipelines']]
+            calls.append([p.name for p in committed])
+            if fail:
+                raise OSError("simulated maintenance failure")
+            if committed:
+                committed[0].name = "isolated"
+
+        await store.register_pipeline_resource_guard("resources", guard, reconcile=reconcile)
+        fail = True
+        saved = await store.create_pipeline(pipeline())
+        assert saved.name == "sensor" and calls == [[], ["sensor"]]
+        await store.load()
+        assert len(calls) == 2
+        fail = False
+        store._pipeline_resource_retry["resources"] = 0
+        assert (await store.load()).pipelines[0].name == "sensor"
+        assert calls[-1] == ["sensor"] and len(calls) == 3
+        await store.load()
+        assert len(calls) == 3
+
+    asyncio.run(run())
+
+
+def test_reconciliation_cancellation_holds_write_lock_until_resource_work_finishes(tmp_path):
+    async def run():
+        store = store_at(tmp_path)
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def guard(_previous, _proposed):
+            pass
+
+        async def reconcile(committed):
+            names = [p.name for p in committed]
+            calls.append(names)
+            if names == ["first"]:
+                entered.set()
+                await release.wait()
+
+        await store.register_pipeline_resource_guard("resources", guard, reconcile=reconcile)
+        first = asyncio.create_task(store.create_pipeline(pipeline("first")))
+        await asyncio.wait_for(entered.wait(), 2)
+        first.cancel()
+        await asyncio.sleep(0)
+        first.cancel()
+        second = asyncio.create_task(store.create_pipeline(pipeline("second")))
+        await asyncio.sleep(.01)
+        assert not first.done() and not second.done()
+        assert calls == [[], ["first"]]
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await second
+        assert calls[-1] == ["first", "second"]
+        assert [p.name for p in (await store.load()).pipelines] == ["first", "second"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["stamp", "external"])
+def test_postcommit_snapshot_check_retains_resources_without_failing_committed_save(tmp_path, monkeypatch, failure):
+    async def run():
+        store = store_at(tmp_path)
+        calls = []
+
+        async def guard(_previous, _proposed):
+            pass
+
+        async def reconcile(committed):
+            calls.append([p.name for p in committed])
+
+        await store.register_pipeline_resource_guard("resources", guard, reconcile=reconcile)
+        write = storage._atomic_write_json
+        stamp = storage._path_stamp
+        written = False
+
+        def after_write(path, data):
+            nonlocal written
+            result = write(path, data)
+            written = True
+            if failure == "external":
+                data['pipelines'][0]['display_name'] = 'External update'
+                write(path, data)
+            return result
+
+        def unavailable(path):
+            if written and failure == "stamp":
+                raise OSError("simulated stat failure")
+            return stamp(path)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(storage, "_atomic_write_json", after_write)
+            patch.setattr(storage, "_path_stamp", unavailable)
+            assert (await store.create_pipeline(pipeline())).name == "sensor"
+        assert calls == [[]]
+        assert json.loads(store.paths.config_path.read_text())['pipelines'][0]['name'] == 'sensor'
+        store._pipeline_resource_retry["resources"] = 0
+        await store.load()
+        assert calls == [[], ['sensor']]
+
+    asyncio.run(run())
 
 
 def test_guards_receive_isolated_snapshots_before_disabled_writes_and_bulk_restore(tmp_path):

@@ -97,7 +97,10 @@ class VisionExtension(BaseExtension):
         from .visual_state.persistence import register_visual_reference_persistence
 
         if config_store is not None:
-            await register_visual_reference_persistence(config_store, visual_reference_store)
+            await register_visual_reference_persistence(
+                config_store, visual_reference_store,
+                existing_resources=configured_data_dir is not None and (Path(configured_data_dir) / "visual-references").exists(),
+            )
         self._visual_preview_runner = VisualStatePreviewRunner()
         app.include_router(create_visual_reference_router(visual_reference_store, self._visual_preview_runner))
         services.register("vision.visual_references", visual_reference_store)

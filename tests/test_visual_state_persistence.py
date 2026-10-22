@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 import pytest
 
@@ -93,6 +94,11 @@ def test_file_write_failure_preserves_both_previous_and_reserved_images(tmp_path
         assert references.read_image(previous.reference_id)[1]
         assert references.read_image(proposed.reference_id)[1]
         assert (await store.get_pipeline("sensor")).graph["nodes"][0]["config"] == first
+        references._clock.now += 7 * 86400 + 1
+        assert references.collect() == 1
+        assert references.read_image(previous.reference_id)[1]
+        with pytest.raises(ReferenceConflict, match="not found"):
+            references.read_image(proposed.reference_id)
 
     asyncio.run(run())
 
@@ -155,9 +161,11 @@ def test_external_restore_protects_available_images_without_certifying_missing_o
     asyncio.run(run())
 
 
-def test_delete_and_rename_do_not_release_images_before_retention_reconciliation(tmp_path, references):
+def test_delete_and_rename_keep_images_for_recovery_then_release_them(tmp_path, references):
     async def run():
         configuration, reference = capture(references)
+        image_path = references.images / f"{reference.sha256}.png"
+        os.utime(image_path, (references._clock.now, references._clock.now))
         store = store_at(tmp_path / "host")
         await register_visual_reference_persistence(store, lambda: references)
         await store.create_pipeline(pipeline(configuration))
@@ -166,6 +174,95 @@ def test_delete_and_rename_do_not_release_images_before_retention_reconciliation
         references._clock.now += 86401
         assert references.collect() == 0
         assert references.read_image(reference.reference_id)[1]
+        references._clock.now += 6 * 86400
+        assert references.collect() == 1
+        assert not image_path.exists()
+        with pytest.raises(ReferenceConflict, match="not found"):
+            references.read_image(reference.reference_id)
+
+    asyncio.run(run())
+
+
+def test_reconciliation_preserves_current_shared_manual_and_live_draft_references(tmp_path, references):
+    async def run():
+        first, first_image = capture(references)
+        second, second_image = capture(references, "blue")
+        manual, manual_image = capture(references, "green")
+        references.pin_configuration("manual", VisualStateConfig.model_validate(manual))
+        store = store_at(tmp_path / "host")
+        await register_visual_reference_persistence(store, lambda: references)
+        await store.create_pipeline(pipeline(first))
+        clone = {**first, "sensor_id": "clone"}
+        await store.create_pipeline(pipeline(clone, "clone"))
+        await store.replace_pipeline("sensor", pipeline(second))
+        references._clock.now += 8 * 86400
+        assert references.collect() == 0
+        assert references.read_image(first_image.reference_id)[1]
+        assert references.read_image(second_image.reference_id)[1]
+        assert references.read_image(manual_image.reference_id)[1]
+        await store.delete_pipeline("clone")
+        references._clock.now += 7 * 86400 - 10
+        draft = references.create_draft(VisualStateConfig.model_validate(first))
+        references._clock.now += 11
+        assert references.collect() == 0
+        assert references.get_draft(draft.draft_id).configuration.sensor_id == "sensor"
+        references._clock.now += 3600
+        assert references.collect() == 1
+        assert references.read_image(second_image.reference_id)[1]
+        assert references.read_image(manual_image.reference_id)[1]
+
+    asyncio.run(run())
+
+
+def test_failed_reconciliation_retries_and_empty_restart_recovers_pending_reservations(tmp_path, references, monkeypatch):
+    async def run():
+        configuration, reference = capture(references)
+        store = store_at(tmp_path / "host")
+        await register_visual_reference_persistence(store, lambda: references)
+        await store.create_pipeline(pipeline(configuration))
+        reconcile = references.reconcile_pipeline_configurations
+
+        def fail(_configurations):
+            raise OSError("simulated maintenance failure")
+
+        monkeypatch.setattr(references, "reconcile_pipeline_configurations", fail)
+        await store.delete_pipeline("sensor")
+        assert (await store.get_config()).pipelines == []
+        references._clock.now += 8 * 86400
+        assert references.collect() == 0
+        monkeypatch.setattr(references, "reconcile_pipeline_configurations", reconcile)
+        reopened = store_at(tmp_path / "host")
+        await register_visual_reference_persistence(reopened, lambda: references, existing_resources=True)
+        deadline = references._connection.execute("SELECT expires_at FROM retired_pipeline_reference").fetchone()[0]
+        assert deadline == references._clock.now + 7 * 86400
+        await reopened.create_pipeline(Pipeline(name="unrelated", enabled=False, graph={"schema_version": 2}))
+        assert references._connection.execute("SELECT expires_at FROM retired_pipeline_reference").fetchone()[0] == deadline
+        references._clock.now = deadline + 1
+        assert references.collect() == 1
+        with pytest.raises(ReferenceConflict, match="not found"):
+            references.read_image(reference.reference_id)
+
+    asyncio.run(run())
+
+
+def test_reconciliation_transaction_failure_retains_all_pins(tmp_path, references):
+    async def run():
+        configuration, reference = capture(references)
+        store = store_at(tmp_path / "host")
+        await register_visual_reference_persistence(store, lambda: references)
+        await store.create_pipeline(pipeline(configuration))
+        references._connection.execute("CREATE TRIGGER fail_retirement BEFORE DELETE ON pinned_reference "
+                                       "BEGIN SELECT RAISE(ABORT, 'simulated retirement failure'); END")
+        await store.delete_pipeline("sensor")
+        assert references._connection.execute("SELECT count(*) FROM retired_pipeline_reference").fetchone()[0] == 0
+        assert references._connection.execute("SELECT count(*) FROM pinned_reference").fetchone()[0] == 1
+        references._clock.now += 8 * 86400
+        assert references.collect() == 0 and references.read_image(reference.reference_id)[1]
+        references._connection.execute("DROP TRIGGER fail_retirement")
+        store._pipeline_resource_retry["com.toposync.vision"] = 0
+        await store.load()
+        references._clock.now += 7 * 86400 + 1
+        assert references.collect() == 1
 
     asyncio.run(run())
 

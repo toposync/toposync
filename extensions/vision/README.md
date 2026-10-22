@@ -190,9 +190,25 @@ may omit revisions; supplied revisions are always checked.
 Startup and external configuration reload protect available references even when
 a restoration is incomplete. This does not validate or repair missing images;
 reopening an incomplete gallery reports an error. Expired drafts can be collected
-without deleting saved references. Superseded pipeline references are currently
-retained conservatively, including after pipeline deletion, and continue to count
-toward storage limits. Automatic retention reconciliation remains pending.
+without deleting saved references. After a verified save or reload, superseded
+pipeline references (including deleted pipelines and abandoned failed saves)
+remain recoverable for seven days from reconciliation. Reconciliation never
+deletes image files; the bounded collector releases them after that period only
+when no current pipeline, explicit pin, live draft or suggestion still uses them.
+Shared images remain until their last reference is released. Repeated reloads do
+not extend the recovery period. Images continue to count toward storage limits
+while retained. Export a sensor backup for recovery beyond this period; an old
+pipeline JSON alone does not contain its images.
+
+Resource reconciliation failures keep reservations and are retried on a later
+configuration load after a 30-second backoff, or after another pipeline change.
+They are logged without reporting an already committed save as rejected.
+Cancellation waits for reconciliation to finish before allowing another write.
+An existing private reference database is reconciled on startup even if all
+sensors were deleted before a previous interrupted cleanup. Reference database
+versions 1–3 upgrade to version 4 without dropping drafts, images or restore
+operation identifiers; the exported sensor package format remains version 1.
+
 Runtime initialization also checks images and the pinned model before publishing
 state, including after an external configuration reload. Missing or changed
 weights prevent initialization; restoring the compatible model preserves sensor

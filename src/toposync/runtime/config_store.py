@@ -4,6 +4,7 @@ import asyncio
 import copy
 import keyword
 import json
+import logging
 import os
 import re
 import sys
@@ -451,10 +452,13 @@ class ConfigStore:
         self._pipeline_resource_guards: dict[
             str, Callable[[list[Pipeline] | None, list[Pipeline]], Awaitable[None]]
         ] = {}
+        self._pipeline_resource_reconcilers: dict[str, Callable[[list[Pipeline]], Awaitable[None]]] = {}
+        self._pipeline_resource_retry: dict[str, float] = {}
 
     async def register_pipeline_resource_guard(
         self, owner: str,
         callback: Callable[[list[Pipeline] | None, list[Pipeline]], Awaitable[None]],
+        *, reconcile: Callable[[list[Pipeline]], Awaitable[None]] | None = None,
     ) -> None:
         """Protect extension resources before persistence, including disabled graphs.
 
@@ -462,6 +466,10 @@ class ConfigStore:
         They may reserve resources, never release them: a later guard or file write
         can fail. A None previous snapshot means startup or external-file reload;
         preserve available resources without requiring them all to be restored yet.
+
+        Optional reconciliation receives only committed/loaded snapshots. Failures
+        keep resources reserved and retry on a later load, without failing a save
+        that already committed. Reconciliation must be atomic and idempotent.
         """
         await self.load()
         async with self._lock:
@@ -470,11 +478,55 @@ class ConfigStore:
             assert self._config is not None
             await callback(None, [pipeline.model_copy(deep=True) for pipeline in self._config.pipelines])
             self._pipeline_resource_guards[owner] = callback
+            if reconcile is not None:
+                self._pipeline_resource_reconcilers[owner] = reconcile
+                self._pipeline_resource_retry[owner] = 0
+                await self._reconcile_pipeline_resources()
+
+    async def _reconcile_pipeline_resources(self, *, changed: bool = False) -> None:
+        if changed:
+            self._pipeline_resource_retry.update({owner: 0 for owner in self._pipeline_resource_reconcilers})
+        if not self._pipeline_resource_retry or self._config is None or self._config_stamp is None:
+            return
+        due = [owner for owner, retry_at in self._pipeline_resource_retry.items() if time.monotonic() >= retry_at]
+        if not due:
+            return
+        try:
+            current_stamp = await asyncio.to_thread(_path_stamp, self._paths.config_path)
+        except OSError:
+            self._pipeline_resource_retry.update({owner: time.monotonic() + 30 for owner in due})
+            logging.getLogger(__name__).warning("Cannot verify committed configuration for resource reconciliation; retaining resources", exc_info=True)
+            return
+        if current_stamp != self._config_stamp:
+            return
+        for owner in due:
+            task = asyncio.create_task(self._pipeline_resource_reconcilers[owner](
+                [pipeline.model_copy(deep=True) for pipeline in self._config.pipelines],
+            ))
+            cancelled = False
+            # Keep the write lock until native resource work finishes, even on cancellation.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    cancelled = True
+                except Exception:
+                    break
+            try:
+                task.result()
+            except Exception:
+                self._pipeline_resource_retry[owner] = time.monotonic() + 30
+                logging.getLogger(__name__).warning("Pipeline resource reconciliation failed for %s; retaining resources", owner, exc_info=True)
+            else:
+                self._pipeline_resource_retry.pop(owner, None)
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def _protect_pipeline_resources(self, config: AppConfig, *, loading: bool = False) -> None:
         previous = None if loading or self._config is None else self._config.pipelines
         if previous == config.pipelines:
             return
+        self._pipeline_resource_retry.update({owner: 0 for owner in self._pipeline_resource_reconcilers})
         for callback in self._pipeline_resource_guards.values():
             await callback(
                 None if previous is None else [pipeline.model_copy(deep=True) for pipeline in previous],
@@ -531,7 +583,8 @@ class ConfigStore:
         return self._paths
 
     async def _persist_locked(self, cfg: AppConfig) -> AppConfig:
-        if self._pipeline_resource_guards and (self._config is None or self._config.pipelines != cfg.pipelines):
+        pipelines_changed = self._config is None or self._config.pipelines != cfg.pipelines
+        if self._pipeline_resource_guards and pipelines_changed:
             expected_stamp = await asyncio.to_thread(_path_stamp, self._paths.config_path)
             await self._protect_pipeline_resources(cfg)
             if await asyncio.to_thread(_path_stamp, self._paths.config_path) != expected_stamp:
@@ -541,6 +594,7 @@ class ConfigStore:
         )
         self._config = cfg
         self._config_stamp = stamp
+        await self._reconcile_pipeline_resources(changed=pipelines_changed)
         return cfg
 
     async def load(self) -> AppConfig:
@@ -555,6 +609,7 @@ class ConfigStore:
                 and current_stamp is not None
                 and current_stamp == self._config_stamp
             ):
+                await self._reconcile_pipeline_resources()
                 return self._config
 
             if current_stamp is None:
@@ -590,6 +645,7 @@ class ConfigStore:
                 raise PipelineRevisionConflictError("Configuration changed while preserving pipeline resources; review it again")
             self._config = cfg
             self._config_stamp = current_stamp
+            await self._reconcile_pipeline_resources(changed=True)
             return cfg
 
     async def get_config(self) -> AppConfig:

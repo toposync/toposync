@@ -87,6 +87,10 @@ CREATE TABLE IF NOT EXISTS suggestion (
     signature BLOB NOT NULL, expires_at REAL NOT NULL, metadata TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS suggestion_sensor ON suggestion(sensor_id, context_digest);
+CREATE TABLE IF NOT EXISTS retired_pipeline_reference (
+    reference_id TEXT PRIMARY KEY REFERENCES reference(id) ON DELETE CASCADE,
+    expires_at REAL NOT NULL
+);
 """
 
 
@@ -120,10 +124,10 @@ class VisualReferenceStore:
         self._connection.execute("PRAGMA busy_timeout=5000")
         self._connection.execute("PRAGMA synchronous=FULL")
         version = self._connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3):
+        if version not in (0, 1, 2, 3, 4):
             self._connection.close()
             raise ReferenceConflict("unsupported reference schema")
-        self._connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA + "PRAGMA user_version=3; COMMIT;")
+        self._connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA + "PRAGMA user_version=4; COMMIT;")
         database.chmod(0o600)
 
     def close(self) -> None:
@@ -558,6 +562,18 @@ class VisualReferenceStore:
                 raise ReferenceConflict("configuration pin revision changed")
             self._connection.execute("DELETE FROM configuration_pin WHERE owner_id=?", (owner_id,))
 
+    def _available_configuration_references(self, raw: dict) -> set[str]:
+        categories = raw.get("classes", [])
+        references = set()
+        for category in categories if isinstance(categories, (list, tuple)) else []:
+            identifiers = category.get("reference_ids", []) if isinstance(category, dict) else []
+            for reference_id in identifiers if isinstance(identifiers, (list, tuple)) else []:
+                if isinstance(reference_id, str) and self._connection.execute(
+                    "SELECT 1 FROM reference WHERE id=?", (reference_id,),
+                ).fetchone():
+                    references.add(reference_id)
+        return references
+
     def reserve_pipeline_configurations(
         self, configurations: dict[str, dict], *, validate_owners: set[str],
     ) -> None:
@@ -573,15 +589,7 @@ class VisualReferenceStore:
                     configuration = VisualStateConfig.model_validate(raw)
                     references = self._check_configuration(configuration)
                 else:
-                    categories = raw.get("classes", [])
-                    references = []
-                    for category in categories if isinstance(categories, (list, tuple)) else []:
-                        identifiers = category.get("reference_ids", []) if isinstance(category, dict) else []
-                        for reference_id in identifiers if isinstance(identifiers, (list, tuple)) else []:
-                            if isinstance(reference_id, str) and self._connection.execute(
-                                "SELECT 1 FROM reference WHERE id=?", (reference_id,),
-                            ).fetchone():
-                                references.append(reference_id)
+                    references = self._available_configuration_references(raw)
                 if not references:
                     continue
                 serialized = json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -590,9 +598,32 @@ class VisualReferenceStore:
                     "ON CONFLICT(owner_id) DO UPDATE SET revision=revision+1,configuration=excluded.configuration "
                     "WHERE configuration<>excluded.configuration", (owner_id, serialized),
                 )
-                # shortcut: retain superseded pins until authoritative post-save retention reconciliation exists.
+                # A later guard or host write can still fail; only reconciliation retires links.
                 self._connection.executemany("INSERT OR IGNORE INTO pinned_reference VALUES (?,?)",
                                              [(owner_id, reference_id) for reference_id in references])
+
+    def reconcile_pipeline_configurations(self, configurations: dict[str, dict]) -> None:
+        """Retire superseded host reservations for seven days; never delete images here."""
+        with self._transaction():
+            expires_at = self._now() + 7 * 86400
+            for row in self._connection.execute(
+                "SELECT owner_id FROM configuration_pin WHERE substr(owner_id,1,9)='pipeline_'",
+            ).fetchall():
+                owner_id = row[0]
+                current = self._available_configuration_references(configurations.get(owner_id, {}))
+                pinned = {item[0] for item in self._connection.execute(
+                    "SELECT reference_id FROM pinned_reference WHERE owner_id=?", (owner_id,),
+                )}
+                retired = pinned - current
+                self._connection.executemany(
+                    "INSERT INTO retired_pipeline_reference VALUES (?,?) ON CONFLICT(reference_id) "
+                    "DO UPDATE SET expires_at=max(expires_at,excluded.expires_at)",
+                    [(reference_id, expires_at) for reference_id in retired],
+                )
+                self._connection.executemany("DELETE FROM pinned_reference WHERE owner_id=? AND reference_id=?",
+                                             [(owner_id, reference_id) for reference_id in retired])
+                if not current:
+                    self._connection.execute("DELETE FROM configuration_pin WHERE owner_id=?", (owner_id,))
 
     def collect(self, *, retention_seconds: int = 86400, limit: int = 100) -> int:
         if type(retention_seconds) is not int or retention_seconds < 1 or type(limit) is not int or not 1 <= limit <= 1000:
@@ -612,10 +643,13 @@ class VisualReferenceStore:
                 "AND json_extract(reference.metadata,'$.status')='confirmed') LIMIT ?)",
                                      (now - 30 * 86400, limit))
             self._connection.execute("DELETE FROM draft WHERE id IN (SELECT id FROM draft WHERE expires_at<=? LIMIT ?)", (now, limit))
+            self._connection.execute("DELETE FROM retired_pipeline_reference WHERE reference_id IN "
+                "(SELECT reference_id FROM retired_pipeline_reference WHERE expires_at<=? LIMIT ?)", (now, limit))
             rows = self._connection.execute(
                 "SELECT * FROM reference WHERE (created_at<? OR json_extract(metadata,'$.status')='suggestion') "
                 "AND id NOT IN (SELECT reference_id FROM draft_reference) "
                 "AND id NOT IN (SELECT reference_id FROM pinned_reference) "
+                "AND id NOT IN (SELECT reference_id FROM retired_pipeline_reference) "
                 "AND id NOT IN (SELECT reference_id FROM suggestion WHERE reference_id IS NOT NULL) LIMIT ?", (now - retention_seconds, limit),
             ).fetchall()
             for row in rows:

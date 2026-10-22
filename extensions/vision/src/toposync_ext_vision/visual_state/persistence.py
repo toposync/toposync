@@ -32,11 +32,16 @@ def _configurations(pipelines: list[Pipeline]) -> dict[str, dict]:
 
 async def register_visual_reference_persistence(
     config_store: ConfigStore, get_store: Callable[[], VisualReferenceStore],
+    *, existing_resources: bool = False,
 ) -> None:
+    references_seen = existing_resources
+
     async def reserve(previous: list[Pipeline] | None, proposed: list[Pipeline]) -> None:
+        nonlocal references_seen
         configurations = _configurations(proposed)
         if not configurations:
             return
+        references_seen = True
         before = _configurations(previous) if previous is not None else configurations
         changed = {owner for owner, configuration in configurations.items() if before.get(owner) != configuration}
         if previous is not None:
@@ -63,4 +68,8 @@ async def register_visual_reference_persistence(
                 "Visual sensor references cannot be saved; restore or recapture missing or incompatible images"
             ) from error
 
-    await config_store.register_pipeline_resource_guard("com.toposync.vision", reserve)
+    async def reconcile(committed: list[Pipeline]) -> None:
+        if references_seen:
+            await asyncio.to_thread(lambda: get_store().reconcile_pipeline_configurations(_configurations(committed)))
+
+    await config_store.register_pipeline_resource_guard("com.toposync.vision", reserve, reconcile=reconcile)

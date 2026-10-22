@@ -685,14 +685,15 @@ function SessionCockpit({
           {profile.campaign_ends_at ? <div className="ptzAttentionMuted">
             {session?.campaign_expired
               ? t("ext.ptz_attention.campaign.expired_help", {}, "Campaign ended. Recover the camera if needed, then edit the deadline before resuming.")
+              : session?.campaign_finishing ? t("ext.ptz_attention.campaign.finishing_help", {}, "Campaign finishing. No new targets are accepted while return is verified.")
               : `${t("ext.ptz_attention.campaign.end", {}, "End campaign at (optional)")}: ${formatDateTime(profile.campaign_ends_at, locale)}`}
           </div> : null}
-          {state === "RETURNING" && session?.campaign_expired ? (
+          {state === "RETURNING" && (session?.campaign_expired || session?.campaign_finishing) ? (
             <button className="chipButton" type="button" disabled={controlsDisabled} onClick={() => onCommand("pause")}>
-              {t("ext.ptz_attention.campaign.stop_return", {}, "Stop recovery")}
+              {t("ext.ptz_attention.campaign.stop_return", {}, "Stop return")}
             </button>
           ) : profile.mode === "paused" || session?.paused ? (
-            <button className="primaryButton" type="button" disabled={controlsDisabled || liveResumeBlocked || session?.campaign_expired} onClick={() => onCommand("resume")}>
+            <button className="primaryButton" type="button" disabled={controlsDisabled || liveResumeBlocked || session?.campaign_expired || session?.campaign_finishing} onClick={() => onCommand("resume")}>
               {t("ext.ptz_attention.action.resume", {}, "Resume automation")}
             </button>
           ) : (

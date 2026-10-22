@@ -155,6 +155,7 @@ export type AttentionValidationResponse = {
 
 export type AttentionSession = {
   campaign_expired?: boolean;
+  campaign_finishing?: boolean;
   follow_view_updates?: boolean;
   ptz_device_id: string;
   profile_id: string;

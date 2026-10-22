@@ -113,14 +113,18 @@ existing physical recovery guards remain mandatory.
 The explicit **Return home** action remains available for recovery after expiry.
 It receives a separate lease budget of `settle_timeout_seconds`; it does not
 resume the campaign or accept targets. Repeated requests while returning reuse
-that attempt and cannot extend its budget. **Stop recovery** interrupts it while
+that attempt and cannot extend its budget. **Stop return** interrupts it while
 preserving the unconfirmed return. After verified recovery, edit the campaign
 end before resuming. This is a user command, not an automatic post-deadline return.
 Only the authorized return API opts into `allow_expired_recovery`; internal
 pipeline interlocks use the default refusal after expiry.
 
-These checks do not yet schedule an early return within a reserved campaign
-budget. Campaign orchestration must request that before the deadline; the hard
-limit wins if return is still pending. Qualification of device-side motion timeout
+The controller reserves `settle_timeout_seconds` plus one controller tick before
+the end for return. It pauses new attention and resumes observation of an existing
+return without restarting it, or begins a qualified return when focus was active.
+An idle campaign closes without moving; a delayed acquisition cannot start focus
+inside that reserved window. Late events leave the return state intact. This
+uses the configured operation budget, not a claim that hardware can meet it;
+the hard limit wins if return is still pending. Qualification of device-side motion timeout
 and real Stop/return is still required: process loss or an event-loop stall cannot
 be covered by an in-process watchdog alone.

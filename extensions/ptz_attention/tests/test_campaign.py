@@ -8,6 +8,68 @@ from toposync_ext_ptz_attention.store import AttentionStore
 from test_controller import Clock, LiveCamera, intent, live_services, profile
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["returned", "deadline", "already_returning", "cancelled"])
+async def test_campaign_reserves_return_time_without_extending_end(outcome):
+    clock, camera = Clock(), LiveCamera()
+    store = AttentionStore(None)
+    store.create_profile(profile(mode="live_preset", campaign_ends_at=1010, stale_timeout_seconds=30))
+    controller = PtzAttentionController(store=store, services=live_services(camera), clock=clock)
+    await controller.submit_intent(intent("one", "low", "open", clock))
+    await controller.tick_once()
+    if outcome == "already_returning":
+        clock.advance(7)
+        assert await controller.return_home("front_attention")
+        clock.advance(1)
+    else:
+        clock.advance(8)
+    await controller.tick_once()
+    assert store.get_profile("front_attention").mode == "paused"
+    assert controller.status()[0].campaign_finishing
+    assert sum(item["command"].get("preset_token") == "preset-home" for item in camera.commands) == 1
+    with pytest.raises(RuntimeError, match="campaign_finishing"):
+        await controller.resume("front_attention")
+    count = len(camera.commands)
+    await controller.submit_intent(intent("two", "high", "open", clock))
+    assert len(camera.commands) == count
+    assert controller.status()[0].state == "RETURNING"
+    if outcome == "deadline":
+        clock.advance(2)
+    elif outcome == "cancelled":
+        await controller.pause("front_attention")
+    await controller.tick_once()
+    assert not controller.status()[0].lease_id
+    assert store.is_recovery_required("front") is (outcome in {"deadline", "cancelled"})
+    assert store.get_profile("front_attention").campaign_ends_at == 1010
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["before_intent", "during_acquire"])
+async def test_campaign_does_not_start_focus_in_reserved_return_window(stage):
+    clock, camera = Clock(), LiveCamera()
+    store = AttentionStore(None)
+    store.create_profile(profile(mode="live_preset", campaign_ends_at=1010))
+    if stage == "during_acquire":
+        original = camera.acquire
+        async def delayed(**kwargs):
+            result = await original(**kwargs)
+            clock.advance(8)
+            return result
+        camera.acquire = delayed
+    else:
+        clock.advance(8)
+    controller = PtzAttentionController(store=store, services=live_services(camera), clock=clock)
+    await controller.submit_intent(intent("one", "low", "open", clock))
+    assert store.get_profile("front_attention").mode == "paused"
+    assert all(item["command"]["kind"] == "stop" for item in camera.commands)
+    assert not controller.status()[0].lease_id
+    assert not store.is_recovery_required("front")
+    await controller.shutdown()
+    store.close()
+
+
 @pytest.mark.parametrize("end", [True, 0, -1, float("inf"), float("nan"), "invalid", 253402300800])
 def test_campaign_end_rejects_invalid_or_unrepresentable_dates(end):
     with pytest.raises(ValueError):

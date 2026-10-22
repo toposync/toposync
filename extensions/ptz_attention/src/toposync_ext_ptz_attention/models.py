@@ -449,6 +449,7 @@ class DecisionRecord(StrictModel):
 
 class DeviceStatus(StrictModel):
     campaign_expired: bool = False
+    campaign_finishing: bool = False
     follow_view_updates: bool = False
     ptz_device_id: str
     profile_id: str

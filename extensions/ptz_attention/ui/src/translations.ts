@@ -1,5 +1,10 @@
 const en = {
-  "ext.ptz_attention.campaign.stop_return": "Stop recovery",
+  "ext.ptz_attention.campaign.stop_return": "Stop return",
+  "ext.ptz_attention.campaign.finishing_help": "Campaign finishing. No new targets are accepted while return is verified.",
+  "ext.ptz_attention.decision.campaign_finishing": "Campaign finishing",
+  "ext.ptz_attention.reason.campaign_return_window": "The remaining time is reserved for return",
+  "ext.ptz_attention.reason.campaign_finishing": "Finish recovery and edit the deadline before resuming",
+  "ext.ptz_attention.reason.campaign_finish_cleanup_failed": "Campaign finishing; control release could not be confirmed",
   "ext.ptz_attention.reason.manual_return_cancelled": "Recovery stopped; return remains unconfirmed",
   "ext.ptz_attention.campaign.end": "End campaign at (optional)",
   "ext.ptz_attention.campaign.end_help": "Local time. At the deadline, attention stops. An unconfirmed return requires explicit recovery.",
@@ -334,7 +339,12 @@ const en = {
 } as const;
 
 const ptBR: Record<keyof typeof en, string> = {
-  "ext.ptz_attention.campaign.stop_return": "Parar recuperação",
+  "ext.ptz_attention.campaign.stop_return": "Parar retorno",
+  "ext.ptz_attention.campaign.finishing_help": "Campanha encerrando. Novos alvos não são aceitos enquanto o retorno é verificado.",
+  "ext.ptz_attention.decision.campaign_finishing": "Campanha encerrando",
+  "ext.ptz_attention.reason.campaign_return_window": "O tempo restante está reservado para o retorno",
+  "ext.ptz_attention.reason.campaign_finishing": "Conclua a recuperação e edite o prazo antes de retomar",
+  "ext.ptz_attention.reason.campaign_finish_cleanup_failed": "Campanha encerrando; a liberação de controle não foi confirmada",
   "ext.ptz_attention.reason.manual_return_cancelled": "Recuperação interrompida; retorno ainda não confirmado",
   "ext.ptz_attention.campaign.end": "Encerrar campanha em (opcional)",
   "ext.ptz_attention.campaign.end_help": "Horário local. No prazo, o acompanhamento para. Retorno não confirmado exige recuperação explícita.",

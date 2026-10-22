@@ -109,6 +109,7 @@ class _DeviceRuntime:
     recovery_required: bool = False
     campaign_deadline_monotonic: float | None = None
     campaign_expired: bool = False
+    campaign_finishing: bool = False
     manual_return_deadline_monotonic: float | None = None
 
 
@@ -302,6 +303,8 @@ class PtzAttentionController:
             runtime.last_heartbeat_at = self._clock()
             if await self._expire_campaign(profile, runtime):
                 return
+            if await self._finish_campaign(profile, runtime):
+                return
             if runtime.recovery_required:
                 runtime.fault = runtime.fault or _RECOVERY_FAULT
                 self._set_state(runtime, "FAULT", now)
@@ -314,7 +317,8 @@ class PtzAttentionController:
                 )
                 return
             if profile.mode == "paused":
-                self._set_state(runtime, "MANUAL_OVERRIDE", now)
+                if runtime.state != "RETURNING":
+                    self._set_state(runtime, "MANUAL_OVERRIDE", now)
                 self._record(
                     profile,
                     runtime,
@@ -606,10 +610,10 @@ class PtzAttentionController:
             if current.ptz_device_id != profile.ptz_device_id:
                 raise RuntimeError("profile_changed")
             profile, runtime = current, self._runtime_for(current)
+            if runtime.state == "RETURNING" and (runtime.manual_return_deadline_monotonic is not None or runtime.campaign_finishing):
+                await self._fault(profile, runtime, "manual_return_cancelled")
+                return profile
             if runtime.recovery_required:
-                if runtime.state == "RETURNING" and runtime.manual_return_deadline_monotonic is not None:
-                    await self._fault(profile, runtime, "manual_return_cancelled")
-                    return profile
                 runtime.fault = runtime.fault or _RECOVERY_FAULT
                 self._set_state(runtime, "FAULT", self._clock())
                 raise RuntimeError("return_home_required")
@@ -648,6 +652,8 @@ class PtzAttentionController:
             profile, runtime = current, self._runtime_for(current)
             if await self._expire_campaign(profile, runtime):
                 raise RuntimeError("campaign_expired")
+            if runtime.campaign_finishing or self._campaign_return_due(profile, runtime):
+                raise RuntimeError("campaign_finishing")
             if profile.mode != "paused":
                 return profile
             resumed = profile.model_copy(update={"mode": profile.resume_mode or "disabled", "resume_mode": None})
@@ -772,6 +778,8 @@ class PtzAttentionController:
                     paused=profile.mode == "paused",
                     campaign_expired=runtime.campaign_expired or (
                         profile.campaign_ends_at is not None and self._campaign_remaining(profile, runtime) <= 0),
+                    campaign_finishing=runtime.campaign_finishing or (
+                        profile.mode == "paused" and self._campaign_return_due(profile, runtime)),
                     fault=runtime.fault,
                 )
             )
@@ -1004,6 +1012,39 @@ class PtzAttentionController:
                      "recovery_required": runtime.recovery_required})
         return True
 
+    def _campaign_return_due(self, profile: AttentionProfile, runtime: _DeviceRuntime) -> bool:
+        remaining = self._campaign_remaining(profile, runtime)
+        return remaining is not None and 0 < remaining <= profile.settle_timeout_seconds + self._tick_interval_seconds
+
+    async def _finish_campaign(self, profile: AttentionProfile, runtime: _DeviceRuntime) -> bool:
+        if (profile.mode in {"paused", "disabled"} or runtime.state in {"FAULT", "MANUAL_OVERRIDE"}
+                or not self._campaign_return_due(profile, runtime)):
+            return False
+        paused = profile.model_copy(update={"mode": "paused", "resume_mode": profile.mode})
+        self.store.replace_profile(paused)
+        runtime.campaign_finishing = True
+        runtime.events.clear()
+        runtime.candidate_key = ""
+        self._record(paused, runtime, action="campaign_finishing", reason="campaign_return_window",
+            details={"campaign_ends_at": profile.campaign_ends_at,
+                     "remaining_seconds": self._campaign_remaining(profile, runtime)})
+        if runtime.state == "RETURNING":
+            return True
+        if runtime.session_id or runtime.state in {"ACQUIRING", "FOCUSED", "GRACE"}:
+            await self._begin_return(paused, runtime, self._monotonic_clock(), reason="campaign_return_window")
+        else:
+            released = await self._stop_and_release(runtime, profile=paused, emergency=True)
+            runtime.active_key = ""
+            if released:
+                self._clear_command(runtime)
+                self._set_state(runtime, "MANUAL_OVERRIDE", self._clock())
+            else:
+                self._mark_recovery_required(runtime, reason="campaign_finish_cleanup_failed")
+                runtime.fault = "campaign_finish_cleanup_failed"
+                self._set_state(runtime, "FAULT", self._clock())
+                self._record(paused, runtime, action="fault", reason=runtime.fault)
+        return True
+
     async def _evaluate(
         self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float
     ) -> None:
@@ -1014,6 +1055,8 @@ class PtzAttentionController:
         elif await self._expire_campaign(profile, runtime):
             return
         if runtime.state == "FAULT":
+            return
+        if await self._finish_campaign(profile, runtime):
             return
         if profile.mode == "paused":
             if runtime.state == "RETURNING":
@@ -1357,6 +1400,8 @@ class PtzAttentionController:
     ) -> None:
         if await self._expire_campaign(profile, runtime):
             return
+        if await self._finish_campaign(profile, runtime):
+            return
         if tracked.resolved is None:
             return
         self._trim_movements(runtime, now)
@@ -1432,6 +1477,8 @@ class PtzAttentionController:
             return
         try:
             await self._ensure_lease(profile, runtime, now)
+            if await self._finish_campaign(profile, runtime):
+                return
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
             runtime.command_event_key = tracked.intent.key
             runtime.command_started_monotonic = None

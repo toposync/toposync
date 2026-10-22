@@ -150,9 +150,23 @@ reference transaction; failures during image or draft writing roll back newly
 written images and metadata. Matching metadata with missing or corrupt files can
 be repaired by a valid backup. A failed database commit or abrupt process/power
 loss can leave unreferenced files for the existing collector; it cannot expose a
-partially committed draft. Exported
-packages are independent of later reference retention. Import/export controls in
-the operator panel are a separate interface integration requirement.
+partially committed draft. Exported packages are independent of later reference retention.
+
+The operator panel exposes **Backup and restore** with download, file selection,
+class/photo preview and explicit application. Importing alone preserves the
+current editor and saved pipeline. Applying changes the editor; save the pipeline
+separately. Undo restores the complete prior operator configuration until another
+edit or leaving the operator. A cancelled transfer can be retried with the same
+operation identifier while the panel stays open; a late response cannot apply to
+another selected operator or changed input. Photos and transfers preserve ingress
+paths. Pending unapplied settings must be resolved before using these controls.
+
+Restoration preserves the sensor identity. Saving that identity into a second
+pipeline is rejected; restore in place or remove the original before recreating
+it elsewhere. Use pipeline duplication to create an independent sensor. Existing
+malformed configurations loaded from disk can still be opened for repair without
+blocking unrelated edits; changing a conflicting sensor configuration requires
+resolving its duplicate identity.
 
 Pipeline list/read/create/update responses include a content-based `revision`.
 Send that unchanged with `PUT /api/pipelines/{name}`. Visual operators opt into

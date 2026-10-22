@@ -102,6 +102,7 @@ def test_invalid_changed_references_abort_entire_bulk_save(tmp_path, references,
     async def run():
         good, good_image = capture(references)
         bad, bad_image = capture(references, "blue")
+        bad['sensor_id'] = 'second-sensor'
         if damage == "missing":
             bad["classes"][0]["reference_ids"] = ["missing"]
         elif damage == "class":
@@ -178,6 +179,23 @@ def test_installations_without_visual_sensors_do_not_open_the_private_store(tmp_
         await register_visual_reference_persistence(store, unexpected_store)
         await store.create_pipeline(Pipeline(name="independent", enabled=False, graph={"schema_version": 2}))
 
+    asyncio.run(run())
+
+
+def test_restoring_identity_into_another_pipeline_requires_removing_original_first(tmp_path, references):
+    async def run():
+        configuration, reference = capture(references)
+        store = store_at(tmp_path / 'host')
+        await register_visual_reference_persistence(store, lambda: references)
+        original = await store.create_pipeline(pipeline(configuration))
+        with pytest.raises(PipelineValidationError, match='identity already exists'):
+            await store.create_pipeline(pipeline(configuration, 'restored'))
+        assert await store.get_pipeline('restored') is None
+        assert await store.get_pipeline('sensor') == original
+        assert references.read_image(reference.reference_id)[1]
+        await store.delete_pipeline('sensor')
+        restored = await store.create_pipeline(pipeline(configuration, 'restored'))
+        assert restored.graph['nodes'][0]['config']['sensor_id'] == configuration['sensor_id']
     asyncio.run(run())
 
 

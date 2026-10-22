@@ -17,6 +17,18 @@ export const photoUrl = (id: string) => resolveToposyncUrl(`${base}/observations
 export const changed = () => window.dispatchEvent(new Event("toposync:identity-gallery-changed"));
 
 const visualBase = "/api/vision/visual-state/drafts";
+export const visualBackupLimit = 64 * 1024 * 1024;
+export async function exportVisualBackup(draft: VisualDraft, signal: AbortSignal): Promise<Blob> {
+  const response = await fetch(resolveToposyncUrl(`${visualBase}/${encodeURIComponent(draft.draft_id)}/backup?expected_revision=${draft.revision}`), { signal });
+  if (!response.ok) throw Object.assign(new Error("visual_backup_failed"), { status: response.status });
+  const result = await response.blob();
+  signal.throwIfAborted();
+  if (result.type !== "application/zip" || result.size === 0 || result.size > visualBackupLimit) throw new Error("visual_backup_invalid");
+  return result;
+}
+export const restoreVisualBackup = (file: File, operationId: string, signal: AbortSignal) => requestJson<VisualDraft>(
+  `/api/vision/visual-state/backups/restore?operation_id=${encodeURIComponent(operationId)}`,
+  { method: "POST", headers: { "content-type": "application/zip" }, body: file, signal });
 export const readVisualSuggestions = (draftId: string, offset: number, signal?: AbortSignal) => requestJson<VisualSuggestions>(
   `${visualBase}/${encodeURIComponent(draftId)}/suggestions?offset=${offset}`, { signal });
 export const reviewVisualSuggestion = (draft: VisualDraft, item: VisualSuggestion, action: "accept" | "reject" | "undo",

@@ -14,6 +14,7 @@ import { restoreApprovedSuggestion, type VisualSuggestion, type VisualSuggestion
 import type { VisualPreview } from "./visualState";
 import { VisualPublicationSettings } from "./VisualPublicationSettings";
 import { publicationClassSide, publicationIssue, visualPublication } from "./visualPublication";
+import { VisualStateBackup } from "./VisualStateBackup";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
   referenceCapture?: PipelineReferenceCapture; showAdvanced?: boolean; ui?: Pick<HostUi, "ImageMaskEditor"> };
@@ -73,7 +74,10 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   useEffect(() => {
     if (!readonly && unconfigured) replaceConfig(value);
   }, [config.sensor_id, readonly]);
-  useEffect(() => { setDraft(null); setUndo(null); setPhoto(null); setSuggestions(null); setPendingReview(null); setReviewed(false); }, [value.sensor_id]);
+  useEffect(() => {
+    if (draftRef.current?.configuration.sensor_id !== value.sensor_id) { draftRef.current = null; setDraft(null); }
+    setUndo(null); setPhoto(null); setSuggestions(null); setPendingReview(null); setReviewed(false);
+  }, [value.sensor_id]);
 
   const classes = Array.isArray(value.classes) ? value.classes : [];
   const valid = classes.every(item => item && typeof item === "object") && visualClassesValid(classes);
@@ -91,17 +95,17 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   async function run(name: string, work: (signal: AbortSignal) => Promise<void>) {
     if (readonly || active.current) return;
     const controller = new AbortController(); active.current = controller; setBusy(name); setError(null);
-    const timeout = name === "test" ? setTimeout(() => {
+    const timeout = name === "test" || name.startsWith("backup_") ? setTimeout(() => {
       controller.abort();
-      if (active.current === controller) { active.current = null; setBusy(null); setError("visual_preview_timeout"); }
-    }, 30_000) : undefined;
+      if (active.current === controller) { active.current = null; setBusy(null); setError(name === "test" ? "visual_preview_timeout" : "visual_backup_uncertain"); }
+    }, name === "test" ? 30_000 : 60_000) : undefined;
     try { await work(controller.signal); }
     catch (cause) {
       if (!controller.signal.aborted) {
         const message = String((cause as Error)?.message ?? "");
         const status = (cause as { status?: number }).status;
         setError(["reference_context_changed", "reference_region_required", "reference_capture_receipt_invalid", "reference_limit", "reference_conflict",
-          "visual_preview_busy", "visual_preview_timeout", "visual_preview_configuration_invalid", "visual_preview_input_invalid", "visual_preview_failed", "region_unavailable"].find(key => message.includes(key))
+          "visual_backup_failed", "visual_backup_invalid", "visual_backup_uncertain", "visual_preview_busy", "visual_preview_timeout", "visual_preview_configuration_invalid", "visual_preview_input_invalid", "visual_preview_failed", "region_unavailable"].find(key => message.includes(key))
           ?? (status === 401 || status === 403 ? "forbidden" : status === 409 ? "reference_conflict"
             : name === "test" ? "visual_preview_failed" : status === 413 ? "reference_limit" : status === 422 ? "invalid_classes" : "request_failed"));
       }
@@ -163,7 +167,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     {unavailable && <p role="status">{t(unavailable)}</p>}
     {error && <div role="alert"><p>{t(error)}</p>
       {pending && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("retry", signal => upload(pending, signal))}>{t("retry_capture")}</button>}
-      {!pendingReview && draft && error !== "region_unavailable" && !error.startsWith("visual_preview_") && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("reload", async signal => {
+      {!pendingReview && draft && error !== "region_unavailable" && !error.startsWith("visual_preview_") && !error.startsWith("visual_backup_") && <button className="chipButton" type="button" disabled={disabled} onClick={() => void run("reload", async signal => {
         const current = await readVisualDraft(draft.draft_id, signal); signal.throwIfAborted();
         setUndo(value); draftRef.current = current; setDraft(current); changed(current.configuration);
       })}>{t("reload")}</button>}
@@ -186,7 +190,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       })}>{t("suggestions_reopen")}</button>
     </div>}
     {reviewed && <p role="status">{t("suggestions_reviewed")}</p>}
-    {busy && <div role="status">{t(busy === "test" ? "testing" : "working")} <button type="button" className="chipButton" onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setPending(null); }}>{t("cancel")}</button></div>}
+    {busy && <div role="status">{t(busy === "test" ? "testing" : busy.startsWith("backup_") ? "backup_working" : "working")} <button type="button" className="chipButton" onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setPending(null); }}>{t("cancel")}</button></div>}
     {!valid && <p role="alert">{t("invalid_classes")}</p>}
     <fieldset disabled={disabled}>
       <legend>{t("region")}</legend>
@@ -251,6 +255,12 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       enlarge={(url, label) => setPhoto({ url, label })} t={t} />
     {value.strategy !== "direct" && <VisualStateModelSettings value={value} change={changed} disabled={disabled} t={t} />}
     <VisualStateDecisionSettings value={value} change={changed} disabled={disabled} editing={setSettingsDirty} t={t} />
+    <VisualStateBackup value={value} draft={draft} context={pipelineContext} working={busy !== null} disabled={disabled || settingsDirty || aiSettingsDirty || suggestionSettingsDirty || publicationSettingsDirty}
+      canExport={valid && publicationValid} run={run} synchronize={synchronize} t={t}
+      apply={(configuration, restoredDraft) => {
+        draftRef.current = restoredDraft; setDraft(restoredDraft); setUndo(null); setPreview(null); setSuggestions(null); setPendingReview(null);
+        changed(configuration);
+      }} />
     <fieldset disabled={disabled}>
       <legend>{t("preview_title")}</legend><p className="identityMuted">{t("preview_help")}</p>
       {!inputPipeline && <p role="status">{t("preview_host_unavailable")}</p>}

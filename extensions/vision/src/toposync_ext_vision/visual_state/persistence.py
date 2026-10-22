@@ -39,6 +39,16 @@ async def register_visual_reference_persistence(
             return
         before = _configurations(previous) if previous is not None else configurations
         changed = {owner for owner, configuration in configurations.items() if before.get(owner) != configuration}
+        identities = {}
+        for owner, configuration in configurations.items():
+            identity = configuration.get("sensor_id")
+            if not isinstance(identity, str) or identity in ("", "unconfigured"):
+                continue
+            other = identities.setdefault(identity, owner)
+            if other != owner and (owner in changed or other in changed):
+                raise PipelineValidationError(
+                    "Visual sensor identity already exists; restore its existing pipeline or duplicate to create a new sensor"
+                )
         try:
             await asyncio.to_thread(
                 lambda: get_store().reserve_pipeline_configurations(configurations, validate_owners=changed),

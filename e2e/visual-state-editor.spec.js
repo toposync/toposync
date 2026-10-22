@@ -1,5 +1,78 @@
 const { test, expect, captureFirst } = require("./fixtures/visual-state");
 
+test("create a visual sensor from an empty graph using the operator panels", async ({ page, visual }) => {
+  await page.route("**/api/cameras/index", route => route.fulfill({ json: {
+    cameras: [{ id: "synthetic", name: "Câmera simulada", enabled: true, sources: [
+      { id: "video", name: "Vídeo gerado", kind: "video", enabled: true, is_default: true, ingest: { mode: "direct" } },
+    ] }],
+  } }));
+  await page.goto(`${visual.prefix}/settings/pipelines`);
+  await page.getByPlaceholder("Nome do fluxo", { exact: true }).fill("Sensor criado pela interface");
+  const creation = page.waitForResponse(response => response.request().method() === "POST"
+    && new URL(response.url()).pathname === `${visual.prefix}/api/pipelines`);
+  await page.getByRole("button", { name: "Criar", exact: true }).click();
+  const created = await (await creation).json();
+  expect(created.enabled).toBe(false);
+  expect(created.graph.nodes).toEqual([]);
+  const add = async operator => {
+    await page.getByRole("button", { name: "Adicionar nó", exact: true }).click();
+    await page.getByPlaceholder("Buscar operador", { exact: true }).fill(operator);
+    const choices = page.locator(".pipelineTopologyPaletteList button");
+    await expect(choices).toHaveCount(1);
+    await choices.click();
+  };
+  await add("camera.source");
+  const nodes = page.locator(".react-flow__node");
+  await expect(nodes).toHaveCount(1);
+  const sourceId = await nodes.getAttribute("data-id");
+  await page.locator(".pipelinesOperatorConfigCard").getByRole("combobox").first().click();
+  await page.getByRole("option", { name: "Câmera simulada (synthetic)", exact: true }).click();
+  await add("vision.visual_state");
+  await expect(nodes).toHaveCount(2);
+  const sensor = page.locator(`.react-flow__node:not([data-id="${sourceId}"])`);
+  const sensorId = await sensor.getAttribute("data-id");
+  await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+  await sensor.focus();
+  await page.keyboard.press("Enter");
+  const panel = page.locator(".visualStatePanel");
+  await panel.getByRole("checkbox", { name: "Permitir imagem inteira quando não houver recorte anterior", exact: true }).check();
+  await panel.getByRole("combobox", { name: "Estratégia de análise", exact: true }).selectOption("direct");
+  await panel.getByRole("button", { name: "Atualizar perfis e limites", exact: true }).click();
+  await panel.getByRole("combobox", { name: "Perfil de IA", exact: true }).selectOption("visual_fixture");
+  await panel.getByRole("textbox", { name: "Nome", exact: true }).first().fill("Porta aberta");
+  await panel.getByRole("textbox", { name: "O que identifica este estado", exact: true }).first().fill("O vão da porta está visível.");
+  await panel.getByRole("textbox", { name: "Nome", exact: true }).nth(1).fill("Porta fechada");
+  await panel.getByRole("textbox", { name: "O que identifica este estado", exact: true }).nth(1).fill("A folha cobre todo o vão da porta.");
+  await captureFirst(panel);
+  const preview = panel.getByRole("button", { name: "Testar agora", exact: true });
+  await expect(preview).toBeEnabled();
+  await preview.click();
+  await expect(panel.locator(".visualPreviewResult")).toBeVisible();
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect.poll(async () => {
+    const saved = await (await visual.request.get(`${visual.prefix}/api/pipelines/${created.name}`)).json();
+    return saved.graph.nodes.find(node => node.operator === "vision.visual_state")?.config.classes[0].reference_ids?.length ?? 0;
+  }).toBe(1);
+  const saved = await (await visual.request.get(`${visual.prefix}/api/pipelines/${created.name}`)).json();
+  expect(saved.enabled).toBe(false);
+  expect(saved.graph.nodes).toHaveLength(2);
+  expect(saved.graph.edges).toHaveLength(1);
+  const configuration = saved.graph.nodes.find(node => node.operator === "vision.visual_state").config;
+  expect(configuration.classes[0].label).toBe("Porta aberta");
+  expect(configuration.classes[1].label).toBe("Porta fechada");
+  expect(configuration.classes.every(category => category.description.length > 0)).toBe(true);
+  expect(configuration.strategy).toBe("direct");
+  expect(configuration.source_identity).toBe("camera:synthetic:video");
+  expect(configuration.preparation_revision).toBeTruthy();
+  expect(configuration.sensor_id).toBeTruthy();
+  await page.reload();
+  await page.locator(`.react-flow__node[data-id="${sensorId}"]`).focus();
+  await page.keyboard.press("Enter");
+  await expect(panel.getByRole("textbox", { name: "Nome", exact: true }).first()).toHaveValue("Porta aberta");
+  await panel.getByRole("button", { name: "Carregar fotos salvas", exact: true }).click();
+  await expect(panel.locator(".visualStatePhoto img")).toBeVisible();
+});
+
 test("form and advanced JSON preserve class identities and references in both directions", async ({ page, visual }) => {
   const { panel } = visual;
   await captureFirst(panel);

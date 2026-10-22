@@ -58,6 +58,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self._retired_instances = set()
         self._last_sample = None
         self._last_observed = -1.0
+        self._started_at = None
         self._token = 0
         self._last_publication = None
         self._opened = False
@@ -164,6 +165,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
         except BaseException:
             await self.shutdown()
             raise
+        self._started_at = self._clock()
         self._reducer = VisualStateReducer(self.config, runtime_epoch=uuid.uuid4().hex, clock=self._clock)
         if self._preview_input_pipeline is None and "vision.visual_states" in self.dependencies.services.list_ids():
             try:
@@ -219,6 +221,10 @@ class VisualStateRuntime(BaseOperatorRuntime):
         instance = sample["capture_instance"]
         raw = packet.payload["capture_evidence"]
         observed = raw["captured_monotonic"] if raw.get("physical_timestamp_verified") else raw["received_monotonic"]
+        if observed < self._started_at:
+            self._telemetry.event("input_discarded")
+            self._invalidate("input_before_start")
+            return None
         if observed < self._last_observed or instance in self._retired_instances:
             self._telemetry.event("input_replayed")
             return None

@@ -171,6 +171,29 @@ configured reference even when its operator settings did not change. Missing or
 corrupt images reject the save without changing the previously saved pipeline.
 Disabling a damaged sensor remains possible.
 
+For a rollback in the same installation:
+
+1. Disable and save the existing pipeline. Confirm that the receiver is unavailable
+   before replacing its configuration. Merely importing a backup does not stop the
+   current runtime.
+2. Restore the backup into that sensor's editor, review its classes and references,
+   and save while the pipeline remains disabled. The backup contains the operator
+   configuration only; restore any changed upstream camera/preparation settings
+   separately and verify that they match the captured references.
+3. Verify the required model revision and compatible source. Starting the restored
+   pipeline creates a new runtime epoch and requires observations made after that
+   execution initialized. Buffered images from before initialization cannot vote,
+   even when they are younger than the normal maximum frame age.
+4. Obtain the configured number of distinct new observations. Home Assistant
+   publication stays disabled after restoration until explicitly configured again.
+   Restoring a working revision does not restore a previous qualification decision.
+
+`tests/test_visual_state_qualification.py` exercises this sequence with a compiled
+pipeline, real ONNX execution of a synthetic model, private backup storage, state
+publication and the receiver's validation logic. It verifies preserved references,
+new epochs, rejection of buffered observations and fresh confirmation. It does not
+exercise physical devices or independently qualify image classification quality.
+
 Pipeline list/read/create/update responses include a content-based `revision`.
 Send that unchanged with `PUT /api/pipelines/{name}`. Visual operators opt into
 the generic `edit_precondition` capability: missing revisions return HTTP428;
@@ -268,6 +291,9 @@ preparation path. Its preparation revision must match the references. Input pixe
 must have current capture identity and matching image geometry; packet lifecycle
 `OPEN` and `CLOSE` do not identify physical classes. Source/capture changes restart
 confirmation, and every runtime restart begins without a current value.
+`input_before_start` means an observation predates this execution's initialization;
+the operator waits for a newer image. Verified capture time takes precedence over
+receipt time, so later delivery cannot make an older exposure eligible.
 
 One native inference and one latest pending image are retained per sensor. The
 default evaluation interval is 250 milliseconds; the state is checked every
@@ -283,8 +309,9 @@ through the shared loader. Application diagnostics remain separate from this
 SDK telemetry setting.
 
 These mechanisms and synthetic tests do not qualify accuracy, physical capture
-latency, PTZ alignment or safety of an alarm or gate. Model selection, the integrated
-test workflow, multimodal strategies and Home Assistant publication remain in progress.
+latency, PTZ alignment or safety of an alarm or gate. The configuration workflow,
+multimodal strategies and native Home Assistant publication are implemented;
+representative quality, performance and installation qualification remain pending.
 
 ## Dependencies
 

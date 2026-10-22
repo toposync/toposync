@@ -21,7 +21,7 @@ REASONS = frozenset({
     "reference_revision_mismatch", "embedding_revision_mismatch", "invalid_embedding",
     "invalid_reference_embedding", "class_without_references", "comparison_not_calibrated",
     "multimodal_unobservable", "multimodal_ambiguous", "input_unobservable", "source_mismatch",
-    "region_unavailable", "local_analysis_failed", "capture_identity_churn",
+    "region_unavailable", "local_analysis_failed", "capture_identity_churn", "input_before_start",
     "visual_state_deadline", "visual_state_provider_failed", "visual_state_configuration_changed",
     "visual_state_configuration_unavailable", "all_ai_profiles_failed",
 })

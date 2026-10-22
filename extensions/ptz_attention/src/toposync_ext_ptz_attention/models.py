@@ -355,6 +355,19 @@ class AttentionIntent(StrictModel):
     capture_evidence: dict[str, Any] | None = None
     framing_observation: FramingObservation | None = None
     group_framing: GroupFramingEstimate | None = None
+    group_member_event_ids: tuple[str, ...] | None = None
+
+    @field_validator("group_member_event_ids")
+    @classmethod
+    def _group_members(cls, value):
+        return FramingObservation._members(value) if value is not None else None
+
+    @property
+    def group_framing_complete(self) -> bool:
+        expected = self.group_member_event_ids
+        return expected is None or bool(expected and self.group_framing and self.target and self.target.world_envelope
+            and set(self.group_framing.members) == set(expected)
+            and self.target.world_envelope.member_count == len(expected))
 
     @field_validator(
         "key",
@@ -388,7 +401,7 @@ class AttentionIntent(StrictModel):
 
     @model_validator(mode="after")
     def _open_target(self) -> "AttentionIntent":
-        if self.lifecycle == "open" and self.target is None:
+        if self.lifecycle == "open" and self.target is None and self.group_member_event_ids is None:
             raise ValueError("target is required for open intents")
         return self
 

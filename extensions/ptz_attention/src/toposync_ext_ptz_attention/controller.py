@@ -70,7 +70,12 @@ class _TrackedEvent:
     following_confirmed: bool = False
     resolution_reason: str = ""
     observation_expired: bool = False
+    expected_group_member_event_ids: tuple[str, ...] | None = None
     framing_continuity: FramingContinuity = field(default_factory=FramingContinuity)
+
+    def __post_init__(self) -> None:
+        if self.expected_group_member_event_ids is None:
+            self.expected_group_member_event_ids = self.intent.group_member_event_ids
 
     @property
     def open(self) -> bool:
@@ -422,6 +427,13 @@ class PtzAttentionController:
                 )
 
             existing = runtime.events.get(governed.key)
+            if (existing and (existing.open or existing.observation_expired)
+                    and existing.expected_group_member_event_ids is not None and governed.lifecycle != "close"):
+                # Missing metadata or partial membership cannot downgrade a known group to a point request.
+                previous_members = set(existing.expected_group_member_event_ids)
+                incoming_members = set(governed.group_member_event_ids or ())
+                governed = governed.model_copy(update={"group_member_event_ids": tuple(sorted(
+                    incoming_members if previous_members.issubset(incoming_members) else previous_members))})
             observation_age = max(0.0, max(self._clock(), governed.received_at) - governed.event_at)
             if governed.group_framing:
                 observation_age = max(observation_age, self._clock() - governed.group_framing.oldest_published_at)
@@ -433,7 +445,8 @@ class PtzAttentionController:
                 capture = governed.capture_evidence or {}
                 previous_capture = existing.intent.capture_evidence if existing else None
                 reason = freshness.reason if freshness.age_seconds is None else ""
-                if governed.target is None or governed.target.bbox01 is not None:
+                if ((governed.target is None or governed.target.bbox01 is not None)
+                        and not (profile.panorama_element_id and governed.group_member_event_ids is not None)):
                     reason = "mapped_target_required"
                 if existing and not existing.open and not existing.observation_expired:
                     reason = "closed_tracking_event"
@@ -480,12 +493,15 @@ class PtzAttentionController:
                 )
                 return
 
-            group_lost = False
-            if existing and existing.intent.group_framing and governed.lifecycle != "close":
+            if existing and governed.lifecycle != "close" and governed.group_member_event_ids is not None:
+                # Retain newly requested members without rewriting the last qualified position held in grace.
+                existing.expected_group_member_event_ids = governed.group_member_event_ids
+            group_lost = not governed.group_framing_complete
+            if existing and existing.resolved is not None and existing.intent.group_framing and governed.lifecycle != "close":
                 from toposync_ext_cameras.panorama_navigation import group_framing_update_valid
-                group_lost = not group_framing_update_valid(existing.intent.group_framing.model_dump(mode="json"),
+                group_lost = group_lost or not group_framing_update_valid(existing.intent.group_framing.model_dump(mode="json"),
                     governed.group_framing.model_dump(mode="json") if governed.group_framing else None)
-            if (profile.follow_view_updates and governed.lifecycle != "close" and existing
+            if (profile.follow_view_updates and governed.lifecycle != "close" and existing and existing.resolved is not None
                     and (existing.intent.group_framing is not None or (
                         existing.intent.framing_observation is not None and existing.intent.framing_observation.panorama is not None))
                     and (group_lost or (governed.group_framing is None
@@ -515,7 +531,7 @@ class PtzAttentionController:
                     return
                 if existing.resolved is None:
                     # An observed event can enter the valid region after its initial rejection.
-                    if governed.target is None:
+                    if governed.target is None and not (profile.panorama_element_id and governed.group_member_event_ids is not None):
                         self._record(profile, runtime, action="intent_ignored",
                                      reason="target_missing_or_invalid", intent=governed)
                         return
@@ -523,9 +539,17 @@ class PtzAttentionController:
                     await self._follow_update(profile, runtime, existing, governed, observed_monotonic)
                     return
                 elif not recovering_observation:
+                    if profile.panorama_element_id and not governed.group_framing_complete:
+                        self._record(profile, runtime, action="intent_rejected", reason="group_framing_unavailable", intent=governed)
+                        return
                     existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
-                    existing.intent = governed.model_copy(update={"target": existing.intent.target})
-                    existing.framing_continuity.observe(governed.framing_observation, profile, self._clock())
+                    retained = {"target": existing.intent.target}
+                    if existing.intent.group_member_event_ids is not None:
+                        # With following disabled, updates keep the original qualified target and its evidence.
+                        retained.update(group_member_event_ids=existing.intent.group_member_event_ids,
+                            group_framing=existing.intent.group_framing, framing_observation=existing.intent.framing_observation)
+                    existing.intent = governed.model_copy(update=retained)
+                    existing.framing_continuity.observe(existing.intent.framing_observation, profile, self._clock())
                     return
 
             if governed.lifecycle == "close":
@@ -576,7 +600,7 @@ class PtzAttentionController:
                 reason = resolution_reason
                 live = effective_mode(profile) in {"live_preset", "live_panorama"}
                 outside_region = reason in {"target_outside_attention_region", "outside_validated_region"}
-                if live and not outside_region:
+                if live and not outside_region and reason != "group_framing_unavailable":
                     await self._fault(profile, runtime, reason, intent=governed)
                 else:
                     if existing is None or runtime.active_key != governed.key:
@@ -1958,6 +1982,8 @@ class PtzAttentionController:
     async def _resolve(
         self, profile: AttentionProfile, intent: AttentionIntent
     ) -> tuple[ResolvedTarget | None, str]:
+        if profile.panorama_element_id and not intent.group_framing_complete:
+            return None, "group_framing_unavailable"
         if intent.target is None:
             return None, "target_missing_or_invalid"
         if profile.panorama_element_id:
@@ -2907,6 +2933,8 @@ class PtzAttentionController:
                 payload.setdefault("target", tracked.resolved.panorama.model_dump(mode="json"))
         if intent is not None:
             payload.setdefault("event_type", intent.event_type)
+            if intent.group_member_event_ids is not None:
+                payload.setdefault("group_member_event_ids", list(intent.group_member_event_ids))
             if intent.group_framing is not None:
                 payload.setdefault("estimated_group_framing", group_framing_status(intent.group_framing, self._clock()))
             if intent.framing_observation is not None:

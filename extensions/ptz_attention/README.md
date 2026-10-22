@@ -53,8 +53,16 @@ every member's historical corners into the stopped image and records failures
 without dropping members; it does not certify current visibility or association
 in a second lens. A group outside one viewing hemisphere is unavailable, and the
 current fixed-lens controller cannot make an oversized group fit by changing zoom.
-Requests that have never supplied qualified framing retain the legacy world-target
-path; that initial pointing is not group-framing acceptance.
+For panorama attention, the pipeline declares expected member identifiers for
+`group_event` even before framing is available. An incomplete group remains
+unresolved without acquiring control or faulting; a complete fresh update can
+start candidate confirmation. Missing metadata, a smaller list or replacement
+identifiers cannot downgrade that event into a point request. Newly requested
+members remain expected during grace, separately from the last qualified position.
+Malformed or absent member declarations mean an unknown group awaiting evidence,
+not an anonymous point. No additional user setting is required. Explicit generic
+world-point/envelope requests retain their existing pointing behavior; that is not
+group-framing acceptance.
 
 Once following has accepted panorama-bound framing, losing that evidence expires
 the current observation even if a ground anchor remains available. Acquisition

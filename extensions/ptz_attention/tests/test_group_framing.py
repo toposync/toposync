@@ -76,6 +76,54 @@ def advance_member(packet, name, sequence, published_at):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["shadow", "live_panorama"])
+@pytest.mark.parametrize("first_failure", ["unknown_geometry", "private", "different_pose", "no_world", "no_target"])
+async def test_group_waits_without_moving_until_complete_initial_evidence(mode, first_failure, monkeypatch):
+    clock, camera, services, state, calls, _, store, controller = environment(mode=mode, qualified=True, blocked=True)
+    state["revision"] = 3
+    monkeypatch.setattr("toposync_ext_ptz_attention.pipelines.time.time", clock)
+    profile = panorama_profile(mode=mode, follow_view_updates=True, candidate_confirm_seconds=.1,
+        same_head_observer_acknowledged=True)
+    store.replace_profile(profile)
+    runtime = PtzAttentionRequestRuntime({"profile_id": profile.id, "event_type": "low"},
+        PipelineRuntimeDependencies(services=services, config_store=MutableConfigStore([attention_pipeline("front")])), controller)
+    context = SimpleNamespace(pipeline_name="events", node_id="attention")
+    initial, _ = await observed_group(first_failure)
+    if first_failure in {"no_world", "no_target"}:
+        initial.payload.pop("world_envelope", None)
+        initial.payload["subject"].pop("world_envelope", None)
+    if first_failure == "no_target":
+        initial.payload["subject"].pop("bbox01", None)
+    try:
+        await runtime.process_packet(initial, context)
+        clock.advance(.2)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        assert not calls and camera.acquires == 0
+        assert controller.status()[0].state == "IDLE"
+        pending = next(iter(controller._runtime_for(profile).events.values()))
+        assert pending.resolved is None and pending.intent.group_member_event_ids == ("person", "vehicle")
+        if first_failure == "no_target":
+            assert pending.intent.target is None
+        assert any(item.reason == "group_framing_unavailable" for item in store.list_decisions()[0])
+        ready, _ = await observed_group("older_frame")
+        ready.payload["event_id"] = initial.payload["event_id"]
+        ready.payload["subject"]["id"] = initial.payload["subject"]["id"]
+        advance_member(ready, "person", 5, clock()-.05)
+        advance_member(ready, "vehicle", 6, clock())
+        await runtime.process_packet(replace(ready, lifecycle=Lifecycle.UPDATE), context)
+        assert controller.status()[0].state == "CANDIDATE"
+        clock.advance(.11)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        assert controller.status()[0].state == ("ACQUIRING" if mode == "live_panorama" else "FOCUSED")
+        assert len(calls) == (mode == "live_panorama")
+    finally:
+        await controller.shutdown()
+        store.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("invalid", ["name", "source", "epoch", "panorama", "hemisphere"])
 async def test_group_model_rejects_incomplete_or_mixed_reference_contracts(invalid):
     packet, _ = await observed_group("older_frame")
@@ -95,6 +143,148 @@ async def test_group_model_rejects_incomplete_or_mixed_reference_contracts(inval
             [-value for value in ray] for ray in member["panorama"]["corner_rays"]]
     with pytest.raises(ValueError, match="group"):
         GroupFramingEstimate.model_validate(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["missing", "smaller", "replacement", "malformed", "type"])
+async def test_waiting_group_cannot_be_downgraded_by_partial_membership(change, monkeypatch):
+    clock, camera, services, state, calls, _, store, controller = environment()
+    monkeypatch.setattr("toposync_ext_ptz_attention.pipelines.time.time", clock)
+    profile = panorama_profile(mode="shadow", follow_view_updates=True, candidate_confirm_seconds=.1)
+    store.replace_profile(profile)
+    runtime = PtzAttentionRequestRuntime({"profile_id": profile.id, "event_type": "low"},
+        PipelineRuntimeDependencies(services=services), controller)
+    context = SimpleNamespace(pipeline_name="events", node_id="attention")
+    initial, _ = await observed_group("unknown_geometry")
+    try:
+        await runtime.process_packet(initial, context)
+        ready, _ = await observed_group("older_frame")
+        ready.payload["event_id"] = initial.payload["event_id"]
+        ready.payload["subject"]["id"] = initial.payload["subject"]["id"]
+        packet = deepcopy(ready)
+        clock.advance(.2)
+        advance_member(packet, "person", 5, clock()-.05)
+        advance_member(packet, "vehicle", 6, clock())
+        subject = packet.payload["subject"]
+        if change == "missing":
+            subject.pop("member_event_ids")
+        elif change == "smaller":
+            subject["member_event_ids"] = subject["active_member_event_ids"] = ["vehicle"]
+            subject["members"] = [subject["members"][1]]
+            packet.payload["world_envelope"]["member_count"] = 1
+        elif change == "replacement":
+            subject["members"][0]["event_id"] = "stranger"
+            subject["member_event_ids"] = subject["active_member_event_ids"] = ["stranger", "vehicle"]
+        elif change == "malformed":
+            subject["member_event_ids"] = ["person", "person"]
+        else:
+            subject["type"] = "event"
+        await runtime.process_packet(replace(packet, lifecycle=Lifecycle.UPDATE), context)
+        await controller.tick_once()
+        assert controller.status()[0].state == "IDLE" and not calls and camera.acquires == 0
+        pending = next(iter(controller._runtime_for(profile).events.values()))
+        assert pending.intent.group_member_event_ids == ("person", "vehicle")
+        clock.advance(.1)
+        advance_member(ready, "person", 7, clock()-.05)
+        advance_member(ready, "vehicle", 8, clock())
+        await runtime.process_packet(replace(ready, lifecycle=Lifecycle.UPDATE), context)
+        assert controller.status()[0].state == "CANDIDATE"
+    finally:
+        await controller.shutdown()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_world_envelope_remains_a_valid_pointing_request():
+    from test_panorama_attention import event
+    clock, _, _, _, _, _, store, controller = environment()
+    try:
+        intent = event(clock).model_copy(update={"target": AttentionTarget(world_envelope={
+            "center": {"x": .5, "z": 0}, "radius_meters": .1, "member_count": 2})})
+        assert intent.group_member_event_ids is None
+        await controller.submit_intent(intent)
+        assert controller.status()[0].state == "FOCUSED"
+        assert controller.status()[0].active_target["group_framing"] is None
+    finally:
+        await controller.shutdown()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_newly_requested_member_is_retained_while_holding_last_complete_group():
+    from test_panorama_attention import event
+    clock, _, _, state, calls, cancelled, store, controller = environment(mode="live_panorama", qualified=True, blocked=True)
+    state["revision"] = 3
+    profile = panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.1, min_focus_seconds=0, close_grace_seconds=5)
+    store.replace_profile(profile)
+    packet, _ = await observed_group("older_frame")
+    target = AttentionTarget(world_envelope=packet.payload["world_envelope"])
+    estimate = estimate_group_framing(packet, target)
+    async def send(sequence, names, current, lifecycle="update"):
+        envelope = target.world_envelope.model_copy(update={"member_count": len(current.members)})
+        await controller.submit_intent(event(clock, lifecycle=lifecycle).model_copy(update={
+            "target": AttentionTarget(world_envelope=envelope), "group_framing": current,
+            "group_member_event_ids": names, "capture_evidence": {"capture_instance": "decoder", "generation": 1,
+                "sequence": sequence, "published_at": clock()}}))
+    try:
+        await send(4, ("person", "vehicle"), estimate, "open")
+        clock.advance(.2)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        assert len(calls) == 1
+        clock.advance(.1)
+        await send(5, ("person", "vehicle", "third"), estimate)
+        assert controller.status()[0].state == "GRACE" and cancelled.is_set()
+        tracked = next(iter(controller._runtime_for(profile).events.values()))
+        assert set(tracked.expected_group_member_event_ids) == {"person", "vehicle", "third"}
+        assert set(tracked.intent.group_framing.members) == {"person", "vehicle"}
+        clock.advance(.1)
+        await send(6, ("person", "vehicle"), estimate)
+        assert controller.status()[0].state == "GRACE" and len(calls) == 1
+        clock.advance(.1)
+        members = {name: value.model_copy(update={"sequence": 7, "published_at": clock()})
+            for name, value in estimate.members.items()}
+        members["third"] = members["person"].model_copy(deep=True)
+        await send(7, ("person", "vehicle", "third"), GroupFramingEstimate(members=members))
+        assert controller.status()[0].state == "CANDIDATE"
+        clock.advance(.11)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        assert len(calls) == 2 and len(calls[-1]["destination"]["group_framing"]["members"]) == 3
+    finally:
+        await controller.shutdown()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_group_growth_without_following_retains_original_target_without_fault():
+    from test_panorama_attention import event
+    clock, _, _, _, calls, _, store, controller = environment()
+    packet, _ = await observed_group("older_frame")
+    target = AttentionTarget(world_envelope=packet.payload["world_envelope"])
+    estimate = estimate_group_framing(packet, target)
+    try:
+        initial = event(clock).model_copy(update={"target": target, "group_framing": estimate,
+            "group_member_event_ids": ("person", "vehicle")})
+        await controller.submit_intent(initial)
+        original = controller.status()[0].active_target
+        clock.advance(.1)
+        members = dict(estimate.members)
+        members["third"] = members["person"].model_copy(deep=True)
+        await controller.submit_intent(event(clock, lifecycle="update").model_copy(update={
+            "target": AttentionTarget(world_envelope=target.world_envelope.model_copy(update={"member_count": 3})),
+            "group_framing": GroupFramingEstimate(members=members), "group_member_event_ids": ("person", "vehicle", "third")}))
+        await controller.tick_once()
+        status = controller.status()[0]
+        assert status.state == "FOCUSED" and not status.fault and not calls
+        assert status.active_target == original
+        tracked = next(iter(controller._runtime_for(store.list_profiles()[0]).events.values()))
+        assert len(tracked.expected_group_member_event_ids) == 3
+        assert tracked.intent.group_framing_complete
+    finally:
+        await controller.shutdown()
+        store.close()
 
 
 @pytest.mark.asyncio

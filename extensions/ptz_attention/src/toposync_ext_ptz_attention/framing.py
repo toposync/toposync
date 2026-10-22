@@ -132,14 +132,27 @@ def _observe_box(reference, geometry, bbox, mapping, capture, member_event_ids=(
         return None
 
 
+def declared_group_members(packet) -> tuple[str, ...] | None:
+    subject = packet.payload.get("subject")
+    if not isinstance(subject, dict) or subject.get("type") != "group_event":
+        return None
+    raw = subject.get("member_event_ids")
+    if not isinstance(raw, list) or any(not isinstance(name, str) for name in raw):
+        return ()
+    try:
+        return FramingObservation._members(tuple(raw))
+    except ValueError:
+        return ()
+
+
 def estimate_group_framing(packet, target: AttentionTarget | None) -> GroupFramingEstimate | None:
     """Reconstruct each member in its own image; never union pixels across frames."""
     if target is None or target.world_envelope is None:
         return None
     try:
         subject = packet.payload["subject"]
-        expected, members = subject["member_event_ids"], subject["members"]
-        if (subject.get("type") != "group_event" or not expected or len(set(expected)) != len(expected)
+        expected, members = declared_group_members(packet), subject["members"]
+        if (not expected
                 or sorted(subject["active_member_event_ids"]) != sorted(expected)
                 or sorted(item["event_id"] for item in members) != sorted(expected)
                 or target.world_envelope.member_count != len(expected)):

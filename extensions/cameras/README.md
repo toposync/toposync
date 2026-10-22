@@ -115,6 +115,28 @@ Semantic PTZ attention; panoramic mapping does not redefine those consumers.
 See [implementation and validation](../../docs/ptz-panorama-mapping.md) for the
 profile contract, geometry, recovery, automated tests and physical validation.
 
+### Bounded PTZ control leases
+
+The internal `cameras.control.acquire` service accepts optional
+`maximum_duration_s`, a finite positive duration measured from request admission,
+including discovery and preemption waits. The limit uses the controller's
+monotonic clock. Renewing or reacquiring the same lease cannot extend or remove
+it; a shorter limit may tighten it. `expires_at` continues to report the actual
+lease expiry as a civil timestamp for clients, without changing the monotonic
+enforcement. Requests without a maximum keep the existing renewable lease policy.
+
+The existing expiry watchdog revokes ownership and schedules fenced Stop without
+an attention-controller tick, browser or API poll. Commands queued under expired
+ownership cannot start. This does not cancel an already transmitted command or
+prove the camera stopped: transport completion and physical Stop still require
+their existing verification. Process loss also requires a qualified device-side
+motion timeout; an in-process watchdog alone cannot provide that guarantee.
+
+The ceiling belongs to one lease. A campaign must separately preserve its end
+time and refuse a new lease after expiry, including after restart; callers must
+pass their remaining budget on every new acquisition. The lease primitive alone
+does not implement a complete campaign lifecycle or certify hardware behavior.
+
 ## Camera recipes
 
 A recipe is a ready-made configuration in the camera's existing catalog. Configuring

@@ -9,7 +9,7 @@ import os
 import time
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Coroutine, Literal
@@ -161,6 +161,7 @@ class PtzLease:
         compare=False,
     )
     automation_tracking_disabled_confirmed: bool = False
+    maximum_expires_at_monotonic: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -313,11 +314,18 @@ class PtzController:
         camera_source_id: str | None = None,
         source_id: str | None = None,
         ttl_s: float = 15.0,
+        maximum_duration_s: float | None = None,
         purpose: str | None = None,  # accepted for service contract; owner_kind controls policy
         automation_tracking_disabled_confirmed: bool = False,
     ) -> dict[str, Any]:
         self._ensure_accepting_commands()
         del purpose
+        maximum_deadline = None
+        if maximum_duration_s is not None:
+            duration = _optional_finite_float(maximum_duration_s)
+            if isinstance(maximum_duration_s, bool) or duration is None or duration <= 0:
+                raise PtzControlError("maximum_duration_s must be finite and positive")
+            maximum_deadline = self._monotonic() + duration
         cid = _required_text(camera_id, "camera_id")
         owner = _required_text(owner_id, "owner_id")
         kind = _owner_kind(owner_kind)
@@ -347,6 +355,7 @@ class PtzController:
             now_wall = self._wall_time()
             now_monotonic = self._monotonic()
             self._expire_locked(device, now_monotonic=now_monotonic)
+            ttl = _bounded_lease_ttl(ttl, now_monotonic, maximum_deadline)
             if device.state == "stopping":
                 raise PtzControlError(
                     f"PTZ device '{device.ptz_device_id}' is stopping; retry after it is idle"
@@ -365,17 +374,17 @@ class PtzController:
                         "PTZ transport configuration changed; stop and release the current "
                         "lease before reacquiring"
                     )
-                renewed = PtzLease(
-                    ptz_device_id=current.ptz_device_id,
+                if current.maximum_expires_at_monotonic is not None:
+                    maximum_deadline = (min(maximum_deadline, current.maximum_expires_at_monotonic)
+                        if maximum_deadline is not None else current.maximum_expires_at_monotonic)
+                ttl = _bounded_lease_ttl(ttl, now_monotonic, maximum_deadline)
+                renewed = replace(
+                    current,
                     camera_id=cid,
                     camera_source_id=resolved_source_id or current.camera_source_id,
-                    lease_id=current.lease_id,
-                    fence=current.fence,
-                    owner_kind=current.owner_kind,
-                    owner_id=current.owner_id,
                     expires_at=now_wall + ttl,
                     expires_at_monotonic=now_monotonic + ttl,
-                    transport_binding=current.transport_binding,
+                    maximum_expires_at_monotonic=maximum_deadline,
                 )
                 device.lease = renewed
                 self._schedule_lease_expiry_watchdog_locked(device, renewed)
@@ -428,6 +437,7 @@ class PtzController:
                     owner_kind=kind,
                     owner_id=owner,
                     ttl_s=ttl,
+                    maximum_expires_at_monotonic=maximum_deadline,
                     transport_binding=transport_binding,
                     automation_tracking_disabled_confirmed=bool(
                         automation_tracking_disabled_confirmed
@@ -464,6 +474,7 @@ class PtzController:
                         owner_kind=kind,
                         owner_id=owner,
                         ttl_s=ttl,
+                        maximum_expires_at_monotonic=maximum_deadline,
                         transport_binding=transport_binding,
                         automation_tracking_disabled_confirmed=bool(
                             automation_tracking_disabled_confirmed
@@ -505,10 +516,10 @@ class PtzController:
         self._ensure_accepting_commands()
         lid = _required_text(lease_id, "lease_id")
         ttl = _normalize_ttl(ttl_s)
-        now_wall = self._wall_time()
-        now_monotonic = self._monotonic()
         async with self._lock:
             self._ensure_accepting_commands()
+            now_wall = self._wall_time()
+            now_monotonic = self._monotonic()
             device, lease = self._lease_locked(lid, fence, now_monotonic=now_monotonic)
             # A finite continuous-move watchdog stops the head while preserving
             # the current lease. Renewal only extends that same fenced ownership;
@@ -519,20 +530,11 @@ class PtzController:
                 raise PtzControlError(
                     f"PTZ device '{device.ptz_device_id}' is faulted; use emergency_stop"
                 )
-            renewed = PtzLease(
-                ptz_device_id=lease.ptz_device_id,
-                camera_id=lease.camera_id,
-                camera_source_id=lease.camera_source_id,
-                lease_id=lease.lease_id,
-                fence=lease.fence,
-                owner_kind=lease.owner_kind,
-                owner_id=lease.owner_id,
+            ttl = _bounded_lease_ttl(ttl, now_monotonic, lease.maximum_expires_at_monotonic)
+            renewed = replace(
+                lease,
                 expires_at=now_wall + ttl,
                 expires_at_monotonic=now_monotonic + ttl,
-                transport_binding=lease.transport_binding,
-                automation_tracking_disabled_confirmed=(
-                    lease.automation_tracking_disabled_confirmed
-                ),
             )
             device.lease = renewed
             self._schedule_lease_expiry_watchdog_locked(device, renewed)
@@ -1503,9 +1505,11 @@ class PtzController:
         ttl_s: float,
         transport_binding: PtzTransportBinding | None,
         automation_tracking_disabled_confirmed: bool = False,
+        maximum_expires_at_monotonic: float | None = None,
     ) -> PtzLease:
         now_wall = self._wall_time()
         now_monotonic = self._monotonic()
+        ttl_s = _bounded_lease_ttl(ttl_s, now_monotonic, maximum_expires_at_monotonic)
         lease = PtzLease(
             ptz_device_id=device.ptz_device_id,
             camera_id=camera_id,
@@ -1518,6 +1522,7 @@ class PtzController:
             expires_at_monotonic=now_monotonic + ttl_s,
             transport_binding=transport_binding,
             automation_tracking_disabled_confirmed=automation_tracking_disabled_confirmed,
+            maximum_expires_at_monotonic=maximum_expires_at_monotonic,
         )
         device.lease = lease
         device.last_transport_binding = transport_binding
@@ -2286,6 +2291,15 @@ def _normalize_ttl(value: Any) -> float:
     if not math.isfinite(parsed):
         raise PtzControlError("ttl_s must be finite")
     return max(1.0, min(300.0, parsed))
+
+
+def _bounded_lease_ttl(ttl: float, now: float, maximum_deadline: float | None) -> float:
+    if maximum_deadline is None:
+        return ttl
+    remaining = maximum_deadline - now
+    if remaining <= 0:
+        raise PtzControlError("PTZ maximum lease duration elapsed")
+    return min(ttl, remaining)
 
 
 def _normalize_expected_ownership(

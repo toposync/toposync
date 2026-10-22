@@ -21,7 +21,8 @@ from ..registry import build_default_model_registry
 from .backup import MAX_BACKUP_BYTES, export_backup, restore_backup
 from .preview import VisualPreviewBusy, VisualStatePreviewRunner
 from .preparation import VisualRegionUnavailable
-from .schemas import Counter, Identifier, ReferenceEvidence, VisualStateConfig, VisualStateModel
+from .qualification import context_revision, qualification_history, record_qualification, sensor_configuration
+from .schemas import Counter, Identifier, QualificationSubmission, ReferenceEvidence, VisualStateConfig, VisualStateModel
 from .store import ReferenceConflict, ReferenceLimit, VisualReferenceStore
 
 
@@ -108,6 +109,56 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
             if not task.cancelled():
                 task.exception()
             raise
+
+    def installation_stamp(config_store):
+        stat = config_store.paths.config_path.stat()
+        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+    async def qualification_context(request, sensor_id):
+        host = request.app.state.config_store
+        try:
+            before = await backup_work(installation_stamp, host)
+            configuration = await host.get_config()
+            pipeline, sensor, node_id = sensor_configuration(configuration, sensor_id)
+            revision = await backup_work(context_revision, configuration, pipeline, sensor, node_id,
+                                         build_default_model_registry(), get_store(), before)
+            if before != await backup_work(installation_stamp, host):
+                return None
+            return revision
+        except (ValueError, OSError, PipelinePreviewError):
+            return None
+
+    async def qualification(request, sensor_id, response, submission=None, offset=0, limit=20):
+        actor = _authorize(request, write=submission is not None)
+        try:
+            await asyncio.wait_for(backups.acquire(), timeout=1)
+        except TimeoutError as error:
+            raise HTTPException(429, detail="visual_backup_busy") from error
+        try:
+            with _storage_errors():
+                revision = await qualification_context(request, sensor_id)
+                store = get_store()
+                record = None
+                if submission is not None:
+                    record = await backup_work(record_qualification, store, sensor_id, submission, actor, revision)
+                    # A concurrent save can suspend a recorded report before this response is sent.
+                    revision = await qualification_context(request, sensor_id)
+                result = await backup_work(qualification_history, store, sensor_id, revision, offset=offset, limit=limit)
+                if record is not None:
+                    result["record"] = record
+            response.headers["Cache-Control"] = "private, no-store"
+            return result
+        finally:
+            backups.release()
+
+    @router.get("/sensors/{sensor_id}/qualification")
+    async def get_qualification(request: Request, sensor_id: Identifier, response: Response,
+                                offset: int = Query(default=0, ge=0, le=1_000_000), limit: int = Query(default=20, ge=1, le=50)):
+        return await qualification(request, sensor_id, response, offset=offset, limit=limit)
+
+    @router.post("/sensors/{sensor_id}/qualification", status_code=201)
+    async def create_qualification(request: Request, sensor_id: Identifier, body: QualificationSubmission, response: Response):
+        return await qualification(request, sensor_id, response, submission=body)
 
     @router.get("/drafts/{draft_id}/backup")
     async def backup(request: Request, draft_id: Identifier, expected_revision: int = Query(ge=0)):

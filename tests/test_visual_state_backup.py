@@ -230,19 +230,21 @@ def test_repair_corrupt_image_is_reversible_until_import_commits(stores, monkeyp
     assert target.read_image(identifier) == (metadata, original)
 
 
-@pytest.mark.parametrize('version', [1, 2, 3])
+@pytest.mark.parametrize('version', [1, 2, 3, 4])
 def test_reference_database_upgrade_keeps_existing_drafts_and_images(tmp_path, version):
     store = VisualReferenceStore(tmp_path, scope='installation', clock=Clock())
     draft, data = package(store)
-    previous_restore = backup.restore_backup(store, data, operation_id='before-upgrade') if version == 3 else None
+    previous_restore = backup.restore_backup(store, data, operation_id='before-upgrade') if version >= 3 else None
     if version < 3:
         store._connection.execute('DROP TABLE restore_operation')
-    store._connection.execute('DROP TABLE retired_pipeline_reference')
+    if version < 4:
+        store._connection.execute('DROP TABLE retired_pipeline_reference')
+    store._connection.execute('DROP TABLE qualification')
     store._connection.execute(f'PRAGMA user_version={version}')
     store.close()
     upgraded = VisualReferenceStore(tmp_path, scope='installation', clock=Clock())
     try:
-        assert upgraded._connection.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert upgraded._connection.execute('PRAGMA user_version').fetchone()[0] == 5
         assert upgraded.get_draft(draft.draft_id) == draft
         if previous_restore is not None:
             assert backup.restore_backup(upgraded, data, operation_id='before-upgrade') == previous_restore

@@ -15,12 +15,29 @@ Milliseconds = Annotated[int, Field(strict=True, ge=0, le=3_600_000)]
 Score = Annotated[float, Field(strict=True, ge=-1, le=1)]
 Margin = Annotated[float, Field(strict=True, ge=0, le=2)]
 Timestamp = Annotated[float, Field(strict=True, ge=0)]
+Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 
 
 class VisualStateModel(BaseModel):
     model_config = ConfigDict(
         extra="forbid", allow_inf_nan=False, validate_default=True, frozen=True,
     )
+
+
+class QualificationSubmission(VisualStateModel):
+    operation_id: Identifier
+    context_revision: Digest
+    scope: Literal["laboratory", "replay", "isolated_consumer"]
+    decision: Literal["passed", "failed"]
+    report_sha256: Digest
+    protocol_sha256: Digest
+    environment_sha256: Digest
+
+
+class QualificationRecord(QualificationSubmission):
+    sensor_id: Identifier
+    actor_id: Identifier
+    created_at: Timestamp
 
 
 class ComparisonPolicy(VisualStateModel):

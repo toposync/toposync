@@ -194,6 +194,66 @@ publication and the receiver's validation logic. It verifies preserved reference
 new epochs, rejection of buffered observations and fresh confirmation. It does not
 exercise physical devices or independently qualify image classification quality.
 
+#### Local qualification records
+
+The owner-only `GET /api/vision/visual-state/sensors/{sensor_id}/qualification`
+returns the current context revision and paginated evidence records (`limit` 1–50,
+default 20). A null context means that a unique saved local sensor, compatible
+preparation, intact references or the declared local model could not be verified.
+The check reads and hashes model bytes without running inference or contacting a
+camera or provider. Use it when reviewing evidence, not as a frequent polling API.
+
+After independently reviewing a local report, `POST` to the same path with:
+
+```json
+{
+  "operation_id": "review-unique-identifier",
+  "context_revision": "<64 lowercase hexadecimal characters from GET>",
+  "scope": "laboratory",
+  "decision": "passed",
+  "report_sha256": "<SHA-256 of the reviewed report>",
+  "protocol_sha256": "<SHA-256 of the frozen protocol>",
+  "environment_sha256": "<SHA-256 of the environment and data manifest>"
+}
+```
+
+Scopes are `laboratory`, `replay` and `isolated_consumer`; decisions are `passed`
+or `failed`. The environment manifest should identify code revision, hardware,
+effective provider, software versions and corpus partitions. Keep those files
+outside the repository as appropriate for their private contents. The server
+stores hashes, the authenticated actor and its own timestamp; it does not read
+those external files or verify the reviewer's conclusions. A hash identifies a
+report, not its correctness. Never submit an approval based only on a model's
+stated confidence or on matching configuration.
+
+Records are immutable. Retry an uncertain submission with the same operation
+identifier and identical fields. This recovers the original record even if its
+context has since changed; the returned history still marks it suspended. Reusing
+the identifier with another actor, sensor or content fails. A new decision uses a
+new operation identifier. The newest record for each scope supersedes earlier
+ones, including when the newest decision is a failure.
+
+`recorded_pass` and `recorded_failure` mean the latest owner attestation matches
+the checked configuration and resources. `suspended` requires a new review;
+`superseded` preserves prior decisions for audit. The initial implementation
+conservatively suspends on any installation configuration save, even an unrelated
+edit, and on reference/model file replacement or repair. Restoring identical
+configuration or bytes does not silently renew the old indication. Responses
+always include `physical_qualification: false` and `activation_authorized: false`.
+These records neither activate publication nor attest current camera availability,
+effective runtime provider, hardware compatibility, latency or physical safety.
+Review those external conditions again after software/environment changes.
+
+History is bounded to 1000 records per installation by default; reaching the limit
+rejects new records and preserves the audit trail. Requests share the bounded
+backup transfer slot and return private, no-store responses. Concurrent saves
+reject stale submissions or suspend the resulting report. Qualification records
+are not included in a sensor ZIP backup and are never imported as an approval.
+The reference database schema is now version 5; versions 1–4 upgrade in place.
+Older code rejects this schema. For a downgrade, preserve the whole data directory
+and use a compatible earlier data backup or restore sensor ZIPs into a separate
+clean installation; do not edit the database version number manually.
+
 Pipeline list/read/create/update responses include a content-based `revision`.
 Send that unchanged with `PUT /api/pipelines/{name}`. Visual operators opt into
 the generic `edit_precondition` capability: missing revisions return HTTP428;

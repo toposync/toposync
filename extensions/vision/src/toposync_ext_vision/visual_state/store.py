@@ -41,6 +41,7 @@ class ReferenceLimits:
     references: int = 3000
     drafts: int = 100
     suggestions: int = 3000
+    qualifications: int = 1000
 
     def __post_init__(self) -> None:
         if any(type(value) is not int or value <= 0 for value in vars(self).values()):
@@ -91,6 +92,11 @@ CREATE TABLE IF NOT EXISTS retired_pipeline_reference (
     reference_id TEXT PRIMARY KEY REFERENCES reference(id) ON DELETE CASCADE,
     expires_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS qualification (
+    sequence INTEGER PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE,
+    sensor_id TEXT NOT NULL, scope TEXT NOT NULL, metadata TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS qualification_sensor ON qualification(sensor_id, sequence);
 """
 
 
@@ -124,10 +130,10 @@ class VisualReferenceStore:
         self._connection.execute("PRAGMA busy_timeout=5000")
         self._connection.execute("PRAGMA synchronous=FULL")
         version = self._connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4):
+        if version not in (0, 1, 2, 3, 4, 5):
             self._connection.close()
             raise ReferenceConflict("unsupported reference schema")
-        self._connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA + "PRAGMA user_version=4; COMMIT;")
+        self._connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA + "PRAGMA user_version=5; COMMIT;")
         database.chmod(0o600)
 
     def close(self) -> None:

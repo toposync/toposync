@@ -80,6 +80,21 @@ def test_mapping_projection_rejects_stale_anchors_unsafe_pose_and_carried_input(
     assert mapping_visual(rotated)["points"] == []
 
 
+def test_visual_panorama_mapping_remains_visible_during_motion_only_for_its_exact_frame():
+    source = packet()
+    source.payload.update(world={"x": 5, "z": 5},
+        pan_tilt_zoom_state={"geometry_safe": False, "move_status": "moving"},
+        mapping={"status": "mapped", "u": .5, "v": .5, "calibrated_view_id": "panorama",
+            "panorama_revision": 2, "pose_evidence": "visual_frame_rotation",
+            "visual_localization": {"source_artifact_id": "source", "geometry_digest": "geometry",
+                "capture_evidence": dict(source.payload["capture_evidence"])}})
+    assert mapping_visual(source)["state"] == "mapping_estimate"
+    source.payload["mapping"]["visual_localization"]["capture_evidence"]["sequence"] += 1
+    visual = mapping_visual(source)
+    assert visual["state"] == "mapping_unavailable" and not visual["points"]
+    assert visual["properties"]["mapping_reason"] == "mapping_frame_mismatch"
+
+
 def test_zone_filter_and_occurrence_report_observed_membership_without_reprojecting_boundaries():
     async def scenario():
         source = packet()

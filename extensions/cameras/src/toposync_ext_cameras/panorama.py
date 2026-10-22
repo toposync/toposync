@@ -18,7 +18,7 @@ import time
 import uuid
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 from urllib.parse import quote
 
 import cv2
@@ -203,6 +203,11 @@ class Aim(_Input):
     world: World
 
 
+class QualifyAttention(Revision):
+    home: World
+    target: World
+
+
 class Restore(_Input):
     element_id: str = Field(min_length=1, max_length=200)
     expected_job_id: str = Field(pattern=r"^[a-f0-9]{32}$")
@@ -342,6 +347,7 @@ class PanoramaService:
         self._localization_lock = asyncio.Lock()
         self.camera_factory: Any = None
         self._navigation_scanners: dict[str, Any] = {}
+        self._attention_responses: dict[str, dict[str, Any]] = {}
         for path in self.root.glob("*/job.json"):
             job = self._read(path)
             if (
@@ -1552,6 +1558,8 @@ class PanoramaService:
     async def _visual_operation_with_pinned_reference(
         self, request: Request, job: dict[str, Any], target: dict[str, Any] | None,
         *, borrowed_control: dict | None = None, maximum_error_pixels: float = 12,
+        qualification_home: dict[str, Any] | None = None,
+        target_provider: Callable[[], list[float]] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
@@ -1560,9 +1568,10 @@ class PanoramaService:
         if self.camera_factory is None:
             raise _error("visual_control_unavailable", "Visual camera control is unavailable")
         directory = self.root / job["id"] / "navigation"
-        checkpoint = {} if borrowed_control is not None else dict(job.get("_navigation_checkpoint") or {})
+        checkpoint = {} if borrowed_control is not None or qualification_home is not None else dict(job.get("_navigation_checkpoint") or {})
         checkpoint["active_seconds"] = 0.0
         checkpoint.pop("navigation_commands", None)
+        preparation = {"started_at": time.time()}
         camera = self.camera_factory(services=self.services, camera_id=job["camera_id"],
                                      source_id=job["source_id"], settings={}, job_id=job["id"], output_dir=directory,
                                      **({"borrowed_control": borrowed_control} if borrowed_control is not None else {}))
@@ -1578,14 +1587,25 @@ class PanoramaService:
         self._navigation_scanners[job["id"]] = scanner
         image_url, evidence = "", {}
         failure_code = None
+        navigator = None
+        response_fields = ("response", "response_rotations", "pulse_limits",
+                           "direction_responses", "stationary_durations")
+        response_binding = None
+        response_observed = None
+        job["stop_confirmed"] = False
         try:
             scanner.capabilities = await camera.discover()
+            preparation["discovered_at"] = time.time()
             await camera.acquire()
+            preparation["acquired_at"] = time.time()
             scanner.acquired = True
             if not await scanner._stop():
                 raise PanoramaCaptureError("stop_unconfirmed")
+            preparation["stopped_at"] = time.time()
             scanner.last_frame = await scanner._reference_window()
+            preparation["reference_at"] = time.time()
             scanner.last_pose = await camera.position()
+            preparation["position_at"] = time.time()
             scanner.physical_state = "stopped"
             if target is None:
                 if scanner.saved_return:
@@ -1614,7 +1634,7 @@ class PanoramaService:
                     scanner.checkpoint.pop("visual_original_ray", None)
                     scanner.checkpoint.pop("initial_path", None)
             else:
-                if borrowed_control is None and not scanner.saved_return and not scanner.checkpoint.get("visual_original_ray"):
+                if qualification_home is None and borrowed_control is None and not scanner.saved_return and not scanner.checkpoint.get("visual_original_ray"):
                     path = directory / "initial-reference.jpg"
                     await asyncio.to_thread(_write_image, path, scanner.last_frame["image"])
                     scanner.checkpoint.update(initial_path=str(path), initial_zoom=scanner.last_pose.get("zoom"),
@@ -1626,23 +1646,54 @@ class PanoramaService:
                     camera_id=job["camera_id"], source_id=job["source_id"], job_id=job["id"], revision=job["revision"],
                     image=scanner.last_frame["image"], capture_evidence=scanner.last_frame.get("capture_evidence", {}),
                 )
+                preparation["localized_at"] = time.time()
                 if located.get("status") != "localized":
                     raise PanoramaCaptureError(located.get("reason", "panorama_visual_localization_failed"))
-                if borrowed_control is None and not scanner.checkpoint.get("visual_original_ray"):
+                if qualification_home is None and borrowed_control is None and not scanner.checkpoint.get("visual_original_ray"):
                     scanner.checkpoint["visual_original_ray"] = _rotation_basis(located["rotation_matrix"])[:, 2].tolist()
                     await scanner._persist()
                 binding = job["source_panorama"]
                 localizer = self._localizers[(binding["id"], binding["geometry"]["model_digest"])]
-                evidence = await VisualNavigator(scanner, localizer).aim(target["ray"],
-                    **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}))
+                navigator = VisualNavigator(scanner, localizer)
+                if borrowed_control is not None or qualification_home is not None:
+                    response_binding = _digest({
+                        "job_id": job["id"], "revision": job["revision"],
+                        "source": job.get("_source_digest"), "composition": job.get("_composition_digest"),
+                        "panorama": binding, "optical_identity": scanner.capabilities.get("source_identity"),
+                    })
+                    cached = getattr(self, "_attention_responses", {}).get(job["camera_id"], {})
+                    if (borrowed_control is not None and cached.get("binding") == response_binding
+                            and 0 <= time.monotonic() - cached.get("observed_monotonic", 0) <= 300):
+                        for name in response_fields:
+                            setattr(navigator, name, copy.deepcopy(cached["response"][name]))
+                        response_observed = cached["observed_monotonic"]
+                        preparation["response_reused_at"] = time.time()
+                if qualification_home is not None:
+                    stages = []
+                    for label, destination, tolerance in (
+                        ("home", qualification_home, 3),
+                        ("arrival", target, 12),
+                        ("return", qualification_home, 3),
+                    ):
+                        started = time.monotonic()
+                        observed = await navigator.aim(destination["ray"], maximum_error_pixels=tolerance)
+                        stage_filename = f"check-{uuid.uuid4().hex}.jpg"
+                        okay, encoded = await asyncio.to_thread(cv2.imencode, ".jpg", scanner.last_frame["image"])
+                        if not okay:
+                            raise PanoramaCaptureError("capture_write_failed")
+                        self._image_write(job, stage_filename, encoded.tobytes())
+                        stages.append({"stage": label, "target": destination, "evidence": observed,
+                                       "image_url": self._image_url(job, stage_filename),
+                                       "elapsed_seconds": time.monotonic() - started})
+                        job["_attention_trial"] = {"status": "running", "stages": stages}
+                        self._save(job)
+                    evidence = {"verified": True, "kind": "attention_round_trip_verified", "stages": stages}
+                else:
+                    evidence = await navigator.aim(target["ray"],
+                        **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}),
+                        **({"target_provider": target_provider} if target_provider is not None else {}))
                 evidence["lens"] = localizer.lens
             await self._current(job, request)
-            filename = f"check-{uuid.uuid4().hex}.jpg"
-            okay, encoded = await asyncio.to_thread(cv2.imencode, ".jpg", scanner.last_frame["image"])
-            if not okay:
-                raise PanoramaCaptureError("capture_write_failed")
-            self._image_write(job, filename, encoded.tobytes())
-            image_url = self._image_url(job, filename)
         except (PanoramaCaptureError, _Stopped) as error:
             failure_code = getattr(error, "code", "capture_cancelled")
             raise _error(getattr(error, "code", "capture_cancelled"), "The visual camera operation could not be confirmed") from None
@@ -1659,9 +1710,36 @@ class PanoramaService:
             try:
                 restored = scanner.physical_state == "restored"
                 if scanner.acquired:
-                    await scanner._confirm_stop()
-                    job["stop_confirmed"] = scanner.physical_state == "stopped"
-                if scanner.last_frame is not None:
+                    control_stopped = True
+                    if borrowed_control is not None:
+                        control_stopped = False
+                        if await scanner._stop():
+                            status_task = asyncio.create_task(self._attention_stopped_control(
+                                job, borrowed_control))
+                            try:
+                                await scanner._confirm_stop(reuse_accepted=True)
+                            finally:
+                                control_stopped = await asyncio.shield(status_task)
+                    else:
+                        await scanner._confirm_stop()
+                    job["stop_confirmed"] = scanner.physical_state == "stopped" and control_stopped
+                    if borrowed_control is not None and job["stop_confirmed"] and not failure_code:
+                        # Cleanup observes newer video; arrival must refer to that
+                        # stopped frame, not to the frame preceding Stop.
+                        try:
+                            scanner.last_frame = await scanner.refresh_stopped_frame()
+                            located = await navigator.locate()
+                            measured = await navigator._target_measurement(np.asarray(evidence["target_ray"]), located)
+                            if not measured or measured["center_error_pixels"] > maximum_error_pixels:
+                                raise PanoramaCaptureError("visual_arrival_unconfirmed")
+                            evidence = {**evidence, "measurement": measured,
+                                "capture_evidence": scanner.last_frame.get("capture_evidence", {}),
+                                "arrival_delivery": {"localized_at": time.time()}}
+                        except PanoramaCaptureError as error:
+                            failure_code = error.code
+                # Attention saves the same endpoint as JPEG below; encoding a
+                # second full-resolution PNG here can expire its arrival proof.
+                if scanner.last_frame is not None and borrowed_control is None:
                     try:
                         await asyncio.to_thread(_write_image, directory / "last-observed-frame.png", scanner.last_frame["image"])
                         scanner.checkpoint["last_observed_frame"] = {
@@ -1672,6 +1750,26 @@ class PanoramaService:
                         scanner.checkpoint["last_observed_frame"] = {"unavailable": True}
                 if borrowed_control is None:
                     job["_navigation_checkpoint"] = scanner.checkpoint
+                else:
+                    job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
+                        for key in ("navigation_commands", "navigation_observation_timings")}
+                    job["_attention_navigation_trace"].update(preparation=preparation,
+                        finished_at=time.time(), error_code=failure_code, target=target)
+                    job["_attention_navigation_history"] = [
+                        *job.get("_attention_navigation_history", []),
+                        job["_attention_navigation_trace"],
+                    ][-8:]
+                if response_binding is not None and navigator is not None:
+                    if (not failure_code and job.get("stop_confirmed")
+                            and getattr(navigator, "commands", 0) > 0 and getattr(navigator, "response", None)):
+                        # shortcut: reuse expires after five minutes; longer reuse needs a durable actuator calibration.
+                        self._attention_responses[job["camera_id"]] = {
+                            "binding": response_binding, "observed_monotonic": response_observed or time.monotonic(),
+                            "response": {name: copy.deepcopy(getattr(navigator, name)) for name in response_fields},
+                        }
+                    elif (not job.get("stop_confirmed")
+                            or failure_code not in {None, "capture_cancelled", "following_observation_expired"}):
+                        getattr(self, "_attention_responses", {}).pop(job["camera_id"], None)
                 return_checkpoint = job.get("_navigation_checkpoint") or {}
                 job["navigation"] = {"phase": "failed" if failure_code else "complete", "error_code": failure_code, "physical_state": "restored" if restored and job.get("stop_confirmed") else "stopped" if job.get("stop_confirmed") else scanner.physical_state,
                                      "can_return": bool((return_checkpoint.get("return") or return_checkpoint.get("visual_original_ray")) and return_checkpoint.get("initial_path"))}
@@ -1679,13 +1777,44 @@ class PanoramaService:
             finally:
                 try:
                     await camera.close()
+                    if "arrival_delivery" in evidence:
+                        evidence["arrival_delivery"]["capture_closed_at"] = time.time()
                 finally:
                     self._navigation_scanners.pop(job["id"], None)
                     if self.busy.get(job["camera_id"]) == job["id"]:
                         self.busy.pop(job["camera_id"], None)
         if job.get("stop_confirmed") is not True:
             raise _error("stop_unconfirmed", "The camera stop could not be confirmed")
+        if failure_code:
+            raise _error(failure_code, "The stopped visual arrival could not be confirmed")
+        filename = f"check-{uuid.uuid4().hex}.jpg"
+        okay, encoded = await asyncio.to_thread(cv2.imencode, ".jpg", scanner.last_frame["image"])
+        if not okay:
+            raise _error("capture_write_failed", "The stopped camera image could not be saved")
+        self._image_write(job, filename, encoded.tobytes())
+        image_url = self._image_url(job, filename)
+        if "arrival_delivery" in evidence:
+            evidence["arrival_delivery"]["image_saved_at"] = time.time()
         return image_url, evidence
+
+    async def _attention_stopped_control(self, job: dict, borrowed_control: dict) -> bool:
+        """Refresh native idle evidence alongside the visual Stop window."""
+        for attempt in range(6):
+            try:
+                snapshot = await self.services.call("cameras.control.snapshot",
+                    camera_id=job["camera_id"], source_id=job["source_id"], refresh_physical=True)
+            except Exception:
+                return False
+            owned = snapshot.get("active_lease") or {}
+            if (owned.get("lease_id") != borrowed_control["lease_id"]
+                    or owned.get("fence") != borrowed_control["fence"]
+                    or snapshot.get("automation_ready") is not True):
+                return False
+            if snapshot.get("geometry_safe") is True and snapshot.get("motion_state") == "stable":
+                return True
+            if attempt < 5:
+                await asyncio.sleep(.25)
+        return False
 
     async def return_framing(self, request: Request, camera_id: str, job_id: str, body: Revision) -> dict[str, Any]:
         self._authorize(request, camera_id, control=True)
@@ -2062,8 +2191,70 @@ class PanoramaService:
                     and type(qualification.get("revision")) is int and type(qualification.get("artifact_revision")) is int
                     and qualification == {**expected, "arrival_verified": True, "return_verified": True})
 
+    async def qualify_attention(self, request: Request, camera_id: str, job_id: str,
+                                body: QualifyAttention) -> dict:
+        """Produce qualification only from a supervised, visually verified round trip."""
+        self._authorize(request, camera_id, write=True, control=True)
+        job = self._job(camera_id, job_id, body.revision)
+        async with self.reference_coordinator.hold(camera_id, job["source_id"]):
+            await self._current(job, request)
+            active = await self.get_active(camera_id=camera_id, source_id=job["source_id"],
+                composition_id=job["composition_id"], element_id=job["element_id"])
+            if not active.get("job") or active["job"].get("id") != job_id:
+                raise _error("active_mapping_required", "Qualify the active mapping only")
+            if not job.get("source_panorama") or job["solution"].get("type") != "panorama_ray_plane_v1":
+                raise _error("movement_not_applicable", "A visual panoramic mapping is required")
+            home = self._target(job, body.home.model_dump())
+            target = self._target(job, body.target.model_dump())
+            if np.linalg.norm(np.asarray(home["ray"]) - target["ray"]) < 0.03:
+                raise _error("qualification_targets_too_close", "Choose a distinct test target", 422)
+            if camera_id in self.busy:
+                raise _error("camera_busy", "Another camera operation is active")
+            navigation = job.get("_navigation_checkpoint") or {}
+            if navigation.get("return") or navigation.get("pending_returns") or navigation.get("visual_original_ray"):
+                raise _error("return_cleanup_required", "Restore the pending camera return before qualification")
+            job.pop("_attention_qualification", None)
+            job["_attention_trial"] = {"status": "running", "stages": []}
+            self._save(job)
+            try:
+                image_url, evidence = await self._visual_operation_with_pinned_reference(
+                    request, job, target, qualification_home=home)
+                stages = evidence.get("stages", [])
+                if (evidence.get("verified") is not True or job.get("stop_confirmed") is not True
+                        or [stage.get("stage") for stage in stages] != ["home", "arrival", "return"]):
+                    raise _error("attention_arrival_unconfirmed", "The physical round trip was not verified")
+                for stage, limit in zip(stages, (3, 12, 3)):
+                    observed = stage.get("evidence", {})
+                    error = observed.get("measurement", {}).get("center_error_pixels")
+                    if (observed.get("verified") is not True or observed.get("kind") != "visual_aim_verified"
+                            or type(error) not in (int, float) or not 0 <= error <= limit):
+                        raise _error("attention_arrival_unconfirmed", "The physical round trip was not verified")
+                commands = [stage["evidence"].get("commands") for stage in stages]
+                if (not all(type(count) is int for count in commands)
+                        or not 0 <= commands[0] < commands[1] < commands[2]):
+                    raise _error("attention_motion_unconfirmed", "The trial must observe outward and return movements")
+                await self._current(job, request)
+                binding = job["source_panorama"]
+                job["_attention_qualification"] = {
+                    "job_id": job["id"], "revision": job["revision"],
+                    "source_identity": job["_source_digest"], "composition_digest": job["_composition_digest"],
+                    "artifact_id": binding["id"], "artifact_revision": binding["revision"],
+                    "geometry_digest": binding["geometry"]["model_digest"],
+                    "arrival_verified": True, "return_verified": True,
+                }
+                job["_attention_trial"] = {"status": "verified", "stages": stages,
+                    "image_url": image_url, "verified_at": time.time()}
+                self._save(job)
+                return {"qualified": self._attention_qualified(job), "trial": job["_attention_trial"]}
+            except BaseException:
+                job.pop("_attention_qualification", None)
+                job["_attention_trial"]["status"] = "failed"
+                self._save(job)
+                raise
+
     async def navigate_attention(self, *, destination: dict, lease_id: str, fence: int,
-                                 command_id: str, returning: bool = False) -> dict:
+                                 command_id: str, returning: bool = False,
+                                 target_provider: Callable[[], dict] | None = None) -> dict:
         if (not isinstance(destination, dict) or not isinstance(lease_id, str) or not lease_id.strip()
                 or type(fence) is not int or fence < 1 or not isinstance(command_id, str) or not command_id.strip()
                 or type(returning) is not bool
@@ -2088,6 +2279,24 @@ class PanoramaService:
             world = map_ray_to_world(job["solution"], ray)
             if world is None or mapping_extrapolated(job["solution"], *world):
                 raise _error("outside_validated_region", "The attention target is outside the mapped region", 422)
+            def current_ray() -> list[float]:
+                from .panorama_capture import PanoramaCaptureError
+                try:
+                    updated = target_provider()
+                except RuntimeError:
+                    raise PanoramaCaptureError("following_observation_expired") from None
+                if (not isinstance(updated, dict) or any(updated.get(key) != destination.get(key)
+                        for key in ("camera_id", "source_id", "composition_id", "element_id", "job_id", "revision"))):
+                    raise PanoramaCaptureError("panorama_reference_changed")
+                vector = np.asarray(updated.get("ray"), dtype=float)
+                if vector.shape != (3,) or not np.isfinite(vector).all() or abs(np.linalg.norm(vector) - 1) > 1e-6:
+                    raise PanoramaCaptureError("invalid_target")
+                point = map_ray_to_world(job["solution"], vector)
+                if point is None or mapping_extrapolated(job["solution"], *point):
+                    raise PanoramaCaptureError("outside_validated_region")
+                return vector.tolist()
+            if target_provider is not None and (returning or not callable(target_provider)):
+                raise _error("invalid_target", "Return navigation cannot follow a moving target", 422)
             snapshot = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)
             owned = snapshot.get("active_lease") or {}
@@ -2095,16 +2304,22 @@ class PanoramaService:
                     or owned.get("owner_kind") != "automation" or snapshot.get("automation_ready") is not True):
                 raise _error("control_lost", "Attention no longer owns exclusive camera control")
             _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray.tolist()},
-                borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12)
+                borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12,
+                **({"target_provider": current_ray} if target_provider is not None else {}))
             final = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)
             owned = final.get("active_lease") or {}
             if (owned.get("lease_id") != lease_id or owned.get("fence") != fence
                     or final.get("automation_ready") is not True or job.get("stop_confirmed") is not True):
                 raise _error("control_lost", "The stopped attention result no longer owns control")
-            return {"destination": destination, "command_id": command_id, "lease_id": lease_id,
+            reached = {**destination, "ray": evidence["target_ray"]} if target_provider is not None else destination
+            result = {"destination": reached, "command_id": command_id, "lease_id": lease_id,
                     "fence": fence, "motion_epoch": final.get("motion_epoch"), "stop_confirmed": True,
                     "returning": returning, "evidence": evidence}
+            job["_attention_navigation_result"] = {**result, "observed_at": time.time(),
+                "control": {key: final.get(key) for key in ("geometry_safe", "motion_state", "physical_updated_at")}}
+            self._save(job)
+            return result
 
     def native_references(self, camera_id: str, source_id: str, binding: dict) -> list[dict]:
         """Read separate native points only for this exact panorama geometry."""
@@ -2478,6 +2693,10 @@ def register_panorama_routes(
     @app.post(_PREFIX + "/aim")
     async def aim(request: Request, camera_id: str, body: Aim) -> dict[str, Any]:
         return await service.aim(request, camera_id, body)
+
+    @app.post(_PREFIX + "/{job_id}/qualify-attention")
+    async def qualify_attention(request: Request, camera_id: str, job_id: str, body: QualifyAttention) -> dict:
+        return await service.qualify_attention(request, camera_id, job_id, body)
 
     @app.post(_PREFIX + "/native-reference")
     async def prepare_native_reference(request: Request, camera_id: str, body: PrepareNativeReference) -> dict:

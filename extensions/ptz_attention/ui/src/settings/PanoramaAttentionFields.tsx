@@ -63,6 +63,22 @@ export function PanoramaAttentionFields({ t, cameras, profile, occupied, onChang
       }} />
       <span className="ptzAttentionMuted">{t("ext.ptz_attention.panorama.region_help")}</span>
     </label>
+    <label className="ptzAttentionField"><span><input type="checkbox" checked={Boolean(profile.follow_view_updates)}
+      onChange={event => onChange({ ...profile, follow_view_updates: event.target.checked })} /> {t("ext.ptz_attention.panorama.follow")}</span>
+      <span className="ptzAttentionMuted">{t("ext.ptz_attention.panorama.follow_help")}</span>
+    </label>
+    {profile.follow_view_updates ? <div className="ptzAttentionFields">
+      <label className="ptzAttentionField"><span>{t("ext.ptz_attention.panorama.follow_interval")}</span>
+        <input className="input" type="number" min={0.2} max={60} step={0.1}
+          value={profile.follow_interval_seconds ?? 0.5}
+          onChange={event => onChange({ ...profile, follow_interval_seconds: Number(event.target.value) })} />
+      </label>
+      <label className="ptzAttentionField"><span>{t("ext.ptz_attention.panorama.follow_timeout")}</span>
+        <input className="input" type="number" min={0.5} max={5} step={0.1}
+          value={profile.follow_observation_timeout_seconds ?? 2}
+          onChange={event => onChange({ ...profile, follow_observation_timeout_seconds: Number(event.target.value) })} />
+      </label>
+    </div> : null}
     {sharedObserver ? <label className="ptzAttentionField"><span><input type="checkbox" checked={profile.same_head_observer_acknowledged}
       onChange={event => onChange({ ...profile, same_head_observer_acknowledged: event.target.checked })} /> {t("ext.ptz_attention.wizard.camera.shared_ack")}</span></label> : null}
   </section>;

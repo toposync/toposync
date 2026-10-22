@@ -21,9 +21,19 @@ def mapping_visual(packet, *, world_field="world", produced=True):
         and isinstance(world, dict) and all(type(world.get(axis)) in (int, float)
             and math.isfinite(world[axis]) and abs(world[axis]) <= 10_000_000 for axis in ("x", "z")))
     pose = packet.payload.get("pan_tilt_zoom_state") or {}
-    if pose and (pose.get("geometry_safe") is not True or pose.get("move_status") == "moving"):
+    localized = mapping.get("visual_localization") or {}
+    capture = packet.payload.get("capture_evidence")
+    visual_pose = (mapping.get("pose_evidence") == "visual_frame_rotation"
+        and isinstance(localized, dict) and isinstance(capture, dict) and bool(capture)
+        and localized.get("capture_evidence") == capture
+        and bool(localized.get("source_artifact_id")) and bool(localized.get("geometry_digest")))
+    if (not visual_pose and pose
+            and (pose.get("geometry_safe") is not True or pose.get("move_status") == "moving")):
         valid = False
         properties["mapping_reason"] = "unsafe_pose"
+    if mapping.get("pose_evidence") == "visual_frame_rotation" and not visual_pose:
+        valid = False
+        properties["mapping_reason"] = "mapping_frame_mismatch"
     source_anchor = subject.get("source_anchor") or {}
     if source_anchor and source_anchor.get("capture_evidence") != packet.payload.get("capture_evidence"):
         valid = False

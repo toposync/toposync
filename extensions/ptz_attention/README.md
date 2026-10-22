@@ -12,11 +12,11 @@ boxes and legacy preferred destinations are rejected. Resolving through
 `cameras.panorama.resolve_target` is read-only and returns a normalized ray bound
 to source, composition, element, job and revision.
 
-`shadow` records decisions with zero motor commands. Optional discrete following
+`shadow` records decisions with zero motor commands. Optional following
 uses fresh `capture_evidence`, stable capture instance/generation and increasing
 sequence/publication time to confirm target changes. Minimum dwell, movement
 budget, hard timeout and stale timeout remain active. Manual ownership interrupts
-preview and requires explicit resumption. It is not continuous motor tracking.
+preview and requires explicit resumption.
 
 `live_panorama` dispatches `cameras.panorama.navigate_attention` under the existing
 attention lease, without a second acquisition or new presets. Zoom stays fixed.
@@ -26,10 +26,32 @@ epoch. Cancellation drains navigation before fenced cleanup. Manual takeover
 never triggers a return. Interrupted sessions remain faulted until explicit,
 qualified recovery; process restart never guesses a movement.
 
+With `follow_view_updates`, `live_panorama` supplies the latest qualified ray to
+the visual navigator during an approach. `follow_interval_seconds` limits new
+approaches; `follow_observation_timeout_seconds` stops corrections when images
+expire. A fresh observation can restart confirmation after temporary loss;
+explicit CLOSE and changed capture generations cannot reopen that event.
+Higher-priority events cancel and drain the previous approach before taking
+control. This is bounded visual feedback, with physical latency dependent on
+capture, localization and the device's observed response.
+Successful stopped operations can retain their measured local motor response in
+memory for up to five minutes, bound to the exact optical identity and panorama
+revision. Fresh localization invalidates an axis response beyond 15 degrees of
+view change. Reuse never substitutes for fresh arrival evidence, extends its own
+expiry, or survives a process restart. Uncertain stop or navigation failures
+discard it; observation expiry does not qualify a new response.
+
 Software tests do not qualify hardware. Live attention requires an exact private
 qualification record for the mapping revision, source identity, composition,
 source artifact and geometry, with independently verified arrival and return.
-This delivery does not create that record or promote cameras automatically.
+An explicitly requested
+`POST /api/cameras/cameras/{camera_id}/panorama/{job_id}/qualify-attention`,
+with `revision`, `home` and a distinct `target` in world coordinates, performs a
+supervised home→target→home trip. Only observed movement, arrival within 12
+pixels, home/return within 3 pixels and confirmed Stop can produce the record.
+Failure or cancellation removes qualification. Reads never qualify a device.
+Qualification of one source does not certify a second zoom lens or moving-target
+performance; both need observed image evidence.
 
 Settings > PTZ Attention creates panorama profiles by default. Previous view
 profiles and direct operator configurations remain available for explicit review.

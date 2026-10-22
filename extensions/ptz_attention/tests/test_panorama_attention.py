@@ -21,6 +21,231 @@ def event(clock, name="one", kind="low", lifecycle="open", x=.5):
     return intent(name, kind, lifecycle, clock).model_copy(update={"target": AttentionTarget(world_anchor={"x": x, "z": 0})})
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["intent", "pause", "resume", "return"])
+async def test_recovery_keeps_original_failure_until_return_is_verified(operation):
+    clock, _, _, _, _, _, store, controller = environment(mode="live_panorama", qualified=True)
+    current = store.list_profiles()[0]
+    runtime = controller._runtime_for(current)
+    runtime.state = "ACQUIRING"
+    await controller._fault(current, runtime, "visual_arrival_unconfirmed")
+    assert runtime.recovery_required
+    if operation == "intent":
+        await controller.submit_intent(event(clock))
+    elif operation == "pause":
+        with pytest.raises(RuntimeError, match="return_home_required"):
+            await controller.pause(current.id)
+    else:
+        store.replace_profile(current.model_copy(update={"mode": "paused", "resume_mode": "live_panorama"}))
+        if operation == "resume":
+            with pytest.raises(RuntimeError, match="return_home_required"):
+                await controller.resume(current.id)
+        else:
+            store.replace_profile(current.model_copy(update={"mode": "shadow"}))
+            assert await controller.return_home(current.id) is False
+    assert controller.status()[0].fault == "visual_arrival_unconfirmed"
+    assert runtime.recovery_required
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish", ["arrival", "expired", "closed", "preempt"])
+async def test_live_follow_uses_latest_target_and_stops_on_loss(finish):
+    clock, camera, services, _, calls, cancelled, store, controller = environment(
+        mode="live_panorama", qualified=True, blocked=True)
+    store.replace_profile(panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.25, min_focus_seconds=0, close_grace_seconds=1,
+        settle_timeout_seconds=10))
+    release = asyncio.Event()
+    async def navigate(**kwargs):
+        calls.append(kwargs)
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        destination = kwargs["target_provider"]()
+        camera.motion_epoch += 1
+        return {**kwargs, "destination": destination, "returning": False,
+            "stop_confirmed": True, "motion_epoch": camera.motion_epoch,
+            "evidence": {"verified": True, "kind": "visual_aim_verified",
+                "measurement": {"center_error_pixels": 1},
+                "capture_evidence": {"capture_instance": "decoder", "generation": 1,
+                    "sequence": 20, "published_at": clock()}}}
+    services.register("cameras.panorama.navigate_attention", navigate)
+    async def observe(sequence, x, lifecycle="update", name="one", kind="low"):
+        await controller.submit_intent(event(clock, name=name, kind=kind, lifecycle=lifecycle, x=x)
+            .model_copy(update={"capture_evidence": {"capture_instance": "decoder", "generation": 1,
+                "sequence": sequence, "published_at": clock()}}))
+    await observe(1, .1, "open")
+    clock.advance(.3)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    assert controller.status()[0].state == "ACQUIRING"
+    clock.advance(.1)
+    await observe(2, .7)
+    assert calls[0]["target_provider"]()["ray"][0] == pytest.approx(.7 / math.sqrt(1.49))
+    assert camera.acquires == 1, "The controller must retain its own lease while following"
+    if finish == "arrival":
+        release.set()
+        await asyncio.sleep(0)
+        await controller.tick_once()
+        assert controller.status()[0].state == "FOCUSED"
+        assert controller.status()[0].active_target["ray"][0] == pytest.approx(.7 / math.sqrt(1.49))
+    elif finish == "preempt":
+        clock.advance(.1)
+        await observe(1, -.5, "open", "priority", "high")
+        clock.advance(.3)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        assert cancelled.is_set() and controller.status()[0].active_event_key.endswith(":priority")
+    else:
+        if finish == "closed":
+            clock.advance(.1)
+            await observe(3, .7, "close")
+        else:
+            clock.advance(2.1)
+            with pytest.raises(RuntimeError, match="expired"):
+                calls[0]["target_provider"]()
+            await controller.tick_once()
+        assert cancelled.is_set() and controller.status()[0].state == "GRACE"
+        assert not any(item.action == "focus_acquired" for item in store.list_decisions()[0])
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
+async def test_navigator_observation_expiry_between_ticks_enters_grace_only_after_stop(stopped):
+    from fastapi import HTTPException
+    clock, camera, services, _, calls, _, store, controller = environment(
+        mode="live_panorama", qualified=True)
+    store.replace_profile(panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.25, close_grace_seconds=5))
+
+    async def expired(**kwargs):
+        raise HTTPException(409, detail={"code": "following_observation_expired"})
+
+    services.register("cameras.panorama.navigate_attention", expired)
+    await controller.submit_intent(event(clock).model_copy(update={"capture_evidence": {
+        "capture_instance": "decoder", "generation": 1, "sequence": 1, "published_at": clock()}}))
+    clock.advance(.3)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    if not stopped:
+        original = services.call
+
+        async def unknown_stop(name, **kwargs):
+            result = await original(name, **kwargs)
+            if name == "cameras.control.snapshot":
+                result = {**result, "geometry_safe": False, "motion_state": "unknown"}
+            return result
+
+        services.call = unknown_stop
+    await controller.tick_once()
+    assert controller.status()[0].state == ("GRACE" if stopped else "FAULT")
+    assert not any(item.action == "focus_acquired" for item in store.list_decisions()[0])
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_lost_active_target_outside_region_keeps_last_qualified_grace_position():
+    clock, _, _, _, _, _, store, controller = environment(
+        mode="live_panorama", qualified=True, blocked=True)
+    current = panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.25, min_focus_seconds=0, close_grace_seconds=5)
+    store.replace_profile(current)
+
+    async def observe(sequence, x, lifecycle):
+        await controller.submit_intent(event(clock, x=x, lifecycle=lifecycle).model_copy(update={
+            "capture_evidence": {"capture_instance": "decoder", "generation": 1,
+                "sequence": sequence, "published_at": clock()}}))
+
+    await observe(1, .5, "open")
+    clock.advance(.3)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    clock.advance(2.1)
+    await controller.tick_once()
+    assert controller.status()[0].state == "GRACE"
+    runtime = controller._runtime_for(current)
+    previous = runtime.events[runtime.active_key]
+    clock.advance(.1)
+    await observe(2, 3, "update")
+    await controller.tick_once()
+    assert controller.status()[0].state == "GRACE"
+    assert runtime.events[runtime.active_key] is previous
+    assert previous.resolved is not None and previous.observation_expired
+    clock.advance(.1)
+    await observe(3, .7, "update")
+    assert controller.status()[0].state == "CANDIDATE"
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_close", [False, True])
+async def test_live_follow_reacquires_fresh_observation_but_not_a_closed_event(explicit_close):
+    clock, camera, services, _, calls, cancelled, store, controller = environment(
+        mode="live_panorama", qualified=True, blocked=True)
+    store.replace_profile(panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.25, min_focus_seconds=0, close_grace_seconds=5,
+        settle_timeout_seconds=10))
+
+    async def observe(sequence, lifecycle):
+        await controller.submit_intent(event(clock, lifecycle=lifecycle).model_copy(update={
+            "capture_evidence": {"capture_instance": "decoder", "generation": 1,
+                "sequence": sequence, "published_at": clock()}}))
+
+    await observe(1, "open")
+    clock.advance(.3)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    assert controller.status()[0].state == "ACQUIRING"
+    clock.advance(2.1)
+    await controller.tick_once()
+    assert controller.status()[0].state == "GRACE"
+    if explicit_close:
+        await observe(2, "close")
+    clock.advance(.1)
+    await observe(3, "update")
+    if explicit_close:
+        assert controller.status()[0].state == "GRACE"
+        assert len(calls) == 1
+    else:
+        assert controller.status()[0].state == "CANDIDATE"
+        clock.advance(.3)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        assert controller.status()[0].state == "ACQUIRING"
+        assert len(calls) == 2
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_live_follow_waits_for_a_fresh_update_after_inference_warmup():
+    clock, camera, services, _, calls, cancelled, store, controller = environment(
+        mode="live_panorama", qualified=True, blocked=True)
+    store.replace_profile(panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.25, stale_timeout_seconds=5))
+    await controller.submit_intent(event(clock).model_copy(update={"capture_evidence": {
+        "capture_instance": "decoder", "generation": 1, "sequence": 1, "published_at": clock() - 3}}))
+    assert controller.status()[0].state == "IDLE" and camera.acquires == 0
+    clock.advance(.1)
+    await controller.submit_intent(event(clock, lifecycle="update").model_copy(update={"capture_evidence": {
+        "capture_instance": "decoder", "generation": 1, "sequence": 2, "published_at": clock()}}))
+    assert controller.status()[0].state == "CANDIDATE"
+    clock.advance(.3)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    assert controller.status()[0].state == "ACQUIRING" and len(calls) == 1
+    await controller.shutdown()
+    store.close()
+
+
 def environment(mode="shadow", qualified=False, failure=None, blocked=False):
     clock, camera = Clock(), LiveCamera()
     services = live_services(camera)
@@ -156,6 +381,28 @@ async def test_relational_envelope_can_enter_region_after_rejected_open():
     await controller.submit_intent(inside.model_copy(update={"lifecycle": "close"}))
     assert not any(item.reason == "unknown_close" for item in store.list_decisions()[0])
     assert not calls and not camera.commands and not camera.acquires
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["IDLE", "ACQUIRING", "RETURNING"])
+async def test_unrelated_target_outside_region_does_not_fault_or_interrupt_navigation(state):
+    clock, camera, services, _, calls, cancelled, store, controller = environment(
+        mode="live_panorama", qualified=True, blocked=True)
+    if state == "ACQUIRING":
+        await controller.submit_intent(event(clock))
+    elif state == "RETURNING":
+        assert await controller.return_home("front_attention")
+    await asyncio.sleep(0)
+    await controller.submit_intent(event(clock, name="outside", kind="high", x=3))
+    assert controller.status()[0].state == state
+    assert not controller.status()[0].fault and not cancelled.is_set()
+    rejected = next(item for item in store.list_decisions()[0] if item.reason == "target_outside_attention_region")
+    assert rejected.action == "intent_rejected"
+    if state == "IDLE":
+        await controller.submit_intent(event(clock, name="outside", kind="high", lifecycle="update", x=.2))
+        assert controller.status()[0].state == "ACQUIRING"
     await controller.shutdown()
     store.close()
 

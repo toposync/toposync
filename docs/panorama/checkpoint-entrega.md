@@ -1,4 +1,56 @@
-# Panorâmica ao vivo — retorno preciso ainda reprovado, 04/10/2026
+# Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
+
+## Atenção física e ensaio local supervisionado — 20/10/2026
+
+Foi acrescentado um percurso explícito de qualificação da atenção, com ida e
+retorno observados sob a mesma posse de controle. O registro exige movimento
+real, vínculo exato com a referência, chegada até 12 pixels, retorno até 3 pixels
+e parada confirmada; leituras e testes sintéticos não produzem qualificação.
+
+O piloto da Frente completou um percurso real: chegada com erro de 11,37 pixels
+em 29,99 segundos e retorno com 0,44 pixel em 15,86 segundos, na análise de largura
+960. Houve tentativas anteriores reprovadas, preservadas fora do repositório.
+Uma rodada aprovada não comprova repetibilidade, enquadramento da lente Zoom nem
+acompanhamento de pessoas e veículos em movimento. A latência observada ainda
+é inadequada para passagem rápida.
+
+O modo panorâmico físico agora recebe atualizações qualificadas do alvo durante
+a aproximação. Observações vencidas interrompem correções; observações novas
+podem reiniciar a confirmação após perda temporária, sem reabrir CLOSE explícito.
+A ausência de resposta só permite ampliar sondagens após observação causal
+de imobilidade. Respostas com atraso inicial são tratadas separadamente por
+sentido, sem converter duração em ângulo nem reduzir tolerâncias.
+
+Os ensaios de integração também identificaram atualização ausente do estado
+ONVIF após a parada visual e evidência de chegada anterior à limpeza. A execução
+passa a confirmar ambos e medir o alvo na imagem final parada. Seguimento móvel,
+latência ponta a ponta e conservação do rastro mundial permanecem em validação
+física; este checkpoint não declara sua aprovação.
+
+Passagens reais posteriores produziram pequenas correções mecânicas, mas não
+mantiveram ciclista e pessoa em movimento centralizados. A lente Zoom mostrou
+o alvo cortado na borda. Um percurso curto adicional passou com chegada de
+5,81 pixels em 2,82 segundos e retorno de 1,56 pixel em 5,12 segundos; outro
+percurso maior reprovou por divergência no retorno. Não há aprovação geral de
+repetibilidade nem de seguimento móvel.
+
+Foram corrigidos encerramento lento do decodificador, recusa de eventos fora da
+região interrompendo o controlador, perda da posição válida durante a espera por
+reaparecimento e substituição enganosa da causa de falha por reinício. A resposta
+do motor não é recalculada a partir de deslocamento abaixo da resolução visual
+nem transferida de uma velocidade reduzida para a velocidade normal. Respostas
+de operações aprovadas podem ser reutilizadas em memória por até cinco minutos,
+sob vínculo exato e limite de mudança de orientação, sem renovar sua validade por
+simples reutilização. A preparação e o histórico recente de navegação são
+registrados separadamente da confirmação de chegada.
+Uma única ultrapassagem pequena do alvo pode receber correção, com localização
+recente e dentro de 12 pixels; repetição ou afastamento continua interrompendo a
+operação. Isso não altera o limite de 3 pixels para aceitar o retorno.
+
+Testes sintéticos percorrem projeção, identidade e histórico mundial de pessoa e
+carro durante rotação da câmera; inspeção de quadro com pose visual qualificada
+não depende de posição numérica ONVIF estável. Isso não certifica o rastro completo
+de uma notificação real nem a calibração cruzada da lente Zoom.
 
 ## Diagnóstico da atenção por eventos — 20/10/2026
 

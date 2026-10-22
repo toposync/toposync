@@ -148,6 +148,8 @@ class AttentionProfile(StrictModel):
     max_movements_per_minute: int = Field(default=6, ge=1, le=120)
     minimum_target_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     follow_view_updates: bool = False
+    follow_interval_seconds: float = Field(default=0.5, ge=0.2, le=60.0)
+    follow_observation_timeout_seconds: float = Field(default=2.0, ge=0.5, le=5.0)
 
     @field_validator(
         "id",
@@ -209,9 +211,9 @@ class AttentionProfile(StrictModel):
         elif effective_mode == "live_panorama" or self.home_target is not None or self.attention_region:
             raise ValueError("panorama_element_id is required for panoramic targets")
         if self.follow_view_updates and (
-            effective_mode in {"live_preset", "live_panorama"} or self.candidate_confirm_seconds <= 0
+            effective_mode == "live_preset" or self.candidate_confirm_seconds <= 0
         ):
-            raise ValueError("following views requires shadow mode and positive confirmation time")
+            raise ValueError("following views requires shadow or live_panorama mode and positive confirmation time")
         if self.ptz_device_id != self.camera_id:
             raise ValueError("ptz_device_id must equal camera_id")
         if self.mode == "paused" and self.resume_mode is None:

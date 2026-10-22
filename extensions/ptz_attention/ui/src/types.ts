@@ -99,6 +99,8 @@ export type AttentionProfile = {
   name: string;
   mode: AttentionExecutionMode;
   follow_view_updates?: boolean;
+  follow_interval_seconds?: number;
+  follow_observation_timeout_seconds?: number;
   resume_mode?: AttentionResumableMode | null;
   camera_id: string;
   source_id: string;

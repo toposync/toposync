@@ -2276,8 +2276,10 @@ def test_live_navigation_prioritizes_arrival_error_over_motor_duration():
     assert navigator.pulses == ["tilt"]
 
 
-@pytest.mark.parametrize('stationary_verified,effective_pulse', [(True, 2), (True, 3), (True, None), (False, None)])
-def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stationary_verified, effective_pulse):
+@pytest.mark.parametrize('stationary_verified,effective_pulse,initial_response', [
+    (True, 2, False), (True, 3, False), (True, None, False), (False, None, False), (True, 2, True),
+])
+def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stationary_verified, effective_pulse, initial_response):
     from types import SimpleNamespace
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
@@ -2290,6 +2292,9 @@ def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stati
             super().__init__(scanner, localizer, maximum_commands=16)
             self.error = np.array([0., -.025])
             self.pulses = []
+            if initial_response:
+                self.response['tilt'] = np.array([0., .3])
+                self.direction_responses[('tilt', 1)] = (.05, np.array([0., .015]))
 
         async def locate(self):
             return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
@@ -2317,7 +2322,11 @@ def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stati
         with pytest.raises(PanoramaCaptureError, match='visual_response_unavailable'):
             asyncio.run(navigator.aim([1, 0, 0]))
     expected = [.12, .24] if effective_pulse == 2 else [.12, .24, .48]
-    assert navigator.pulses == (expected if stationary_verified else [.12])
+    if initial_response:
+        assert len(navigator.pulses) == 2
+        assert .05 < navigator.pulses[0] < navigator.pulses[1] <= .48
+    else:
+        assert navigator.pulses == (expected if stationary_verified else [.12])
 
 
 def test_moving_destination_replaces_initial_ray_before_visual_arrival():

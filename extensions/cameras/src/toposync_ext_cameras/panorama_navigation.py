@@ -1365,7 +1365,8 @@ class VisualNavigator:
             direction_key = (axis, 1 if amount > 0 else -1)
             directional = self.direction_responses.get(direction_key)
             direction_probe = bool(not missing and directional is None
-                and any(key[0] == axis for key in self.direction_responses)
+                and (any(key[0] == axis for key in self.direction_responses)
+                     or direction_key in self.stationary_durations)
                 and any(key[0] == axis for key in self.stationary_durations))
             fine_response_qualified = (fine_control and axis in self.response
                 and _fine_correction_has_measured_response(axis, amount, error, target, self.trace))
@@ -1496,6 +1497,10 @@ class VisualNavigator:
                     self.stationary_durations[direction_key] = max(
                         self.stationary_durations.get(direction_key, 0), abs(pulse_amount))
                     if directional is not None and directional[0] > abs(pulse_amount):
+                        continue
+                    if directional is not None and abs(pulse_amount) < .48:
+                        # A verified dead zone invalidates the earlier directional response.
+                        self.direction_responses.pop(direction_key, None)
                         continue
                 if ((axis in missing or direction_probe) and self.last_pulse_stationary
                         and abs(amount) < 0.48

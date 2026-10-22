@@ -215,6 +215,52 @@ weights prevent initialization; restoring the compatible model preserves sensor
 identity and references but requires fresh temporal confirmation. A previous
 confirmed value is not restored as current state.
 
+### Visual sensor telemetry
+
+The existing authenticated numeric telemetry endpoint exposes these series for
+the visual operator node. Use `metric_id=visual_state.duration.<name>_ms` at
+`GET /api/pipelines/{pipeline_name}/telemetry/numeric?node_id={node_id}&metric_id=...`.
+The normal ingress prefix and pipeline read permission apply.
+
+| Duration name | Measured interval |
+| --- | --- |
+| `acquisition` | Verified physical capture to local receipt; absent when that evidence is unavailable |
+| `input_age` | Known capture/receipt timestamp to admission, including upstream delay |
+| `admission` | Validation and immutable image copy for accepted frames |
+| `preparation` | Canonical region preparation and its evidence checks |
+| `local_wait` | Admitted frame waiting in the operator's latest-frame slot |
+| `inference_queue` | Native inference submission to entry into the protected model call |
+| `inference` | The local model call itself, excluding its queue |
+| `comparison` | Local reference comparison |
+| `ai_wait` | Prepared frame waiting for the multimodal worker |
+| `ai_roundtrip` | Multimodal router call, including policy checks, provider queues and attempts |
+| `confirmation` | First supporting observation in the winning sequence to the decision that confirms it |
+| `publication` | Local pipeline emit call; does not measure Home Assistant receipt or physical actuation |
+| `evidence_age` | Age of the last completed analysis when publishing |
+
+These intervals overlap; do not add them to claim total end-to-end latency.
+Receipt-based freshness cannot establish physical acquisition latency. A native
+call cancelled before completion has no completed inference-duration sample.
+Duration histograms use 100 bins over 0–10,000ms; longer values occupy the last
+bin. Raw bucket counts, sums and extrema remain available, but histogram
+percentiles are approximate and cannot certify sub-bin latency targets.
+
+`visual_state.events.<name>` records received, replayed and discarded inputs;
+unknown acquisition time; replaced, invalidated, expired and cancelled local/AI
+work; queued AI work, router requests and reported attempts; AI failures/limits;
+and state confirmation, expiration and unavailability transitions. Use the sum of
+event values within a time window, not sample count, for totals such as attempts.
+Expiry and confirmation are not counted again on every status publication.
+Drops before admission remain in the existing input-channel statistics.
+
+`visual_state.reason.<reason>` counts fixed, known abstention/unavailability causes;
+unknown provider reasons map to `other`. Series dimensions are only the existing
+pipeline and node plus a fixed metric name. No class descriptions, response text,
+image, reference identifier, frame identity or provider/model name is added.
+The existing bounded telemetry store, retention and eviction limits still apply;
+these are windowed diagnostics, not durable lifetime accounting. Diagnostics
+failures do not change the classification or publication.
+
 ### Local execution
 
 The operator currently accepts a saved local pipeline with one supported camera

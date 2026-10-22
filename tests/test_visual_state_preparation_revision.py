@@ -74,6 +74,8 @@ def test_capture_runner_and_runtime_receive_identical_canonical_pixels_with_real
                 pass
 
         runtime = VisualStateRuntime(configuration.model_dump(), original.dependencies)
+        from toposync_ext_vision.visual_state.telemetry import VisualStateTelemetry
+        runtime._telemetry = VisualStateTelemetry(context, clock=runtime._clock, unix_clock=runtime._unix_clock)
         runtime._prefix, runtime._backend = prefix, Backend()
         runner = VisualStatePreviewRunner()
         try:

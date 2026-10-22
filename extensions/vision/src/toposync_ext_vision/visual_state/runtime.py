@@ -26,6 +26,7 @@ from .inspection import decision_visuals
 from .preparation import VisualRegionUnavailable, prepare_visual_frame, visual_preparation_revision
 from .schemas import MultimodalEvaluation, Observation, ReferenceEvidence, SuggestionProvenance, VisualStateConfig
 from .state import VisualStateReducer
+from .telemetry import VisualStateTelemetry
 
 
 class VisualStateRuntime(BaseOperatorRuntime):
@@ -61,6 +62,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self._last_publication = None
         self._opened = False
         self._release_publication = None
+        self._telemetry = None
 
     def _native(self, function, *arguments):
         with self._native_lock:
@@ -120,6 +122,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
                 )
 
     async def prepare(self, context):
+        self._telemetry = VisualStateTelemetry(context, clock=self._clock, unix_clock=self._unix_clock)
         self.config.validate_activation()
         if self.dependencies.services is None:
             raise ValueError("visual sensor requires local configuration and private references")
@@ -177,16 +180,20 @@ class VisualStateRuntime(BaseOperatorRuntime):
                 raise
 
     def _invalidate(self, reason):
+        self._telemetry.reason(reason)
         self._token += 1
         return self._reducer.invalidate(reason)
 
     def _admit(self, packet):
+        started = self._clock()
         if packet.lifecycle == Lifecycle.CLOSE:
             return None
+        self._telemetry.event("input_received")
         raw = packet.payload.get("capture_evidence")
         if isinstance(raw, dict) and self._last_sample is not None and raw.get("capture_instance") == self._instance:
             generation, sequence = raw.get("generation"), raw.get("sequence")
             if type(generation) is int and type(sequence) is int and (generation, sequence) <= self._last_sample:
+                self._telemetry.event("input_replayed")
                 return None
         try:
             artifact = packet.artifacts.get(self.config.input_artifact_name)
@@ -201,9 +208,11 @@ class VisualStateRuntime(BaseOperatorRuntime):
                 now_monotonic=now, now_unix=self._unix_clock(),
             )
         except (PipelinePreviewError, ValueError, TypeError, KeyError):
+            self._telemetry.event("input_discarded")
             self._invalidate("input_unobservable")
             return None
         if evidence["source_identity"] != self.config.source_identity:
+            self._telemetry.event("input_discarded")
             self._invalidate("source_mismatch")
             return None
         sample = evidence["sample"]
@@ -211,9 +220,18 @@ class VisualStateRuntime(BaseOperatorRuntime):
         raw = packet.payload["capture_evidence"]
         observed = raw["captured_monotonic"] if raw.get("physical_timestamp_verified") else raw["received_monotonic"]
         if observed < self._last_observed or instance in self._retired_instances:
+            self._telemetry.event("input_replayed")
             return None
+        self._telemetry.duration("input_age", observed)
+        received = raw.get("received_monotonic")
+        if (raw.get("physical_timestamp_verified") and type(received) in (int, float)
+                and math.isfinite(received) and observed <= received <= self._clock()):
+            self._telemetry.duration("acquisition", observed, ended=received)
+        else:
+            self._telemetry.event("acquisition_unknown")
         if instance != self._instance:
             if len(self._retired_instances) >= 64:
+                self._telemetry.event("input_discarded")
                 self._invalidate("capture_identity_churn")
                 return None
             if self._instance is not None:
@@ -229,15 +247,35 @@ class VisualStateRuntime(BaseOperatorRuntime):
         self._last_observed = observed
         frozen = freeze_reference_packet(packet, input_artifact_name=self.config.input_artifact_name)
         frozen.artifacts[self.config.input_artifact_name].data.flags.writeable = False
-        return frozen, evidence, observed, self._token
+        self._telemetry.duration("admission", started)
+        return frozen, evidence, observed, self._token, self._clock()
 
     async def _analyze(self, context, packet):
-        frame, evidence = await prepare_visual_frame(self.config, self._prefix, packet, self.dependencies.services,
-                                                     clock=self._clock, unix_clock=self._unix_clock)
+        started = self._clock()
+        try:
+            frame, evidence = await prepare_visual_frame(self.config, self._prefix, packet, self.dependencies.services,
+                                                         clock=self._clock, unix_clock=self._unix_clock)
+        finally:
+            self._telemetry.duration("preparation", started)
         vector = None
         if self.config.strategy != "direct":
-            vector = await context.run_blocking(self._native, self._backend.embed, frame, mode="thread_pool",
-                concurrency_key=f"vision.visual_state:{self.config.sensor_id}", max_concurrency=1)
+            queued = self._clock()
+            timing = []
+
+            def embed():
+                started = self._clock()
+                try:
+                    return self._backend.embed(frame)
+                finally:
+                    timing.extend((started, self._clock()))
+
+            try:
+                vector = await context.run_blocking(self._native, embed, mode="thread_pool",
+                    concurrency_key=f"vision.visual_state:{self.config.sensor_id}", max_concurrency=1)
+            finally:
+                if timing:
+                    self._telemetry.duration("inference_queue", queued, ended=timing[0])
+                    self._telemetry.duration("inference", timing[0], ended=timing[1])
         return vector, evidence, frame
 
     def _observation(self, evidence, observed, *, started, method="local", **decision):
@@ -259,12 +297,17 @@ class VisualStateRuntime(BaseOperatorRuntime):
         if remaining <= 0:
             return {"reason": "visual_state_deadline"}
         # The router owns monotonic deadlines and native cleanup; convert the testable observation clock once.
-        return await self.dependencies.services.call("ai.infer.classify_visual_state",
-            image=frame, classes=self._ai_classes, reference_images=dict(self._ai_references),
-            sensor_id=self.config.sensor_id, profile_id=self.config.ai_profile_id,
-            scene_description=self.config.scene_description, deadline_monotonic=time.monotonic() + remaining,
-            max_attempts=self.config.ai_max_attempts, allow_remote_images=self.config.ai_allow_remote_images,
-            sensor_limits=self.config.ai_limits.model_dump())
+        started = self._clock()
+        self._telemetry.event("ai_requests")
+        try:
+            return await self.dependencies.services.call("ai.infer.classify_visual_state",
+                image=frame, classes=self._ai_classes, reference_images=dict(self._ai_references),
+                sensor_id=self.config.sensor_id, profile_id=self.config.ai_profile_id,
+                scene_description=self.config.scene_description, deadline_monotonic=time.monotonic() + remaining,
+                max_attempts=self.config.ai_max_attempts, allow_remote_images=self.config.ai_allow_remote_images,
+                sensor_limits=self.config.ai_limits.model_dump())
+        finally:
+            self._telemetry.duration("ai_roundtrip", started)
 
     def _multimodal_result(self, result, evidence, observed, started):
         value = result.model_dump() if hasattr(result, "model_dump") else result
@@ -354,6 +397,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
 
     async def _publish(self, context, processing_status):
         state = self._reducer.tick().model_copy(update={"processing_status": processing_status, "ai_evaluation": self._ai_evaluation})
+        self._telemetry.state(state, self._reducer.confirmation_duration_ms)
         marker = (state.runtime_epoch, state.state_version, processing_status, self._ai_evaluation)
         if marker == self._last_publication or context.is_cancelled() or self._closed.is_set():
             return
@@ -364,7 +408,11 @@ class VisualStateRuntime(BaseOperatorRuntime):
             payload={"visual_state": state.model_dump(mode="json")},
         )
         self._opened = True
+        started = self._clock()
         await context.emit(output, timeout_s=0)
+        self._telemetry.duration("publication", started)
+        if state.analysis_age_ms is not None:
+            self._telemetry.measure("evidence_age", state.analysis_age_ms + (self._clock() - started) * 1000)
         if context.inspection_active():
             context.inspect("analyzed", output, reason=state.reason, model_id=self.config.model_id,
                             visuals=decision_visuals(state))
@@ -393,23 +441,31 @@ class VisualStateRuntime(BaseOperatorRuntime):
                         token = self._token
                         admitted = self._admit(packet)
                         if token != self._token:
+                            self._telemetry.event("local_invalidated", int(pending is not None))
+                            self._telemetry.event("ai_invalidated", int(ai_pending is not None))
                             pending = None
                             ai_pending = None
                         if admitted is not None:
+                            if pending is not None:
+                                self._telemetry.event("local_replaced")
                             pending = admitted
                     reader = asyncio.create_task(context.read())
                 if worker is not None and worker in ready:
                     try:
                         vector, evidence, prepared_frame = worker.result()
-                        frozen, _, observed, token = active
+                        frozen, _, observed, token, _ = active
                         if self._fresh(observed, token):
                             needs_ai = self.config.strategy == "direct"
                             if not needs_ai:
+                                compared = self._clock()
                                 decision = compare_references(
                                     self.config, vector, self._references, model_revision=self._backend.revision,
                                     preparation_revision=evidence["preparation_revision"],
                                     current_class_id=self._reducer.current_class_id,
                                 )
+                                self._telemetry.duration("comparison", compared)
+                                if decision.acceptance == "abstain":
+                                    self._telemetry.reason(decision.reason)
                                 observation = self._observation(evidence, observed, started=analysis_started,
                                     class_id=decision.class_id, acceptance=decision.acceptance, similarity=decision.similarity,
                                     margin=decision.margin, reference_ids=decision.reference_ids, reason=decision.reason)
@@ -417,6 +473,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
                                     "ambiguous_classes", "low_similarity",
                                 }
                                 if not needs_ai:
+                                    self._telemetry.event("ai_superseded", int(ai_pending is not None))
                                     ai_pending = None
                                     self._reducer.observe(observation)
                             if needs_ai:
@@ -425,40 +482,56 @@ class VisualStateRuntime(BaseOperatorRuntime):
                                     reason="multimodal_pending")
                                 self._reducer.await_multimodal(deferred)
                                 prepared_frame.flags.writeable = False
-                                ai_pending = prepared_frame, evidence, observed, token, analysis_started
+                                if ai_pending is not None:
+                                    self._telemetry.event("ai_replaced")
+                                ai_pending = prepared_frame, evidence, observed, token, analysis_started, self._clock()
+                                self._telemetry.event("ai_queued")
+                        else:
+                            self._telemetry.event("local_expired")
                     except asyncio.CancelledError:
                         raise
                     except VisualRegionUnavailable:
                         if active[3] == self._token:
                             self._invalidate("region_unavailable")
+                            self._telemetry.event("local_invalidated", int(pending is not None))
+                            self._telemetry.event("ai_invalidated", int(ai_pending is not None))
                             pending = None
                             ai_pending = None
                     except PipelinePreviewError:
                         if active[3] == self._token:
                             self._invalidate("input_unobservable")
+                            self._telemetry.event("local_invalidated", int(pending is not None))
+                            self._telemetry.event("ai_invalidated", int(ai_pending is not None))
                             pending = None
                             ai_pending = None
                     except Exception:
                         context.metrics.record_error(RuntimeError("visual_state_local_analysis_failed"))
                         if active[3] == self._token:
                             self._invalidate("local_analysis_failed")
+                            self._telemetry.event("local_invalidated", int(pending is not None))
+                            self._telemetry.event("ai_invalidated", int(ai_pending is not None))
                             pending = None
                             ai_pending = None
                             failed = True
                     worker = active = None
                 if ai_worker is not None and ai_worker in ready:
-                    prepared_frame, evidence, observed, token, started = ai_active
+                    prepared_frame, evidence, observed, token, started, _ = ai_active
                     superseded = False
                     try:
                         result = ai_worker.result()
                         metadata = result.model_dump() if hasattr(result, "model_dump") else result
                         metadata = metadata if isinstance(metadata, dict) else {}
+                        attempts = metadata.get("attempts")
+                        if isinstance(attempts, list) and len(attempts) <= self.config.ai_max_attempts:
+                            self._telemetry.event("ai_attempts", len(attempts))
                         previous = self._reducer.snapshot().last_analysis
                         superseded = previous is not None and (
                             previous.sample.capture_instance != evidence["sample"]["capture_instance"]
                             or (previous.sample.generation, previous.sample.sequence) >= (
                                 evidence["sample"]["generation"], evidence["sample"]["sequence"]))
                         observation, revision = self._multimodal_result(result, evidence, observed, started)
+                        if observation.acceptance == "abstain":
+                            self._telemetry.reason(observation.reason)
                         self._queue_suggestion(context, prepared_frame, evidence, metadata, observation, revision,
                                                self._ai_evaluation.runtime_epoch)
                         if self._fresh(observed, token) and not superseded:
@@ -470,6 +543,8 @@ class VisualStateRuntime(BaseOperatorRuntime):
                             self._reducer.observe(observation)
                             if observation.region_quality != "valid":
                                 self._token += 1
+                                self._telemetry.event("local_invalidated", int(pending is not None))
+                                self._telemetry.event("ai_invalidated", int(ai_pending is not None))
                                 pending = ai_pending = None
                             status = "complete" if metadata.get("observation") is not None else "limited" if (
                                 re.fullmatch(r"(?:(?:sensor|group)_)?(?:minute|hour|day|month)_limit", observation.reason)
@@ -477,6 +552,10 @@ class VisualStateRuntime(BaseOperatorRuntime):
                             reason = observation.reason
                         else:
                             status, reason = "discarded", "multimodal_observation_expired" if not self._fresh(observed, token) else "multimodal_superseded"
+                        if status in {"failed", "limited"}:
+                            self._telemetry.event(f"ai_{status}")
+                        elif status == "discarded":
+                            self._telemetry.event("ai_expired" if not self._fresh(observed, token) else "ai_superseded")
                         retry_at = metadata.get("retry_at")
                         self._ai_evaluation = self._ai_evaluation.model_copy(update={
                             "status": status, "reason": reason,
@@ -487,6 +566,7 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     except asyncio.CancelledError:
                         raise
                     except Exception:
+                        self._telemetry.event("ai_failed")
                         context.metrics.record_error(RuntimeError("visual_state_multimodal_analysis_failed"))
                         self._ai_evaluation = self._ai_evaluation.model_copy(update={"status": "failed",
                             "reason": "visual_state_multimodal_analysis_failed",
@@ -498,8 +578,9 @@ class VisualStateRuntime(BaseOperatorRuntime):
                     ai_worker = ai_active = None
                 if ai_worker is None and ai_pending is not None:
                     ai_active, ai_pending = ai_pending, None
-                    prepared_frame, evidence, observed, token, started = ai_active
+                    prepared_frame, evidence, observed, token, started, queued = ai_active
                     if self._fresh(observed, token):
+                        self._telemetry.duration("ai_wait", queued)
                         self._reducer.await_multimodal(self._observation(evidence, observed, started=started,
                             method="multimodal", reason="multimodal_pending"))
                         self._ai_evaluation = MultimodalEvaluation(runtime_epoch=self._reducer.runtime_epoch,
@@ -507,16 +588,19 @@ class VisualStateRuntime(BaseOperatorRuntime):
                             reason="multimodal_pending", profile_id=self.config.ai_profile_id)
                         ai_worker = asyncio.create_task(self._infer_multimodal(prepared_frame, observed))
                     else:
+                        self._telemetry.event("ai_expired")
                         ai_active = None
                 if worker is None and pending is not None and self._clock() >= next_evaluation:
                     active, pending = pending, None
-                    frozen, evidence, observed, token = active
+                    frozen, evidence, observed, token, queued = active
                     if (self._clock() - observed) * 1000 <= self.config.temporal.maximum_frame_age_ms and token == self._token:
                         analysis_started = self._clock()
+                        self._telemetry.duration("local_wait", queued)
                         worker = asyncio.create_task(self._analyze(context, frozen))
                         next_evaluation = self._clock() + self.config.evaluation_interval_ms / 1000
                         failed = False
                     else:
+                        self._telemetry.event("local_expired")
                         active = None
         finally:
             self._closed.set()
@@ -524,8 +608,10 @@ class VisualStateRuntime(BaseOperatorRuntime):
                 self._release_publication()
             reader.cancel()
             if worker is not None:
+                self._telemetry.event("local_cancelled", int(not worker.done()))
                 worker.cancel()
             if ai_worker is not None:
+                self._telemetry.event("ai_cancelled", int(not ai_worker.done()))
                 ai_worker.cancel()
             cleanup = asyncio.gather(*(task for task in (reader, worker, ai_worker, self._suggestion_task) if task is not None), return_exceptions=True)
             cancelled = False

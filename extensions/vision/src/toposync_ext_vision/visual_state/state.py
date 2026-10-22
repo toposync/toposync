@@ -30,6 +30,7 @@ class VisualStateReducer:
         self._version = 0
         self._current: Observation | None = None
         self._confirmed_at: float | None = None
+        self.confirmation_duration_ms: float | None = None
         self._history: ConfirmedHistory | None = None
         self._candidate: _Candidate | None = None
         self._hold_until: float | None = None
@@ -161,6 +162,8 @@ class VisualStateReducer:
         self._current = observation
         if switching:
             self._confirmed_at = observation.observed_at + now - observation.observed_monotonic
+            first = self._candidate.first if self._candidate is not None else observation
+            self.confirmation_duration_ms = max(0, (now - first.observed_monotonic) * 1000)
         self._history = ConfirmedHistory(class_id=observation.class_id, observed_at=observation.observed_at)
         self._candidate = None
         self._hold_until = None

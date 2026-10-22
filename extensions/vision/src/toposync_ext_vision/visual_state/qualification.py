@@ -7,9 +7,32 @@ import json
 from toposync.runtime.pipelines.preview import reference_input_pipeline
 
 from ..processing.runtime_backends.embedding import embedding_model_revision
+from .operator import visual_state_cadence_diagnostics
 from .preparation import visual_preparation_revision
 from .schemas import QualificationRecord, VisualStateConfig
 from .store import ReferenceConflict, ReferenceLimit
+
+
+def operational_suspension_reasons(pipeline, sensor, node_id, registry, publication):
+    """Inspect existing diagnostics and a live lease; never infer qualification from their absence."""
+    prefix = reference_input_pipeline(pipeline, node_id)
+    upstream = [{"node_id": node["id"], "operator_id": node["operator"],
+                 "normalized_config": registry.normalize_config(node["operator"], node.get("config"))}
+                for node in prefix.graph["nodes"]]
+    reasons = []
+    if visual_state_cadence_diagnostics(sensor, {"upstream_nodes": upstream}):
+        reasons.append("cadence_incompatible")
+    if publication is None or publication.closed:
+        return [*reasons, "execution_unavailable"]
+    state = publication.read(pipeline, node_id, sensor)
+    if state["status"] == "unavailable":
+        reasons.append("execution_unavailable")
+    elif state["status"] != "confirmed":
+        reasons.append("observation_unconfirmed")
+    elif state["valid_for_ms"] <= 0 or sensor.temporal.validity_ms - state["valid_for_ms"] > sensor.temporal.maximum_gap_ms:
+        # The monotonic lease avoids trusting wall-clock timestamps or refreshing a silent source.
+        reasons.append("observation_too_old")
+    return reasons
 
 
 def context_revision(configuration, pipeline, sensor, node_id, registry, references, stamp):

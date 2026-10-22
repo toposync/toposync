@@ -255,6 +255,8 @@ test("validation records show saved evidence, paginate and become stale after ed
   const read = records.getByRole("button", { name: "Consultar registros salvos", exact: true });
   await read.click();
   await expect(records.locator("li")).toHaveCount(20);
+  await expect(records.getByText("Qualificação operacional suspensa no instante da consulta.", { exact: false })).toBeVisible();
+  await expect(records.getByText("Não há execução compatível disponível agora.", { exact: false })).toBeVisible();
   await expect(records.getByText("Relatório desfavorável compatível com a versão consultada", { exact: false })).toBeVisible();
   await expect(records.getByText("Relatório favorável compatível com a versão consultada", { exact: false })).toHaveCount(2);
   await expect(read).toBeFocused();
@@ -298,6 +300,15 @@ test("validation records handle unsupported hosts, invalid authority and cancell
   await page.route("**/qualification?*", route => route.fulfill({ status: 404, json: {} }));
   await read.click();
   await expect(records.getByText("Este host não oferece registros", { exact: false })).toBeVisible();
+  await page.unroute("**/qualification?*");
+  const snapshot = { context_revision: null, items: [], next_offset: null, physical_qualification: false, activation_authorized: false };
+  await page.route("**/qualification?*", route => route.fulfill({ json: snapshot }));
+  await read.click();
+  await expect(records.getByText("Este host não avaliou a suspensão operacional.", { exact: false })).toBeVisible();
+  await page.unroute("**/qualification?*");
+  await page.route("**/qualification?*", route => route.fulfill({ json: { ...snapshot, context_revision: "a".repeat(64), operational_suspension_reasons: [] } }));
+  await read.click();
+  await expect(records.getByText("Isso não comprova qualificação de latência, precisão ou segurança.", { exact: false })).toBeVisible();
   await page.unroute("**/qualification?*");
   await page.route("**/qualification?*", route => route.fulfill({ json: { context_revision: null, items: [], next_offset: null,
     physical_qualification: true, activation_authorized: true } }));

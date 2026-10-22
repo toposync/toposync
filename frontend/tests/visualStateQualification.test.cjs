@@ -25,13 +25,19 @@ test('records never accept authority, mismatched context, another sensor or unbo
     value => value.items[0].record.decision = 'failed', value => value.items[0].record.scope = 'physical_alarm',
     value => value.items[0].record.report_sha256 = '<script>', value => value.items[0].record.created_at = Infinity,
     value => value.next_offset = -1, value => value.items = Array(21).fill(value.items[0]),
-    value => value.items[0].status = 'certified'];
+    value => value.items[0].status = 'certified', value => value.operational_suspension_reasons = ['approved'],
+    value => value.operational_suspension_reasons = 'execution_unavailable',
+    value => value.operational_suspension_reasons = Array(6).fill('execution_unavailable')];
   for (const mutate of mutations) {
     const value = snapshot(); mutate(value);
     assert.throws(() => model.validateVisualQualification(value, 'sensor'), /qualification_invalid/);
   }
   const suspended = snapshot(); suspended.context_revision = null; suspended.items[0].status = 'suspended';
   assert.equal(model.validateVisualQualification(suspended, 'sensor'), suspended);
+  suspended.operational_suspension_reasons = ['configuration_unverified'];
+  assert.equal(model.validateVisualQualification(suspended, 'sensor'), suspended);
+  suspended.operational_suspension_reasons = [];
+  assert.throws(() => model.validateVisualQualification(suspended, 'sensor'), /qualification_invalid/);
 });
 
 test('qualification reads use requestJson paths and preserve cancellation after response', async () => {

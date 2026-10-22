@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
 from test_identity_api import client  # noqa: F401
-from test_visual_state_runtime import harness
+from test_visual_state_runtime import harness, send
+from toposync_ext_cameras.pipelines.operators import CameraSourceConfig
 from toposync_ext_vision.registry import ModelRegistry
 from toposync_ext_vision.visual_state import api
 from toposync_ext_vision.visual_state.backup import export_backup, restore_backup
-from toposync_ext_vision.visual_state.qualification import qualification_history, record_qualification
+from toposync_ext_vision.visual_state.qualification import operational_suspension_reasons, qualification_history, record_qualification
 from toposync_ext_vision.visual_state.schemas import QualificationSubmission
 from toposync_ext_vision.visual_state.store import ReferenceConflict, ReferenceLimit, ReferenceLimits, VisualReferenceStore
 
@@ -63,6 +67,7 @@ def test_record_input_does_not_accept_authority_or_provenance_from_client(patch)
 
 @pytest.fixture
 def installed(client, tmp_path, monkeypatch):  # noqa: F811
+    client.app.state.pipeline_operator_registry.register_operator(operator_id="camera.source", config_model=CameraSourceConfig)
     async def prepare():
         runtime, _, _, references, saved = await harness(tmp_path)
         return runtime, references, saved
@@ -91,6 +96,7 @@ def test_api_records_actor_and_rejects_stale_context_without_mutating_pipeline(i
     original = host.paths.config_path.read_bytes()
     revision = response.json()["context_revision"]
     assert revision and response.json()["items"] == []
+    assert "execution_unavailable" in response.json()["operational_suspension_reasons"]
     body = submission(revision).model_dump(mode="json")
     result = api_client.post(path, json=body)
     assert result.status_code == 201, result.text
@@ -197,3 +203,88 @@ def test_member_with_pipeline_grants_cannot_read_or_record_qualifications(client
     assert client.post("/api/auth/login", json={"username": "member", "password": "password123", "device_label": "test"}).status_code == 200
     path = "/api/vision/visual-state/sensors/sensor/qualification"
     assert client.get(path).status_code == client.post(path, json=submission().model_dump(mode="json")).status_code == 403
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({"fps": 10}, []),
+    ({"fps": 1}, ["cadence_incompatible"]),
+    ({"fps": 10, "observation_window_id": "window", "keep_capture_when_gate_closed": True}, ["cadence_incompatible"]),
+    ({}, ["cadence_incompatible"]),
+])
+def test_operational_checks_reuse_normalized_diagnostics_without_editing_graph(installed, settings, expected):
+    api_client, _, _, saved, _ = installed
+    configured = saved.model_copy(deep=True)
+    configured.graph["nodes"][0]["config"] = settings
+    _, sensor, node_id = api.sensor_configuration(SimpleNamespace(pipelines=[configured]), "sensor")
+    state = {"status": "confirmed", "valid_for_ms": sensor.temporal.validity_ms}
+    publication = SimpleNamespace(closed=False, read=lambda *_: state)
+    before = configured.model_dump_json()
+    reasons = operational_suspension_reasons(configured, sensor, node_id,
+        api_client.app.state.pipeline_operator_registry, publication)
+    assert reasons == expected
+    assert configured.model_dump_json() == before
+
+
+def test_api_suspends_on_real_runtime_silence_and_close_without_destroying_review(client, tmp_path, monkeypatch):  # noqa: F811
+    client.app.state.pipeline_operator_registry.register_operator(operator_id="camera.source", config_model=CameraSourceConfig)
+    publication = client.portal.call(client.app.state.services.call, "vision.visual_states")
+    async def start():
+        runtime, context, clock, references, saved = await harness(tmp_path)
+        draft = references.create_draft(runtime.config)
+        target = await client.app.state.services.call("vision.visual_references")
+        restore_backup(target, export_backup(references, draft.draft_id, expected_revision=draft.revision), operation_id="runtime-import")
+        saved = saved.model_copy(update={"enabled": True})
+        await runtime.dependencies.config_store.replace_pipeline(saved.name, saved)
+        runtime.dependencies.services.register("vision.visual_states", lambda: publication)
+        monkeypatch.setattr(client.app.state, "config_store", runtime.dependencies.config_store)
+        monkeypatch.setattr(api, "build_default_model_registry", lambda: runtime.dependencies.vision_model_registry)
+        await runtime.prepare(context)
+        task = asyncio.create_task(runtime.run(context))
+        return runtime, context, clock, references, task
+    runtime, context, clock, references, task = client.portal.call(start)
+    path = "/api/vision/visual-state/sensors/sensor/qualification"
+    async def stop():
+        context.cancel_event.set()
+        await task
+        await context.scheduler.shutdown()
+        references.close()
+    try:
+        initial = client.get(path).json()
+        assert "observation_unconfirmed" in initial["operational_suspension_reasons"]
+        body = submission(initial["context_revision"]).model_dump(mode="json")
+        assert client.post(path, json=body).status_code == 201
+        client.portal.call(send, runtime, context, clock, 1)
+        client.portal.call(send, runtime, context, clock, 2)
+        current = client.get(path).json()
+        # The harness has no explicit source FPS, so cadence remains unverified even with current observations.
+        assert current["operational_suspension_reasons"] == ["cadence_incompatible"]
+        assert current["items"][0]["status"] == "recorded_pass"
+        record = current["items"][0]["record"]
+        observation = runtime._reducer._last_seen
+        async def advance():
+            clock.now += (runtime.config.temporal.maximum_gap_ms + 2) / 1000
+        client.portal.call(advance)
+        silent = client.get(path).json()
+        assert "observation_too_old" in silent["operational_suspension_reasons"]
+        assert silent["context_revision"] == current["context_revision"]
+        assert silent["items"][0]["record"] == record
+        assert runtime._reducer._last_seen is observation
+        assert silent["activation_authorized"] is silent["physical_qualification"] is False
+        async def expire():
+            clock.now += runtime.config.temporal.validity_ms / 1000
+        client.portal.call(expire)
+        expired = client.get(path).json()
+        assert "observation_unconfirmed" in expired["operational_suspension_reasons"]
+        assert expired["items"][0]["record"] == record
+        client.portal.call(send, runtime, context, clock, 3)
+        client.portal.call(send, runtime, context, clock, 4)
+        recovered = client.get(path).json()
+        assert recovered["operational_suspension_reasons"] == ["cadence_incompatible"]
+        async def close():
+            context.cancel_event.set()
+        client.portal.call(close)
+        stopped = client.get(path).json()
+        assert "execution_unavailable" in stopped["operational_suspension_reasons"]
+        assert stopped["items"][0]["record"] == record
+    finally:
+        client.portal.call(stop)

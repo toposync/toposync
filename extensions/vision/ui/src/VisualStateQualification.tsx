@@ -30,6 +30,12 @@ export function VisualStateQualification({ sensorId, context, disabled, run, t }
     {result && !current && <p role="status">{t("qualification_editor_changed")}</p>}
     {current && <section aria-label={t("qualification_results")}>
       <p role="status">{t("qualification_checked", { time: new Date(current.checkedAt).toLocaleString() })}</p>
+      {current.data.operational_suspension_reasons === undefined
+        ? <p>{t("qualification_operation_unverified")}</p>
+        : current.data.operational_suspension_reasons.length > 0
+          ? <p role="status">{t("qualification_operation_suspended")} {current.data.operational_suspension_reasons
+            .map(reason => t(`qualification_${reason}`)).join(" ")}</p>
+          : <p>{t("qualification_operation_no_blocker")}</p>}
       {!current.data.context_revision && <p>{t("qualification_context_unavailable")}</p>}
       {!current.data.items.length && <p>{t("qualification_empty")}</p>}
       <ul>{current.data.items.map(({ record, status }) => <li key={record.operation_id}>

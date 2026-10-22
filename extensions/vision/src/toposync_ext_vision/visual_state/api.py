@@ -21,7 +21,7 @@ from ..registry import build_default_model_registry
 from .backup import MAX_BACKUP_BYTES, export_backup, restore_backup
 from .preview import VisualPreviewBusy, VisualStatePreviewRunner
 from .preparation import VisualRegionUnavailable
-from .qualification import context_revision, qualification_history, record_qualification, sensor_configuration
+from .qualification import context_revision, operational_suspension_reasons, qualification_history, record_qualification, sensor_configuration
 from .schemas import Counter, Identifier, QualificationSubmission, ReferenceEvidence, VisualStateConfig, VisualStateModel
 from .store import ReferenceConflict, ReferenceLimit, VisualReferenceStore
 
@@ -122,11 +122,14 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
             pipeline, sensor, node_id = sensor_configuration(configuration, sensor_id)
             revision = await backup_work(context_revision, configuration, pipeline, sensor, node_id,
                                          build_default_model_registry(), get_store(), before)
+            publication = await request.app.state.services.call("vision.visual_states")
+            suspension = operational_suspension_reasons(pipeline, sensor, node_id,
+                                                        request.app.state.pipeline_operator_registry, publication)
             if before != await backup_work(installation_stamp, host):
-                return None
-            return revision
+                return None, ["configuration_unverified"]
+            return revision, suspension
         except (ValueError, OSError, PipelinePreviewError):
-            return None
+            return None, ["configuration_unverified"]
 
     async def qualification(request, sensor_id, response, submission=None, offset=0, limit=20):
         actor = _authorize(request, write=submission is not None)
@@ -136,14 +139,15 @@ def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore]
             raise HTTPException(429, detail="visual_backup_busy") from error
         try:
             with _storage_errors():
-                revision = await qualification_context(request, sensor_id)
+                revision, suspension = await qualification_context(request, sensor_id)
                 store = get_store()
                 record = None
                 if submission is not None:
                     record = await backup_work(record_qualification, store, sensor_id, submission, actor, revision)
                     # A concurrent save can suspend a recorded report before this response is sent.
-                    revision = await qualification_context(request, sensor_id)
+                    revision, suspension = await qualification_context(request, sensor_id)
                 result = await backup_work(qualification_history, store, sensor_id, revision, offset=offset, limit=limit)
+                result["operational_suspension_reasons"] = suspension
                 if record is not None:
                     result["record"] = record
             response.headers["Cache-Control"] = "private, no-store"

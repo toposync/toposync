@@ -5,6 +5,7 @@ export type VisualQualificationRecord = {
 };
 export type VisualQualification = {
   context_revision: string | null; next_offset: number | null; physical_qualification: false; activation_authorized: false;
+  operational_suspension_reasons?: string[];
   items: { record: VisualQualificationRecord; status: "recorded_pass" | "recorded_failure" | "suspended" | "superseded" }[];
 };
 
@@ -15,6 +16,10 @@ export function validateVisualQualification(value: VisualQualification, sensorId
     || !(value.context_revision === null || digest(value.context_revision))
     || !(value.next_offset === null || (Number.isSafeInteger(value.next_offset) && value.next_offset >= 0 && value.next_offset <= 1_000_000))
     || !Array.isArray(value.items) || value.items.length > 20
+    || (value.operational_suspension_reasons !== undefined && (!Array.isArray(value.operational_suspension_reasons)
+      || value.operational_suspension_reasons.length > 5 || value.operational_suspension_reasons.some(reason =>
+        !["configuration_unverified", "cadence_incompatible", "execution_unavailable", "observation_unconfirmed", "observation_too_old"].includes(reason))
+      || (value.context_revision === null && !value.operational_suspension_reasons.includes("configuration_unverified"))))
     || value.items.some(item => {
       const record = item?.record;
       return !record || record.sensor_id !== sensorId || !identifier(record.operation_id) || !identifier(record.actor_id)

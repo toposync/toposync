@@ -213,6 +213,19 @@ hashes. Pagination, cancellation and ingress use the existing host controls.
 Unsupported hosts explain the missing capability; malformed responses never show
 an accepted result. Recording a reviewed report remains an explicit API operation.
 
+The response also includes `operational_suspension_reasons`, separate from immutable
+report history. Existing normalized cadence diagnostics suspend the operational
+indication for incompatible or unverified input/analysis cadence. The live state
+projection adds suspension when execution is unavailable, observation is unconfirmed,
+or its monotonic lease shows an observation gap beyond the configured maximum.
+A closed or silent source cannot remain operationally qualified merely because its
+saved configuration still matches a report. The panel shows this suspension at query
+time without changing the graph, starting capture or renewing any observation.
+Empty reasons mean no blocker was observed by these checks; they do not establish
+qualification or authorize activation. Older hosts without this field remain explicitly
+unassessed. Report attestations can still be recorded while a pipeline is disabled,
+and favorable historical reports remain visible alongside operational suspension.
+
 After independently reviewing a local report, `POST` to the same path with:
 
 ```json

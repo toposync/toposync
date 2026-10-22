@@ -1,6 +1,14 @@
 import type { TranslationBundle } from "@toposync/plugin-api";
 const visualStateMessages: Record<string, [string, string]> = {
   qualification_title: ["Validation records", "Registros de validação"],
+  qualification_operation_suspended: ["Operational qualification suspended at query time.", "Qualificação operacional suspensa no instante da consulta."],
+  qualification_operation_unverified: ["This host did not assess operational suspension. Review the sensor's current diagnostics.", "Este host não avaliou a suspensão operacional. Revise os diagnósticos atuais do sensor."],
+  qualification_operation_no_blocker: ["No operational blocker was observed at query time. This does not establish latency, accuracy or safety qualification.", "Nenhum impedimento operacional observado no instante da consulta. Isso não comprova qualificação de latência, precisão ou segurança."],
+  qualification_configuration_unverified: ["The saved configuration or resources could not be verified.", "Não foi possível verificar a configuração ou os recursos salvos."],
+  qualification_cadence_incompatible: ["Upstream delivery or analysis cadence is incompatible or unverified; review the pipeline alerts.", "A entrega anterior ou a cadência de análise é incompatível ou não comprovada; revise os alertas do fluxo."],
+  qualification_execution_unavailable: ["No compatible execution is currently available.", "Não há execução compatível disponível agora."],
+  qualification_observation_unconfirmed: ["There is no confirmed observation now.", "Não há observação confirmada agora."],
+  qualification_observation_too_old: ["The confirmed observation exceeds the allowed observation gap.", "A observação confirmada excedeu o intervalo máximo entre observações."],
   qualification_help: ["Read evidence records for the saved sensor. Unsaved editor changes are not part of this query. Save and query again after changing the installation.", "Consulte os registros do sensor salvo. Alterações ainda não salvas neste editor não entram na consulta. Salve e consulte novamente após mudar a instalação."],
   qualification_read: ["Read saved records", "Consultar registros salvos"],
   qualification_results: ["Saved validation records", "Registros de validação salvos"],

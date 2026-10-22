@@ -778,6 +778,11 @@ function DecisionReview({
                             source: String(decision.details.arrival_source_id || "-"),
                           })}`
                           : ""}
+                        {typeof decision.details.candidate_to_arrival_ms === "number"
+                          ? ` · ${t("ext.ptz_attention.latency.candidateArrival", {
+                            milliseconds: Math.round(decision.details.candidate_to_arrival_ms),
+                          })}`
+                          : ""}
                       </div>
                     ) : null}
                   </div>

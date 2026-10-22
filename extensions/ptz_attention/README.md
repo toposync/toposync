@@ -59,3 +59,21 @@ Migrating a profile clears old destination choices in the editor; source mapping
 region and return must be selected and saved. Existing data is not inferred or
 rewritten during reads. SQLite retains profiles, decisions, sessions and recovery
 markers; runtime events remain in memory.
+
+Decision timing distinguishes event observation age (`event_to_decision_ms`, a
+wall-clock age of the latest intent) from elapsed controller time. It is not
+detector processing time or camera exposure latency. `candidate_elapsed_ms`
+starts when a valid candidate request enters the controller and survives UPDATE
+and reconfirmation; it includes resolution, selection waits and arbitration.
+`candidate_confirm_seconds` reports the configured confirmation wait, not a
+measured duration to subtract from that total. A fresh candidate after observation
+expiry starts a new interval. `command_elapsed_ms` starts at navigation dispatch,
+after lease acquisition, and includes preparation and verification, not just motor
+travel. These elapsed intervals use the controller's monotonic clock.
+
+Only verified arrival produces `candidate_to_arrival_ms` and
+`command_to_arrival_ms`; repeated arrivals for an existing candidate retain its
+original candidate interval. Fault decisions retain the interrupted command's
+identifier and event key and never imply arrival. Shadow decisions have no physical
+arrival metrics. Missing or interrupted acquisitions must remain failures or
+incomplete samples in an evaluation, never be dropped from the denominator.

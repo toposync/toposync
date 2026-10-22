@@ -58,6 +58,7 @@ class _TrackedEvent:
     resolved: ResolvedTarget | None
     opened_monotonic: float
     last_seen_monotonic: float
+    candidate_received_monotonic: float | None = None
     closed_monotonic: float | None = None
     following_view: ResolvedTarget | None = None
     following_since: float | None = None
@@ -84,6 +85,7 @@ class _DeviceRuntime:
     lease_expires_at: float = 0.0
     next_renew_at: float = 0.0
     command_id: str = ""
+    command_event_key: str = ""
     command_preset: str = ""
     command_target_key: str = ""
     command_started_monotonic: float | None = None
@@ -558,6 +560,7 @@ class PtzAttentionController:
                 resolved=resolved,
                 opened_monotonic=now,
                 last_seen_monotonic=observed_monotonic,
+                candidate_received_monotonic=now,
             )
             if existing and existing.observation_expired and runtime.active_key == governed.key and runtime.state == "GRACE":
                 # Fresh reacquisition must pass confirmation again; being held
@@ -1348,6 +1351,7 @@ class PtzAttentionController:
                 now=self._clock(),
             )
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
+            runtime.command_event_key = tracked.intent.key
             runtime.command_started_monotonic = self._monotonic_clock()
             if tracked.resolved.panorama is not None:
                 options = {}
@@ -1494,6 +1498,8 @@ class PtzAttentionController:
                     now=self._clock(),
                 )
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
+            runtime.command_event_key = "__return_home__"
+            runtime.command_started_monotonic = self._monotonic_clock()
             runtime.command_preset = resolved.preset_token
             runtime.command_target_key = resolved.target_key
             if resolved.panorama is not None:
@@ -2123,23 +2129,26 @@ class PtzAttentionController:
             self._mark_recovery_required(runtime, reason=reason)
         self._end_session(runtime, outcome="fault")
         runtime.fault = str(reason)
-        runtime.events.clear()
-        runtime.active_key = ""
-        runtime.candidate_key = ""
-        runtime.grace_deadline_monotonic = None
-        runtime.focused_since = None
-        runtime.focused_started_monotonic = None
-        if released:
-            self._clear_command(runtime)
+        active = runtime.events.get(runtime.active_key)
         self._set_state(runtime, "FAULT", self._clock())
-        self._record(
-            profile,
-            runtime,
-            action="fault",
-            reason=str(reason),
-            intent=intent,
-            details={"cleanup_confirmed": released},
-        )
+        try:
+            self._record(
+                profile,
+                runtime,
+                action="fault",
+                reason=str(reason),
+                intent=intent or (active.intent if active is not None else None),
+                details={"cleanup_confirmed": released},
+            )
+        finally:
+            runtime.events.clear()
+            runtime.active_key = ""
+            runtime.candidate_key = ""
+            runtime.grace_deadline_monotonic = None
+            runtime.focused_since = None
+            runtime.focused_started_monotonic = None
+            if released:
+                self._clear_command(runtime)
 
     def _enter_manual_override(
         self,
@@ -2487,6 +2496,7 @@ class PtzAttentionController:
             runtime.navigation_task.cancel()
             runtime.navigation_task = None
         runtime.command_id = ""
+        runtime.command_event_key = ""
         runtime.command_preset = ""
         runtime.command_target_key = ""
         runtime.command_started_monotonic = None
@@ -2558,11 +2568,27 @@ class PtzAttentionController:
         details: dict[str, Any] | None = None,
     ) -> None:
         payload = dict(details or {})
+        tracked = runtime.events.get(intent.key) if runtime is not None and intent is not None else None
+        if tracked is not None and tracked.candidate_received_monotonic is not None:
+            # UPDATE and candidate reconfirmation must not erase time already spent waiting.
+            payload.setdefault("candidate_elapsed_ms", max(0.0,
+                self._monotonic_clock() - tracked.candidate_received_monotonic) * 1000)
+            payload.setdefault("candidate_confirm_seconds", profile.candidate_confirm_seconds)
+            payload.setdefault("timing_clock", "controller_monotonic")
+            if action == "focus_acquired":
+                payload.setdefault("candidate_to_arrival_ms", payload["candidate_elapsed_ms"])
+        if (runtime is not None and runtime.command_started_monotonic is not None
+                and (action in {"fault", "return_home_submitted"}
+                     or (intent is not None and runtime.command_event_key == intent.key))):
+            payload.setdefault("command_id", runtime.command_id)
+            payload.setdefault("command_event_key", runtime.command_event_key)
+            payload.setdefault("command_elapsed_ms", max(0.0,
+                self._monotonic_clock() - runtime.command_started_monotonic) * 1000)
+            payload.setdefault("timing_clock", "controller_monotonic")
         if profile.panorama_element_id:
             payload.pop("view_id", None)
             if reason in {"same_preset", "same_preset_event_remains", "higher_priority_same_preset"}:
                 reason = "same_target"
-            tracked = runtime.events.get(intent.key) if runtime is not None and intent is not None else None
             if tracked is not None and tracked.resolved is not None and tracked.resolved.panorama is not None:
                 payload.setdefault("target", tracked.resolved.panorama.model_dump(mode="json"))
         if intent is not None:

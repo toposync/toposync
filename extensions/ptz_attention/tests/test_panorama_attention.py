@@ -448,6 +448,141 @@ async def test_arrival_latency_is_only_recorded_after_verified_physical_arrival(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("following", [False, True])
+async def test_candidate_latency_survives_updates_and_separates_confirmation_from_command(following):
+    clock, _, _, _, _, _, store, controller = environment(mode="live_panorama", qualified=True)
+    store.replace_profile(panorama_profile(mode="live_panorama", candidate_confirm_seconds=1,
+                                          follow_view_updates=following))
+
+    async def observe(sequence):
+        await controller.submit_intent(event(clock, lifecycle="open" if sequence == 1 else "update")
+            .model_copy(update={"capture_evidence": {
+                "capture_instance": "decoder", "generation": 1,
+                "sequence": sequence, "published_at": clock(),
+            }}))
+
+    await observe(1)
+    clock.advance(.6)
+    await observe(2)
+    clock.advance(.4)
+    await controller.tick_once()
+    submitted = next(item for item in store.list_decisions()[0] if item.action == "move_submitted")
+    clock.advance(.4)
+    await observe(3)
+    clock.advance(.2)
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    acquired = next(item for item in store.list_decisions()[0] if item.action == "focus_acquired")
+    assert acquired.details["candidate_to_arrival_ms"] == pytest.approx(1600)
+    assert acquired.details["command_to_arrival_ms"] == pytest.approx(600)
+    assert acquired.details["event_to_decision_ms"] == pytest.approx(200)
+    assert submitted.details["candidate_elapsed_ms"] == pytest.approx(1000)
+    assert acquired.details["candidate_confirm_seconds"] == 1
+    assert acquired.details["command_id"] == submitted.details["command_id"]
+    assert acquired.details["timing_clock"] == "controller_monotonic"
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wall_clock_change", [-3600, 3600])
+async def test_candidate_elapsed_uses_monotonic_clock_and_shadow_does_not_claim_arrival(wall_clock_change):
+    clock, _, _, _, _, _, store, controller = environment()
+    store.replace_profile(panorama_profile(candidate_confirm_seconds=1))
+    await controller.submit_intent(event(clock))
+    controller._clock = lambda: clock() + wall_clock_change
+    clock.advance(1)
+    await controller.tick_once()
+    focused = next(item for item in store.list_decisions()[0] if item.action == "shadow_focus")
+    assert focused.details["candidate_elapsed_ms"] == pytest.approx(1000)
+    assert "candidate_to_arrival_ms" not in focused.details
+    assert "command_to_arrival_ms" not in focused.details
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_acquisition_keeps_candidate_and_command_timing_without_claiming_arrival():
+    clock, _, _, _, _, _, store, controller = environment(mode="live_panorama", qualified=True, blocked=True)
+    await controller.submit_intent(event(clock))
+    submitted = next(item for item in store.list_decisions()[0] if item.action == "move_submitted")
+    clock.advance(.4)
+    await controller.submit_intent(event(clock, lifecycle="update"))
+    clock.advance(1.7)
+    await controller.tick_once()
+    fault = next(item for item in store.list_decisions()[0] if item.action == "fault")
+    assert fault.event_key == submitted.event_key
+    assert fault.details["command_id"] == submitted.details["command_id"]
+    assert fault.details["candidate_elapsed_ms"] == pytest.approx(2100)
+    assert fault.details["command_elapsed_ms"] == pytest.approx(2100)
+    assert "candidate_to_arrival_ms" not in fault.details
+    assert "command_to_arrival_ms" not in fault.details
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_fault_telemetry_failure_cannot_skip_runtime_cleanup(monkeypatch):
+    clock, _, _, _, _, _, store, controller = environment(mode="live_panorama", qualified=True, blocked=True)
+    await controller.submit_intent(event(clock))
+    current = store.list_profiles()[0]
+    runtime = controller._runtime_for(current)
+
+    def fail(**kwargs):
+        raise OSError("decision storage unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "record_decision", fail)
+        with pytest.raises(OSError, match="decision storage unavailable"):
+            await controller._fault(current, runtime, "test_fault")
+    assert runtime.state == "FAULT"
+    assert runtime.recovery_required
+    assert not runtime.events and not runtime.active_key and not runtime.candidate_key
+    assert not runtime.lease_id and not runtime.command_id
+    assert runtime.navigation_task is None
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_return_fault_times_its_own_command_not_the_previous_acquisition():
+    clock, _, _, _, _, _, store, controller = environment(mode="live_panorama", qualified=True, failure="return")
+    await controller.submit_intent(event(clock))
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    clock.advance(.5)
+    assert await controller.return_home("front_attention")
+    submitted = next(item for item in store.list_decisions()[0] if item.action == "return_home_submitted")
+    clock.advance(.4)
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    fault = next(item for item in store.list_decisions()[0] if item.action == "fault")
+    assert fault.details["command_id"] == submitted.details["command_id"]
+    assert fault.details["command_event_key"] == "__return_home__"
+    assert fault.details["command_elapsed_ms"] == pytest.approx(400)
+    assert "candidate_elapsed_ms" not in fault.details
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_same_target_coalescence_does_not_attribute_previous_command_to_new_event():
+    clock, _, _, _, _, _, store, controller = environment(mode="live_panorama", qualified=True)
+    await controller.submit_intent(event(clock))
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    clock.advance(.2)
+    await controller.submit_intent(event(clock, name="two", kind="high"))
+    coalesced = next(item for item in store.list_decisions()[0] if item.action == "focus_coalesced")
+    assert coalesced.event_key.endswith(":two")
+    assert "command_id" not in coalesced.details
+    assert "command_elapsed_ms" not in coalesced.details
+    assert "candidate_to_arrival_ms" not in coalesced.details
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_continuously_changing_world_ray_does_not_restart_shadow_confirmation():
     clock, camera, _, _, calls, _, store, controller = environment()
     store.replace_profile(panorama_profile(follow_view_updates=True, candidate_confirm_seconds=1))

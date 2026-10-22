@@ -1557,6 +1557,29 @@ def test_profile_put_resets_paused_runtime_and_delete_forgets_fault_runtime() ->
     store.close()
 
 
+def test_return_api_authorizes_bounded_recovery_without_reopening_expired_campaign() -> None:
+    from test_controller import Clock, LiveCamera, live_services
+    clock, camera = Clock(), LiveCamera()
+    store = AttentionStore(None)
+    selected = AttentionProfile.model_validate({**profile_payload(mode="live_preset"), "campaign_ends_at": 900})
+    store.create_profile(selected)
+    store.mark_recovery_required("front", reason="position_unknown")
+    controller = PtzAttentionController(store=store, services=live_services(camera), clock=clock)
+    app = FastAPI()
+    app.include_router(create_router(controller, store))
+    with TestClient(app) as client:
+        response = client.post("/api/ptz-attention/return-home", json={"profile_id": selected.id})
+        assert response.status_code == 200
+        assert camera.acquire_calls[-1]["maximum_duration_s"] == selected.settle_timeout_seconds
+        assert store.get_profile(selected.id).mode == "paused"
+        assert controller.status()[0].state == "RETURNING"
+        stopped = client.post("/api/ptz-attention/pause", json={"profile_id": selected.id})
+        assert stopped.status_code == 200
+        assert not controller.status()[0].lease_id
+        assert store.is_recovery_required("front")
+    store.close()
+
+
 def test_recovery_marker_blocks_profile_replace_and_delete_until_return_home() -> None:
     store = AttentionStore(None)
     live_profile = AttentionProfile.model_validate(profile_payload(mode="live_preset"))

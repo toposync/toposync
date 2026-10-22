@@ -116,6 +116,8 @@ resume the campaign or accept targets. Repeated requests while returning reuse
 that attempt and cannot extend its budget. **Stop recovery** interrupts it while
 preserving the unconfirmed return. After verified recovery, edit the campaign
 end before resuming. This is a user command, not an automatic post-deadline return.
+Only the authorized return API opts into `allow_expired_recovery`; internal
+pipeline interlocks use the default refusal after expiry.
 
 These checks do not yet schedule an early return within a reserved campaign
 budget. Campaign orchestration must request that before the deadline; the hard

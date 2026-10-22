@@ -674,6 +674,7 @@ class PtzAttentionController:
         profile_id: str,
         *,
         reason: str = "manual_return_home",
+        allow_expired_recovery: bool = False,
     ) -> bool:
         profile = self._require_profile(profile_id)
         runtime = self._runtime_for(profile)
@@ -684,6 +685,9 @@ class PtzAttentionController:
             profile, runtime = current, self._runtime_for(current)
             expired = await self._expire_campaign(profile, runtime)
             if expired:
+                if not allow_expired_recovery:
+                    self._record(profile, runtime, action="return_home_blocked", reason="campaign_expired")
+                    return False
                 profile = self._require_profile(profile_id)
                 if runtime.state == "RETURNING" and runtime.manual_return_deadline_monotonic is not None:
                     return True

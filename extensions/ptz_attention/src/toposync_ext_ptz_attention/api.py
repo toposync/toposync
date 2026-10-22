@@ -496,7 +496,7 @@ def create_router(
             camera_id=selected_profile.camera_id,
         )
         try:
-            started = await controller.return_home(body.profile_id)
+            started = await controller.return_home(body.profile_id, allow_expired_recovery=True)
         except ProfileNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Profile not found") from exc
         if not started:

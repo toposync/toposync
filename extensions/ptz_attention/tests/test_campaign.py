@@ -59,12 +59,12 @@ async def test_expired_campaign_allows_only_explicit_bounded_recovery(outcome):
     await controller.submit_intent(intent("one", "low", "open", clock))
     clock.advance(10)
     await controller.tick_once()
-    assert await controller.return_home("front_attention") is True
+    assert await controller.return_home("front_attention", allow_expired_recovery=True) is True
     deadline = controller._devices["front"].manual_return_deadline_monotonic
     assert camera.acquire_calls[-1]["maximum_duration_s"] == 2
     assert camera.commands[-1]["command"]["preset_token"] == "preset-home"
     clock.advance(.5)
-    assert await controller.return_home("front_attention") is True
+    assert await controller.return_home("front_attention", allow_expired_recovery=True) is True
     assert controller._devices["front"].manual_return_deadline_monotonic == deadline
     await controller.submit_intent(intent("two", "high", "open", clock))
     if outcome == "timeout":
@@ -77,6 +77,23 @@ async def test_expired_campaign_allows_only_explicit_bounded_recovery(outcome):
     assert store.get_profile("front_attention").mode == "paused"
     with pytest.raises(RuntimeError, match="campaign_expired"):
         await controller.resume("front_attention")
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_automatic_return_cannot_reopen_an_expired_campaign():
+    clock, camera = Clock(), LiveCamera()
+    store = AttentionStore(None)
+    store.create_profile(profile(mode="live_preset", campaign_ends_at=1010))
+    controller = PtzAttentionController(store=store, services=live_services(camera), clock=clock)
+    await controller.submit_intent(intent("one", "low", "open", clock))
+    clock.advance(10)
+    assert await controller.return_home("front_attention", reason="observer_binding_safety_interlock") is False
+    assert camera.acquires == 1
+    assert camera.commands[-1]["command"]["kind"] == "stop"
+    assert store.get_profile("front_attention").mode == "paused"
+    assert controller._devices["front"].manual_return_deadline_monotonic is None
     await controller.shutdown()
     store.close()
 

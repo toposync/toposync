@@ -296,7 +296,9 @@ def test_replayed_sample_and_continuous_invalid_input_cannot_renew_state(tmp_pat
     asyncio.run(run())
 
 
-def test_restarting_with_saved_references_starts_unknown_and_reconfirms(tmp_path):
+@pytest.mark.parametrize("fault", [None, "model_missing", "model_bytes", "model_registry", "model_revision",
+                                  "reference_missing", "reference_bytes"])
+def test_restarting_with_saved_references_starts_unknown_and_reconfirms(tmp_path, fault):
     async def run():
         previous, ctx, clock, store, _ = await harness(tmp_path)
         await previous.prepare(ctx)
@@ -307,6 +309,42 @@ def test_restarting_with_saved_references_starts_unknown_and_reconfirms(tmp_path
         epoch = previous._reducer.runtime_epoch
         ctx.cancel_event.set()
         await task
+        if fault is not None:
+            dependencies = previous.dependencies
+            manifest = dependencies.vision_model_registry.get_manifest(previous.config.model_id)
+            path = manifest.resolve_artifact_path()
+            if fault.startswith("reference_"):
+                reference_id = previous.config.classes[0].reference_ids[0]
+                reference, _ = store.read_image(reference_id)
+                path = store.images / f"{reference.sha256}.png"
+            original = path.read_bytes()
+            saved_config = dependencies.config_store.paths.config_path.read_bytes()
+            if fault.endswith("missing"):
+                path.unlink()
+            elif fault.endswith("bytes"):
+                path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+            elif fault == "model_registry":
+                dependencies = replace(dependencies, vision_model_registry=ModelRegistry([]))
+            else:
+                revised = manifest.model_copy(update={"input": manifest.input.model_copy(update={"rescale_factor": .5})})
+                dependencies = replace(dependencies, vision_model_registry=ModelRegistry([revised]))
+            failed = VisualStateRuntime(previous.config.model_dump(), dependencies, clock=clock, unix_clock=clock.unix)
+            try:
+                message = {
+                    "model_missing": "No such file", "model_bytes": "digest mismatch",
+                    "model_registry": "explicit image embedding model", "model_revision": "model revision changed",
+                    "reference_missing": "absent or incomplete", "reference_bytes": "integrity failed",
+                }[fault]
+                with pytest.raises((ValueError, FileNotFoundError), match=message):
+                    await failed.prepare(context(ctx.scheduler))
+                assert failed._backend is None and failed._reducer is None
+                assert failed._release_publication is None
+                assert failed._closed.is_set()
+                assert dependencies.config_store.paths.config_path.read_bytes() == saved_config
+            finally:
+                path.write_bytes(original)
+            for category in previous.config.classes:
+                assert all(store.read_image(reference_id)[1] for reference_id in category.reference_ids)
         restarted = VisualStateRuntime(previous.config.model_dump(), previous.dependencies, clock=clock, unix_clock=clock.unix)
         ctx = context(ctx.scheduler)
         await restarted.prepare(ctx)

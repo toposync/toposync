@@ -39,6 +39,11 @@ async def register_visual_reference_persistence(
             return
         before = _configurations(previous) if previous is not None else configurations
         changed = {owner for owner, configuration in configurations.items() if before.get(owner) != configuration}
+        if previous is not None:
+            previously_enabled = {pipeline.name for pipeline in previous if pipeline.enabled}
+            changed.update(_configurations([
+                pipeline for pipeline in proposed if pipeline.enabled and pipeline.name not in previously_enabled
+            ]))
         identities = {}
         for owner, configuration in configurations.items():
             identity = configuration.get("sensor_id")

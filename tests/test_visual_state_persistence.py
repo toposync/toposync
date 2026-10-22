@@ -182,6 +182,59 @@ def test_installations_without_visual_sensors_do_not_open_the_private_store(tmp_
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("damage", ["missing", "bytes"])
+@pytest.mark.parametrize("bulk", [False, True])
+def test_enabling_unchanged_sensor_rechecks_images_and_allows_repair(tmp_path, references, damage, bulk):
+    async def run():
+        configuration, reference = capture(references)
+        store = store_at(tmp_path / "host")
+        await register_visual_reference_persistence(store, lambda: references)
+        saved = await store.create_pipeline(pipeline(configuration))
+        path = references.images / f"{reference.sha256}.png"
+        original_image = path.read_bytes()
+        original_config = store.paths.config_path.read_bytes()
+        if damage == "missing":
+            path.unlink()
+        else:
+            path.write_bytes(bytes([original_image[0] ^ 1]) + original_image[1:])
+        enabled = saved.model_copy(update={"enabled": True})
+
+        async def enable():
+            if bulk:
+                snapshot = await store.get_config()
+                await store.save_config(snapshot.model_copy(update={"pipelines": [enabled]}))
+            else:
+                await store.replace_pipeline(saved.name, enabled)
+
+        with pytest.raises(PipelineValidationError, match="restore or recapture"):
+            await enable()
+        assert await store.get_pipeline(saved.name) == saved
+        assert store.paths.config_path.read_bytes() == original_config
+        path.write_bytes(original_image)
+        await enable()
+        assert (await store.get_pipeline(saved.name)).enabled is True
+        # Resource damage must never prevent stopping the pipeline.
+        path.unlink()
+        await store.replace_pipeline(saved.name, saved)
+        assert (await store.get_pipeline(saved.name)).enabled is False
+
+    asyncio.run(run())
+
+
+def test_enabling_duplicate_identity_loaded_from_disk_requires_repair(tmp_path, references):
+    async def run():
+        configuration, _ = capture(references)
+        store = store_at(tmp_path / "host")
+        await store.create_pipeline(pipeline(configuration, "first"))
+        duplicate = await store.create_pipeline(pipeline(configuration, "second"))
+        await register_visual_reference_persistence(store, lambda: references)
+        with pytest.raises(PipelineValidationError, match="identity already exists"):
+            await store.replace_pipeline(duplicate.name, duplicate.model_copy(update={"enabled": True}))
+        assert (await store.get_pipeline(duplicate.name)).enabled is False
+
+    asyncio.run(run())
+
+
 def test_restoring_identity_into_another_pipeline_requires_removing_original_first(tmp_path, references):
     async def run():
         configuration, reference = capture(references)

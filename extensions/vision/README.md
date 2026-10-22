@@ -165,8 +165,11 @@ Restoration preserves the sensor identity. Saving that identity into a second
 pipeline is rejected; restore in place or remove the original before recreating
 it elsewhere. Use pipeline duplication to create an independent sensor. Existing
 malformed configurations loaded from disk can still be opened for repair without
-blocking unrelated edits; changing a conflicting sensor configuration requires
-resolving its duplicate identity.
+blocking unrelated edits; changing or enabling a conflicting sensor requires
+resolving its duplicate identity. Enabling a saved pipeline rechecks every
+configured reference even when its operator settings did not change. Missing or
+corrupt images reject the save without changing the previously saved pipeline.
+Disabling a damaged sensor remains possible.
 
 Pipeline list/read/create/update responses include a content-based `revision`.
 Send that unchanged with `PUT /api/pipelines/{name}`. Visual operators opt into
@@ -189,8 +192,12 @@ a restoration is incomplete. This does not validate or repair missing images;
 reopening an incomplete gallery reports an error. Expired drafts can be collected
 without deleting saved references. Superseded pipeline references are currently
 retained conservatively, including after pipeline deletion, and continue to count
-toward storage limits. Automatic retention reconciliation and consistent backup
-and restore are still pending.
+toward storage limits. Automatic retention reconciliation remains pending.
+Runtime initialization also checks images and the pinned model before publishing
+state, including after an external configuration reload. Missing or changed
+weights prevent initialization; restoring the compatible model preserves sensor
+identity and references but requires fresh temporal confirmation. A previous
+confirmed value is not restored as current state.
 
 ### Local execution
 

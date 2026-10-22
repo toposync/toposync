@@ -58,6 +58,30 @@ def test_group_center_uses_all_corners_and_is_independent_of_world_anchor():
     assert len(rays) == 9
 
 
+@pytest.mark.parametrize('box, expected', [
+    ((110, 20, 130, 60), 'offset_within_current_extent'),
+    ((-20, 20, 120, 60), 'extent_exceeds_frame'),
+    ((40, 20, 60, 60), 'inside_frame'),
+])
+def test_unclipped_projection_distinguishes_offset_from_extent_at_current_pose(monkeypatch, box, expected):
+    _, _, _, framing, evidence = scene(monkeypatch)
+    x1, y1, x2, y2 = box
+    def ray(x, y):
+        value = np.array([1., (x-50)/50, (40-y)/50])
+        return (value / np.linalg.norm(value)).tolist()
+    framing['panorama']['center_ray'] = ray((x1+x2)/2, (y1+y2)/2)
+    framing['panorama']['corner_rays'] = [ray(x,y) for x,y in ((x1,y1),(x2,y1),(x2,y2),(x1,y2))]
+    result = project_arrival_framing(framing, evidence)
+    assert result['unclipped_bbox01'] == pytest.approx([x1/100, y1/80, x2/100, y2/80])
+    assert result['fit']['status'] == expected
+    assert result['fit']['extent_ratio'] == pytest.approx([(x2-x1)/99, (y2-y1)/79])
+    assert result['fit']['reaim_feasibility_verified'] is False
+    assert result['subject_visibility_verified'] is False
+    group = project_group_framing({'members': {'person': framing, 'vehicle': deepcopy(framing)}}, evidence)
+    assert group['fit'] == result['fit']
+    assert set(group['members']) == {'person', 'vehicle'}
+
+
 def test_arrival_geometry_is_a_snapshot_and_projection_is_not_detection(monkeypatch):
     frame, located, lens, framing, evidence = scene(monkeypatch)
     located['rotation_matrix'][0][0] = 99
@@ -71,6 +95,22 @@ def test_arrival_geometry_is_a_snapshot_and_projection_is_not_detection(monkeypa
     assert projected['subject_visibility_verified'] is False
     assert projected['physical_capture_verified'] is False
     assert projected['capture_evidence']['sequence'] == 2
+
+
+def test_union_can_exceed_frame_even_when_each_member_extent_fits(monkeypatch):
+    _, _, _, first, evidence = scene(monkeypatch)
+    second = deepcopy(first)
+    for ray in second['panorama']['corner_rays']:
+        ray[1] += 2 * ray[0]
+    result = project_group_framing({'members': {'person': first, 'vehicle': second}}, evidence)
+    assert result['unclipped_bbox01'] == pytest.approx([.4, .25, 1.6, .75])
+    assert result['fit']['status'] == 'extent_exceeds_frame'
+    assert all(member['fit']['extent_ratio'][0] < 1 for member in result['members'].values())
+    assert 'bbox01' not in result
+    second['panorama']['corner_rays'][0] = [-1., 0., 0.]
+    rejected = project_group_framing({'members': {'person': first, 'vehicle': second}}, evidence)
+    assert 'fit' not in rejected and 'unclipped_bbox01' not in rejected
+    assert set(rejected['members']) == {'person', 'vehicle'}
 
 
 @pytest.mark.parametrize('change', ['capture', 'source', 'revision', 'pose_quality', 'outside', 'behind', 'boundary', 'same_frame'])

@@ -27,7 +27,7 @@ from .panorama_scan import (
     _next_continuous_seek_duration,
     _return_correction_commands,
 )
-from .processing.panorama_mapping import _rotation_basis, ray_to_image_pixel, ray_to_panorama_pixel
+from .processing.panorama_mapping import _rotation_basis, image_pixel_to_ray, ray_to_image_pixel, ray_to_panorama_pixel
 from .panorama_target_motion import TargetMotion
 from .processing.panorama_localization import (
     ANALYSIS_WIDTH,
@@ -300,16 +300,30 @@ def group_framing_rays(group: dict) -> np.ndarray:
     return np.vstack((center, corners))
 
 
+def _projected_extent_fit(box: list[float], lens: dict) -> dict:
+    size = np.asarray([lens["width"], lens["height"]])
+    low, high = np.asarray(box).reshape(2, 2) * size
+    extent = (high - low) / (size - 1)
+    inside = bool(np.all(low >= 0) and np.all(high <= size - 1))
+    # Outside projections extrapolate the lens model; another pose can change the extent.
+    return {"status": "extent_exceeds_frame" if np.any(extent > 1) else (
+        "inside_frame" if inside else "offset_within_current_extent"),
+        "extent_ratio": extent.tolist(), "basis": "current_pose_projection",
+        "reaim_feasibility_verified": False}
+
+
 def project_group_framing(group: dict | None, evidence: dict) -> dict | None:
     if group is None:
         return None
     projections = {name: project_arrival_framing(member, evidence) for name, member in group["members"].items()}
     result = {"kind": "projected_member_history", "subject_visibility_verified": False,
         "physical_capture_verified": False, "members": projections, "status": "member_outside_or_unqualified"}
-    if all(item and item.get("status") == "projected" for item in projections.values()):
-        boxes = np.asarray([item["bbox01"] for item in projections.values()])
+    if projections and all(item and "unclipped_bbox01" in item for item in projections.values()):
+        boxes = np.asarray([item["unclipped_bbox01"] for item in projections.values()])
         box = [*boxes[:, :2].min(axis=0).tolist(), *boxes[:, 2:].max(axis=0).tolist()]
-        result.update(status="projected", bbox01=box, minimum_margin01=min(*box[:2], 1-box[2], 1-box[3]))
+        result.update(unclipped_bbox01=box, fit=_projected_extent_fit(box, evidence["frame_geometry"]["lens"]))
+        if all(item["status"] == "projected" for item in projections.values()):
+            result.update(status="projected", bbox01=box, minimum_margin01=min(*box[:2], 1-box[2], 1-box[3]))
     return result
 
 
@@ -329,20 +343,29 @@ def project_arrival_framing(framing: dict | None, evidence: dict) -> dict | None
             key: panorama[key] for key in ("job_id", "revision", "composition_id", "source_artifact_id", "geometry_digest")}
         if geometry.get("source_scope") != scope:
             return {**result, "status": "reference_mismatch"}
-        if localized_axis_measurement(panorama["center_ray"], lens, geometry) is None:
+        frame_center = image_pixel_to_ray((lens["width"]-1)/2, (lens["height"]-1)/2,
+            lens, rotation_matrix=geometry["rotation_matrix"])
+        if localized_axis_measurement(frame_center, lens, geometry) is None:
             return result
         corners = panorama["corner_rays"]
         if len(corners) != 4:
             return result
-        pixels = [ray_to_image_pixel(ray, lens, rotation_matrix=geometry["rotation_matrix"]) for ray in corners]
+        pixels = [ray_to_image_pixel(ray, lens, rotation_matrix=geometry["rotation_matrix"],
+            allow_outside=True) for ray in corners]
         if any(pixel is None for pixel in pixels):
-            return {**result, "status": "corner_outside_or_behind_frame", "sampled_corners_inside": False}
+            return {**result, "status": "corner_behind_or_unprojectable", "sampled_corners_inside": False}
         points = np.asarray(pixels) / np.asarray([lens["width"], lens["height"]])
         low, high = points.min(axis=0), points.max(axis=0)
         same_capture = all(framing.get(key) == geometry["capture_evidence"].get(key)
             for key in ("capture_instance", "generation", "sequence"))
-        return {**result, "status": "projected", "sampled_corners_inside": True,
-            "bbox01": [*low.tolist(), *high.tolist()], "minimum_margin01": float(min(*low, *(1 - high))),
+        box = [*low.tolist(), *high.tolist()]
+        fit = _projected_extent_fit(box, lens)
+        inside = fit["status"] == "inside_frame"
+        result.update(status="projected" if inside else "projected_outside", sampled_corners_inside=inside,
+            unclipped_bbox01=box, fit=fit)
+        if inside:
+            result.update(bbox01=box, minimum_margin01=float(min(*low, *(1 - high))))
+        return {**result,
             "same_capture_as_observation": same_capture, "observation_boundary_contact": framing.get("boundary_contact"),
             "capture_evidence": deepcopy(geometry["capture_evidence"])}
     except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):

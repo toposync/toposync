@@ -180,6 +180,7 @@ def ray_to_image_pixel(
     tilt_radians: float = 0.0,
     *,
     rotation_matrix: Any = None,
+    allow_outside: bool = False,
 ) -> tuple[float, float] | None:
     matrix, coefficients, width, height = _lens_arrays(lens)
     basis = (
@@ -194,7 +195,9 @@ def ray_to_image_pixel(
         local.reshape(1, 3), np.zeros(3), np.zeros(3), matrix, coefficients
     )
     x, y = (float(value) for value in projected.reshape(2))
-    return (x, y) if 0 <= x <= width - 1 and 0 <= y <= height - 1 else None
+    if not np.isfinite([x, y]).all():
+        return None
+    return (x, y) if allow_outside or (0 <= x <= width - 1 and 0 <= y <= height - 1) else None
 
 
 def render_panorama(

@@ -121,6 +121,16 @@ def test_optical_pixels_use_intrinsics_and_the_observed_pose() -> None:
         image_pixel_to_ray(1, 1, {**lens, "fx": 0}, 0, 0)
 
 
+def test_outside_projection_is_explicit_and_never_projects_behind_or_nonfinite(monkeypatch):
+    lens = _lens()
+    ray = [1., 2., 0.]
+    assert ray_to_image_pixel(ray, lens) is None
+    assert ray_to_image_pixel(ray, lens, allow_outside=True) == pytest.approx((190, 40))
+    assert ray_to_image_pixel([-1., 0., 0.], lens, allow_outside=True) is None
+    monkeypatch.setattr(cv2, 'projectPoints', lambda *args: (np.array([[[np.inf, 0.]]]), None))
+    assert ray_to_image_pixel(ray, lens, allow_outside=True) is None
+
+
 def test_four_controls_recover_known_plane_and_extrapolate_both_directions() -> None:
     result = estimate_panorama_mapping(_points()[:4])
     assert result["preview"] == {"eligible": True, "status": "ready", "reasons": []}

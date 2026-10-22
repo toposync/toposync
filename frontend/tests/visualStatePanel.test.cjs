@@ -107,7 +107,7 @@ test('empty and catalog-default panels initialize unique identities only when ed
       './VisualStateDecisionSettings': { VisualStateDecisionSettings: () => null },
       './VisualStateAiSettings': { VisualStateAiSettings: () => null },
       './VisualPublicationSettings': { VisualPublicationSettings: () => null },
-      './VisualStateBackup': { VisualStateBackup: () => null },
+      './VisualStateQualification': { VisualStateQualification: () => null }, './VisualStateBackup': { VisualStateBackup: () => null },
       './visualPublication': load('visualPublication.ts'),
       './visualStateAi': load('visualStateAi.ts'),
       './VisualSuggestionReview': { VisualStateSuggestions: () => null },
@@ -190,7 +190,7 @@ test('invalid keys, empty labels, too few enabled classes and excessive referenc
 });
 
 test('reference transport retains revision, receipt, abort and operation identity across retry', async () => {
-  const calls = [], api = load('api.ts', { '@toposync/plugin-api': {
+  const calls = [], api = load('api.ts', { './visualQualification': load('visualQualification.ts'), '@toposync/plugin-api': {
     requestJson: async (url, options) => { calls.push({ url, options }); return {}; },
     resolveToposyncUrl: url => '/ingress/test' + url,
   } });
@@ -243,7 +243,7 @@ test('canonical capture preserves ingress and signed evidence and rejects malfor
     sample: { capture_instance: 'decoder', generation: 0, sequence: 1 }, observed_at: 123,
     freshness_basis: 'receipt', historical_fallback: false, prepared_region: true };
   let current = supplied, status = 200, request;
-  const api = load('api.ts', { '@toposync/plugin-api': { resolveToposyncUrl: path => '/ingress' + path } }, {
+  const api = load('api.ts', { './visualQualification': load('visualQualification.ts'), '@toposync/plugin-api': { resolveToposyncUrl: path => '/ingress' + path } }, {
     fetch: async (url, options) => {
       request = { url, options };
       return new Response(status === 200 ? new Blob(['pixels'], { type: 'image/png' }) : JSON.stringify({ detail: 'region_unavailable' }), {

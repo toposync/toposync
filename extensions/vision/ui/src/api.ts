@@ -3,6 +3,7 @@ import type { PipelineReferenceEvidence, PipelineReferenceFrame } from "@toposyn
 import type { VisualConfiguration, VisualDraft, VisualModel, VisualPreview } from "./visualState";
 import type { VisualAiOptions } from "./visualStateAi";
 import type { VisualSuggestion, VisualSuggestions } from "./visualStateSuggestions";
+import { validateVisualQualification, type VisualQualification } from "./visualQualification";
 export type Species = "person" | "cat" | "dog";
 export type Identity = { id: string; name: string; species: Species; references: number; occurrences: number; representative_id: string | null };
 export type GalleryData = { identities: Identity[]; revision: number; permissions: { curate: boolean; history: boolean } };
@@ -17,6 +18,11 @@ export const photoUrl = (id: string) => resolveToposyncUrl(`${base}/observations
 export const changed = () => window.dispatchEvent(new Event("toposync:identity-gallery-changed"));
 
 const visualBase = "/api/vision/visual-state/drafts";
+export async function readVisualQualification(sensorId: string, offset: number, signal: AbortSignal): Promise<VisualQualification> {
+  const result = await requestJson<VisualQualification>(`/api/vision/visual-state/sensors/${encodeURIComponent(sensorId)}/qualification?offset=${offset}`, { signal });
+  signal.throwIfAborted();
+  return validateVisualQualification(result, sensorId);
+}
 export const visualBackupLimit = 64 * 1024 * 1024;
 export async function exportVisualBackup(draft: VisualDraft, signal: AbortSignal): Promise<Blob> {
   const response = await fetch(resolveToposyncUrl(`${visualBase}/${encodeURIComponent(draft.draft_id)}/backup?expected_revision=${draft.revision}`), { signal });

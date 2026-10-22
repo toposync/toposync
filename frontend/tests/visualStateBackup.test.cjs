@@ -150,7 +150,7 @@ test('readonly controls and pending validation are exposed without executing cla
 
 test('backup requests preserve ingress, draft revision and idempotency parameters', async () => {
   const requests = [];
-  const api = load('api.ts', { '@toposync/plugin-api': {
+  const api = load('api.ts', { './visualQualification': load('visualQualification.ts'), '@toposync/plugin-api': {
     resolveToposyncUrl: path => `/ingress/fixture${path}`,
     requestJson: (path, options) => { requests.push({ path, options }); return Promise.resolve(restored()); },
   } }, { fetch: async (path, options) => { requests.push({ path, options }); return {

@@ -57,7 +57,7 @@ test('restoration reattaches only an existing human-approved reference to its co
 
 test('suggestion requests preserve ingress, abort signal, expected revisions and idempotency identity', async () => {
   const calls = [], signal = new AbortController().signal;
-  const api = load('api.ts', { '@toposync/plugin-api': {
+  const api = load('api.ts', { './visualQualification': load('visualQualification.ts'), '@toposync/plugin-api': {
     requestJson: async (...args) => { calls.push(args); return {}; }, resolveToposyncUrl: value => `/ingress${value}`,
   } });
   const draft = { draft_id: 'draft/id', revision: 7 }, item = { ...candidate(), suggestion_id: 'photo/id', revision: 3 };

@@ -15,6 +15,7 @@ import type { VisualPreview } from "./visualState";
 import { VisualPublicationSettings } from "./VisualPublicationSettings";
 import { publicationClassSide, publicationIssue, visualPublication } from "./visualPublication";
 import { VisualStateBackup } from "./VisualStateBackup";
+import { VisualStateQualification } from "./VisualStateQualification";
 
 type Props = { i18n: HostI18n; config: Record<string, unknown>; replaceConfig: (config: Record<string, unknown>) => void;
   referenceCapture?: PipelineReferenceCapture; showAdvanced?: boolean; ui?: Pick<HostUi, "ImageMaskEditor"> };
@@ -110,16 +111,16 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
     };
     restoreOperationFocus.current = restoreFocus;
     const controller = new AbortController(); active.current = controller; setBusy(name); setError(null);
-    const timeout = name === "test" || name.startsWith("backup_") ? setTimeout(() => {
+    const timeout = name === "test" || name === "qualification" || name.startsWith("backup_") ? setTimeout(() => {
       controller.abort();
-      if (active.current === controller) { active.current = null; setBusy(null); setError(name === "test" ? "visual_preview_timeout" : "visual_backup_uncertain"); restoreFocus(); }
-    }, name === "test" ? 30_000 : 60_000) : undefined;
+      if (active.current === controller) { active.current = null; setBusy(null); setError(name === "test" ? "visual_preview_timeout" : name === "qualification" ? "qualification_timeout" : "visual_backup_uncertain"); restoreFocus(); }
+    }, name.startsWith("backup_") ? 60_000 : 30_000) : undefined;
     try { await work(controller.signal); }
     catch (cause) {
       if (!controller.signal.aborted) {
         const message = String((cause as Error)?.message ?? "");
         const status = (cause as { status?: number }).status;
-        setError(["reference_context_changed", "reference_region_required", "reference_capture_receipt_invalid", "reference_limit", "reference_conflict",
+        setError(["qualification_invalid", "reference_context_changed", "reference_region_required", "reference_capture_receipt_invalid", "reference_limit", "reference_conflict",
           "visual_backup_failed", "visual_backup_invalid", "visual_backup_uncertain", "visual_preview_busy", "visual_preview_timeout", "visual_preview_configuration_invalid", "visual_preview_input_invalid", "visual_preview_failed", "region_unavailable"].find(key => message.includes(key))
           ?? (status === 401 || status === 403 ? "forbidden" : status === 409 ? "reference_conflict"
             : name === "test" ? "visual_preview_failed" : status === 413 ? "reference_limit" : status === 422 ? "invalid_classes" : "request_failed"));
@@ -276,6 +277,9 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
         draftRef.current = restoredDraft; setDraft(restoredDraft); setUndo(null); setPreview(null); setSuggestions(null); setPendingReview(null);
         changed(configuration);
       }} />
+    <VisualStateQualification key={value.sensor_id} sensorId={value.sensor_id}
+      context={`${context}\n${pipelineContext}\n${settingsDirty}:${aiSettingsDirty}:${suggestionSettingsDirty}:${publicationSettingsDirty}`}
+      disabled={disabled || settingsDirty || aiSettingsDirty || suggestionSettingsDirty || publicationSettingsDirty} run={run} t={t} />
     <fieldset disabled={disabled}>
       <legend>{t("preview_title")}</legend><p className="identityMuted">{t("preview_help")}</p>
       {!inputPipeline && <p role="status">{t("preview_host_unavailable")}</p>}

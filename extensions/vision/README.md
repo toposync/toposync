@@ -203,6 +203,16 @@ preparation, intact references or the declared local model could not be verified
 The check reads and hashes model bytes without running inference or contacting a
 camera or provider. Use it when reviewing evidence, not as a frequent polling API.
 
+The operator's collapsed **Validation records** group reads this history on demand.
+It shows the query time and explicitly refers to the saved sensor, excluding unsaved
+editor changes. Editing configuration or unapplied parameters hides the earlier
+result; save and query again. A query is a snapshot, not a live operational badge.
+The panel distinguishes favorable and unfavorable reports, suspended records and
+superseded history. Expand a record for its reviewer and report/protocol/environment
+hashes. Pagination, cancellation and ingress use the existing host controls.
+Unsupported hosts explain the missing capability; malformed responses never show
+an accepted result. Recording a reviewed report remains an explicit API operation.
+
 After independently reviewing a local report, `POST` to the same path with:
 
 ```json

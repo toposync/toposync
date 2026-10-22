@@ -58,6 +58,8 @@ export const styles = `
 .visualPublicationRow:has(select) {grid-template-columns:minmax(0,1fr)}
 .visualAiLimits {max-width:100%;overflow-x:auto}
 .visualStatePanel details {min-width:0}
+.visualStateQualification dd {margin:4px 0 12px;overflow-wrap:anywhere}
+.visualStateQualification li {margin:12px 0}
 .visualAiLimits table {border-collapse:collapse;text-align:left}
 .visualAiLimits th,.visualAiLimits td {padding:4px;vertical-align:top}
 .visualRegionSettings {display:grid;gap:10px;min-width:0}

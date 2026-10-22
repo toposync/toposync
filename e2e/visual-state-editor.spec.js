@@ -229,3 +229,92 @@ test("cancel discards a late completed preview and returns keyboard focus", asyn
   await expect(panel.locator(".visualPreviewResult")).toHaveCount(0);
   await expect(preview).toBeEnabled();
 });
+
+test("validation records show saved evidence, paginate and become stale after editing", async ({ page, visual }) => {
+  const { panel, request, prefix, pipeline } = visual;
+  const requested = [];
+  page.on("request", request => { if (request.url().includes("/qualification?")) requested.push(request.url()); });
+  await captureFirst(panel);
+  const saving = page.waitForResponse(response => response.request().method() === "PUT" && response.url().endsWith(`/api/pipelines/${pipeline.name}`));
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  expect((await saving).ok()).toBe(true);
+  const saved = await (await request.get(`${prefix}/api/pipelines/${pipeline.name}`)).json();
+  const identifier = saved.graph.nodes.find(node => node.id === "sensor").config.sensor_id;
+  const route = `${prefix}/api/vision/visual-state/sensors/${identifier}/qualification`;
+  const context = (await (await request.get(route)).json()).context_revision;
+  expect(context).toMatch(/^[a-f0-9]{64}$/);
+  for (let index = 0; index < 22; index++) {
+    const created = await request.post(route, { data: { operation_id: `browser-${identifier}-${index}`,
+      context_revision: context, scope: index === 21 ? "isolated_consumer" : index === 20 ? "replay" : "laboratory",
+      decision: index === 21 ? "failed" : "passed", report_sha256: "b".repeat(64), protocol_sha256: "c".repeat(64), environment_sha256: "d".repeat(64) } });
+    expect(created.status()).toBe(201);
+  }
+  expect(requested).toHaveLength(0);
+  const records = panel.locator(".visualStateQualification");
+  await records.locator(":scope > summary").click();
+  const read = records.getByRole("button", { name: "Consultar registros salvos", exact: true });
+  await read.click();
+  await expect(records.locator("li")).toHaveCount(20);
+  await expect(records.getByText("Relatório desfavorável compatível com a versão consultada", { exact: false })).toBeVisible();
+  await expect(records.getByText("Relatório favorável compatível com a versão consultada", { exact: false })).toHaveCount(2);
+  await expect(read).toBeFocused();
+  const decision = panel.getByRole("group", { name: "Configuração da decisão", exact: true });
+  await decision.locator("summary").click();
+  await decision.getByRole("spinbutton", { name: "Intervalo de análise (milissegundos)", exact: true }).fill("400");
+  await expect(records.locator("li")).toHaveCount(0);
+  await expect(read).toBeDisabled();
+  await decision.getByRole("button", { name: "Descartar alterações não aplicadas", exact: true }).click();
+  await expect(read).toBeEnabled();
+  await read.click();
+  await expect(records.locator("li")).toHaveCount(20);
+  await records.getByRole("button", { name: "Próximos registros", exact: true }).click();
+  await expect(records.locator("li")).toHaveCount(2);
+  await records.getByRole("button", { name: "Registros anteriores", exact: true }).click();
+  await expect(records.locator("li")).toHaveCount(20);
+  await records.locator("li").first().locator("summary").click();
+  await expect(records.locator("li").first().getByText("b".repeat(64), { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 900 });
+  expect(await records.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const before = requested.length;
+  await panel.getByRole("textbox", { name: "Nome", exact: true }).first().fill("Nome revisado");
+  await expect(records.locator("li")).toHaveCount(0);
+  await expect(records.getByText("O editor mudou.", { exact: false })).toBeVisible();
+  expect(requested).toHaveLength(before);
+  const savedAgain = page.waitForResponse(response => response.request().method() === "PUT" && response.url().endsWith(`/api/pipelines/${pipeline.name}`));
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  expect((await savedAgain).ok()).toBe(true);
+  await read.click();
+  await expect(records.locator("li")).toHaveCount(20);
+  await expect(records.getByText("Revisão necessária", { exact: false })).toHaveCount(3);
+  await expect(records.getByText("Relatório favorável compatível", { exact: false })).toHaveCount(0);
+  expect(requested.every(url => new URL(url).pathname.startsWith(prefix))).toBe(true);
+});
+
+test("validation records handle unsupported hosts, invalid authority and cancellation", async ({ page, visual }) => {
+  const records = visual.panel.locator(".visualStateQualification");
+  await records.locator(":scope > summary").click();
+  const read = records.getByRole("button", { name: "Consultar registros salvos", exact: true });
+  await page.route("**/qualification?*", route => route.fulfill({ status: 404, json: {} }));
+  await read.click();
+  await expect(records.getByText("Este host não oferece registros", { exact: false })).toBeVisible();
+  await page.unroute("**/qualification?*");
+  await page.route("**/qualification?*", route => route.fulfill({ json: { context_revision: null, items: [], next_offset: null,
+    physical_qualification: true, activation_authorized: true } }));
+  await read.click();
+  await expect(visual.panel.getByRole("alert")).toHaveText("O host retornou registros incompatíveis. Nenhum resultado foi aceito.");
+  await expect(records.locator("li")).toHaveCount(0);
+  await page.unroute("**/qualification?*");
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  await page.route("**/qualification?*", async route => { await waiting; await route.fulfill({ json: {
+    context_revision: null, items: [], next_offset: null, physical_qualification: false, activation_authorized: false,
+  } }).catch(() => {}); });
+  const started = page.waitForRequest(request => request.url().includes("/qualification?"));
+  await read.click();
+  await started;
+  await visual.panel.getByRole("button", { name: "Cancelar", exact: true }).click();
+  release();
+  await expect(read).toBeFocused();
+  await expect(records.getByRole("region", { name: "Registros de validação salvos", exact: true })).toHaveCount(0);
+});

@@ -131,7 +131,7 @@ test('historical failed or discarded AI latency is visible without certifying a 
 
 test('options API uses ingress-safe requestJson with encoded sensor and cancellation', async () => {
   const calls = [], controller = new AbortController();
-  const api = load('api.ts', { '@toposync/plugin-api': { requestJson: (...args) => { calls.push(args); return Promise.resolve({ profiles: [] }); } } });
+  const api = load('api.ts', { './visualQualification': load('visualQualification.ts'), '@toposync/plugin-api': { requestJson: (...args) => { calls.push(args); return Promise.resolve({ profiles: [] }); } } });
   await api.readVisualAiOptions('door/one', controller.signal);
   assert.equal(calls[0][0], '/api/vision/visual-state/ai-options?sensor_id=door%2Fone');
   assert.equal(calls[0][1].signal, controller.signal);

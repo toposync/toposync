@@ -1,5 +1,96 @@
 const { test, expect, captureFirst } = require("./fixtures/visual-state");
 
+test("form and advanced JSON preserve class identities and references in both directions", async ({ page, visual }) => {
+  const { panel } = visual;
+  await captureFirst(panel);
+  const name = panel.getByRole("textbox", { name: "Nome", exact: true }).first();
+  const description = panel.getByRole("textbox", { name: "O que identifica este estado", exact: true }).first();
+  await name.fill("Porta aberta");
+  await description.fill("Vão da porta visível, inclusive com luz noturna.");
+  await page.locator(".pipelineTopologyJsonDetails summary").click();
+  const editor = page.getByRole("textbox", { name: "JSON avançado", exact: true });
+  await expect(editor).toBeVisible();
+  const before = JSON.parse(await editor.inputValue());
+  expect(before.classes[0].label).toBe("Porta aberta");
+  expect(before.classes[0].description).toBe("Vão da porta visível, inclusive com luz noturna.");
+  expect(before.classes[0].reference_ids).toHaveLength(1);
+  const after = structuredClone(before);
+  after.classes[0].label = "Abertura confirmada";
+  after.classes[0].description = "Abertura observável na região selecionada.";
+  after.evaluation_interval_ms = 300;
+  await editor.fill(JSON.stringify(after, null, 2));
+  const apply = page.getByRole("button", { name: "Aplicar configuração", exact: true });
+  await apply.click();
+  await expect(name).toHaveValue(after.classes[0].label);
+  await expect(description).toHaveValue(after.classes[0].description);
+  await expect(apply).toBeDisabled();
+  await expect(panel.locator(".visualStatePhoto")).toHaveCount(1);
+  await editor.fill("{");
+  await apply.click();
+  await expect(page.locator(".pipelineTopologyJsonDetails .pipelineTopologyInspectorNotice")).toBeVisible();
+  await expect(name).toHaveValue(after.classes[0].label);
+  await editor.fill(JSON.stringify(after, null, 2));
+  await expect(apply).toBeDisabled();
+  await name.fill("Nome final pelo formulário");
+  const final = JSON.parse(await editor.inputValue());
+  expect(final.classes[0]).toEqual({ ...after.classes[0], label: "Nome final pelo formulário" });
+  expect(final.evaluation_interval_ms).toBe(300);
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect.poll(async () => {
+    const saved = await (await visual.request.get(`${visual.prefix}/api/pipelines/${visual.pipeline.name}`)).json();
+    return saved.graph.nodes.find(node => node.id === "sensor").config.classes[0].label;
+  }).toBe("Nome final pelo formulário");
+  const saved = await (await visual.request.get(`${visual.prefix}/api/pipelines/${visual.pipeline.name}`)).json();
+  const configuration = saved.graph.nodes.find(node => node.id === "sensor").config;
+  expect(configuration.classes[0].class_id).toBe(before.classes[0].class_id);
+  expect(configuration.classes[0].reference_ids).toEqual(before.classes[0].reference_ids);
+  expect(configuration.evaluation_interval_ms).toBe(300);
+});
+
+test("free classes and advanced settings retain their values when collapsed", async ({ page, visual }) => {
+  const { panel } = visual;
+  await panel.getByRole("button", { name: "Adicionar classe", exact: true }).click();
+  const classes = panel.locator(".visualStateClass");
+  await expect(classes).toHaveCount(3);
+  await classes.nth(2).getByRole("textbox", { name: "Nome", exact: true }).fill("Entreaberta");
+  await classes.nth(2).getByRole("textbox", { name: "O que identifica este estado", exact: true }).fill("Folha entre as duas posições finais.");
+  const advanced = page.getByRole("button", { name: "Avançado", exact: true });
+  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  await advanced.click();
+  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  const key = panel.getByRole("textbox", { name: "Chave estável (letras, números e sublinhado)", exact: true });
+  await expect(key).toHaveCount(3);
+  await key.nth(2).fill("partially_open");
+  await advanced.click();
+  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  await expect(key).toHaveCount(0);
+  await advanced.click();
+  await expect(key).toHaveCount(3);
+  await expect(key.nth(2)).toHaveValue("partially_open");
+  await panel.locator("summary").filter({ hasText: /^Tempo e estabilidade$/ }).click();
+  const interval = panel.getByRole("spinbutton", { name: "Intervalo de análise (milissegundos)", exact: true });
+  await expect(interval).toHaveCount(1);
+  await interval.fill("350");
+  await panel.getByRole("group", { name: "Configuração da decisão", exact: true })
+    .getByRole("button", { name: "Aplicar ajustes", exact: true }).click();
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect.poll(async () => {
+    const saved = await (await visual.request.get(`${visual.prefix}/api/pipelines/${visual.pipeline.name}`)).json();
+    return saved.graph.nodes.find(node => node.id === "sensor").config.classes.length;
+  }).toBe(3);
+  await page.reload();
+  await page.locator('.react-flow__node[data-id="sensor"]').focus();
+  await page.keyboard.press("Enter");
+  await expect(classes.nth(2).getByRole("textbox", { name: "Nome", exact: true })).toHaveValue("Entreaberta");
+  await advanced.click();
+  await expect(key.nth(2)).toHaveValue("partially_open");
+  await panel.locator("summary").filter({ hasText: /^Tempo e estabilidade$/ }).click();
+  await expect(interval).toHaveValue("350");
+  await panel.getByRole("button", { name: "Remover classe Entreaberta", exact: true }).click();
+  await expect(classes).toHaveCount(2);
+  await expect(panel.getByRole("button", { name: "Remover classe Aberta", exact: true })).toBeDisabled();
+});
+
 test("capture, undo, test, save and reopen through ingress", async ({ page, visual }) => {
   const { panel, pipeline } = visual;
   await captureFirst(panel);

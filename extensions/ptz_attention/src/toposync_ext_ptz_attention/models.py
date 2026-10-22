@@ -125,6 +125,7 @@ class AttentionProfile(StrictModel):
     name: str
     mode: AttentionMode = "disabled"
     resume_mode: ResumableMode | None = None
+    campaign_ends_at: float | None = Field(default=None, gt=0, le=253402300799)
     camera_id: str
     source_id: str = ""
     ptz_device_id: str
@@ -150,6 +151,18 @@ class AttentionProfile(StrictModel):
     follow_view_updates: bool = False
     follow_interval_seconds: float = Field(default=0.5, ge=0.2, le=60.0)
     follow_observation_timeout_seconds: float = Field(default=2.0, ge=0.5, le=5.0)
+
+    @field_validator("campaign_ends_at", mode="before")
+    @classmethod
+    def _campaign_end(cls, value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("campaign_ends_at must be a finite positive timestamp")
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise ValueError("campaign_ends_at must be a finite positive timestamp")
+        return parsed
 
     @field_validator(
         "id",
@@ -435,6 +448,7 @@ class DecisionRecord(StrictModel):
 
 
 class DeviceStatus(StrictModel):
+    campaign_expired: bool = False
     follow_view_updates: bool = False
     ptz_device_id: str
     profile_id: str

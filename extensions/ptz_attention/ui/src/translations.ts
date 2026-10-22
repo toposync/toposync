@@ -1,4 +1,13 @@
 const en = {
+  "ext.ptz_attention.campaign.stop_return": "Stop recovery",
+  "ext.ptz_attention.reason.manual_return_cancelled": "Recovery stopped; return remains unconfirmed",
+  "ext.ptz_attention.campaign.end": "End campaign at (optional)",
+  "ext.ptz_attention.campaign.end_help": "Local time. At the deadline, attention stops. An unconfirmed return requires explicit recovery.",
+  "ext.ptz_attention.campaign.expired_help": "Campaign ended. Recover the camera if needed, then edit the deadline before resuming.",
+  "ext.ptz_attention.decision.campaign_expired": "Campaign ended",
+  "ext.ptz_attention.reason.campaign_expired": "The campaign deadline has passed",
+  "ext.ptz_attention.reason.campaign_expired_recovery_required": "Campaign ended; camera recovery is required",
+  "ext.ptz_attention.reason.manual_return_timeout": "The recovery time limit expired; return is not confirmed",
   "ext.ptz_attention.operator.profile_mode": "Saved profile mode: {{mode}}.",
   "ext.ptz_attention.panorama.title": "Panorama attention",
   "ext.ptz_attention.panorama.help": "Choose a mapping, a return point and the permitted region in composition coordinates.",
@@ -325,6 +334,15 @@ const en = {
 } as const;
 
 const ptBR: Record<keyof typeof en, string> = {
+  "ext.ptz_attention.campaign.stop_return": "Parar recuperação",
+  "ext.ptz_attention.reason.manual_return_cancelled": "Recuperação interrompida; retorno ainda não confirmado",
+  "ext.ptz_attention.campaign.end": "Encerrar campanha em (opcional)",
+  "ext.ptz_attention.campaign.end_help": "Horário local. No prazo, o acompanhamento para. Retorno não confirmado exige recuperação explícita.",
+  "ext.ptz_attention.campaign.expired_help": "Campanha encerrada. Recupere a câmera se necessário; depois edite o prazo antes de retomar.",
+  "ext.ptz_attention.decision.campaign_expired": "Campanha encerrada",
+  "ext.ptz_attention.reason.campaign_expired": "O prazo da campanha terminou",
+  "ext.ptz_attention.reason.campaign_expired_recovery_required": "Campanha encerrada; a câmera precisa de recuperação",
+  "ext.ptz_attention.reason.manual_return_timeout": "O prazo da recuperação terminou; retorno não confirmado",
   "ext.ptz_attention.panorama.title": "Atenção pela panorâmica",
   "ext.ptz_attention.panorama.help": "Escolha o mapeamento, o ponto de retorno e a região permitida nas coordenadas da composição.",
   "ext.ptz_attention.panorama.mapping": "Mapeamento panorâmico",

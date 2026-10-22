@@ -91,3 +91,34 @@ On restart, open sessions retain their last evidence and end as
 `process_restarted`; no elapsed duration is invented across clock scopes. The
 physical recovery requirement is immutable through diagnostic updates. These
 records do not establish camera exposure time or independently certify tracking.
+
+### Bounded campaigns
+
+Profiles may set `campaign_ends_at` to a finite positive Unix timestamp, also
+editable as a local date and time in the policy form. Omitting it retains the
+existing continuous profile behavior. The end time is persisted; a monotonic
+budget within the running controller prevents clock rollback, UPDATE or pause
+from extending that campaign. Each physical acquisition passes its remaining
+budget as `maximum_duration_s` to the camera control service. The camera lease
+watchdog enforces that ceiling independently of attention ticks or browser polls.
+
+On expiry the profile is persisted as paused before cleanup, new attention is
+rejected, and Stop/release is attempted. An unconfirmed position or cleanup keeps
+the durable recovery requirement. Resume is refused after expiry, including
+after restart. A deadline does not prove arrival, Stop or return and does not
+retroactively cancel a command already transmitted. Restart has no trustworthy
+cross-process elapsed-time measurement; the persisted end uses civil time and
+existing physical recovery guards remain mandatory.
+
+The explicit **Return home** action remains available for recovery after expiry.
+It receives a separate lease budget of `settle_timeout_seconds`; it does not
+resume the campaign or accept targets. Repeated requests while returning reuse
+that attempt and cannot extend its budget. **Stop recovery** interrupts it while
+preserving the unconfirmed return. After verified recovery, edit the campaign
+end before resuming. This is a user command, not an automatic post-deadline return.
+
+These checks do not yet schedule an early return within a reserved campaign
+budget. Campaign orchestration must request that before the deadline; the hard
+limit wins if return is still pending. Qualification of device-side motion timeout
+and real Stop/return is still required: process loss or an event-loop stall cannot
+be covered by an in-process watchdog alone.

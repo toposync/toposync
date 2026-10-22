@@ -102,6 +102,7 @@ export type AttentionProfile = {
   follow_interval_seconds?: number;
   follow_observation_timeout_seconds?: number;
   resume_mode?: AttentionResumableMode | null;
+  campaign_ends_at?: number | null;
   camera_id: string;
   source_id: string;
   ptz_device_id: string;
@@ -153,6 +154,7 @@ export type AttentionValidationResponse = {
 };
 
 export type AttentionSession = {
+  campaign_expired?: boolean;
   follow_view_updates?: boolean;
   ptz_device_id: string;
   profile_id: string;

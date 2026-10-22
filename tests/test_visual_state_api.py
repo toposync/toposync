@@ -411,13 +411,82 @@ def test_member_and_anonymous_cannot_access_pixels_or_drafts(client, prepared): 
     assert client.post("/api/auth/login", json={"username": "member", "password": "password123", "device_label": "test"}).status_code == 200
     assert client.get(image_url).status_code == 403
     assert client.get(copied_image_url).status_code == 403
+    backup_url = f"/api/vision/visual-state/drafts/{copied_draft.json()['draft_id']}/backup?expected_revision=0"
+    assert client.get(backup_url).status_code == 403
+    assert client.post('/api/vision/visual-state/backups/restore?operation_id=forbidden',
+        content=b'not a backup', headers={'content-type': 'application/zip'}).status_code == 403
     assert client.post('/api/vision/visual-state/drafts', json=copied_configuration).status_code == 403
     assert capture(client, prepared).status_code == 403
     assert client.post("/api/vision/visual-state/drafts", json=config(prepared["evidence"])).status_code == 403
     client.post("/api/auth/logout")
     assert client.get(image_url).status_code == 401
     assert client.get(copied_image_url).status_code == 401
+    assert client.get(backup_url).status_code == 401
     assert capture(client, prepared).status_code == 401
+
+
+def test_backup_api_restores_private_draft_without_changing_pipeline(client, prepared):  # noqa: F811
+    saved = capture(client, prepared).json()
+    draft = saved['draft']
+    pipeline = client.post('/api/pipelines', json=_configured_pipeline(draft['configuration']))
+    assert pipeline.status_code == 201, pipeline.text
+    url = f"/api/vision/visual-state/drafts/{draft['draft_id']}/backup?expected_revision={draft['revision']}"
+    exported = client.get(url)
+    assert exported.status_code == 200 and exported.headers['content-type'] == 'application/zip'
+    assert exported.headers['cache-control'] == 'private, no-store'
+    assert 'attachment;' in exported.headers['content-disposition']
+    wrong_revision = client.get(url.replace(f"expected_revision={draft['revision']}", 'expected_revision=999'))
+    assert wrong_revision.status_code == 409
+    restore_url = '/api/vision/visual-state/backups/restore?operation_id=restore-test'
+    restored = client.post(restore_url, content=exported.content, headers={'content-type': 'application/zip'})
+    assert restored.status_code == 201, restored.text
+    assert restored.headers['cache-control'] == 'private, no-store'
+    assert restored.json()['configuration']['sensor_id'] == draft['configuration']['sensor_id']
+    assert not restored.json()['configuration']['home_assistant']['enabled']
+    repeated = client.post(restore_url, content=exported.content, headers={'content-type': 'application/zip'})
+    assert repeated.json() == restored.json()
+    image = client.get(f"/api/vision/visual-state/drafts/{restored.json()['draft_id']}/references/{saved['reference']['reference_id']}/image")
+    assert image.status_code == 200
+    assert client.get('/api/pipelines/sensor').json() == pipeline.json()
+
+
+def test_backup_api_rejects_bad_format_and_upload_limit(client, monkeypatch):  # noqa: F811
+    from toposync_ext_vision.visual_state import api
+    url = '/api/vision/visual-state/backups/restore?operation_id=invalid'
+    assert client.post(url, content=b'bad').status_code == 415
+    assert client.post(url, content=b'bad', headers={'content-type': 'application/zip'}).status_code == 409
+    monkeypatch.setattr(api, 'MAX_BACKUP_BYTES', 2)
+    oversized = client.post(url, content=b'bad', headers={'content-type': 'application/zip'})
+    assert oversized.status_code == 413 and oversized.json()['detail'] == 'visual_backup_byte_limit'
+
+
+def test_backup_transfer_limit_holds_slot_until_worker_finishes(client, prepared, monkeypatch):  # noqa: F811
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    from toposync_ext_vision.visual_state import api
+    saved = capture(client, prepared).json()['draft']
+    url = f"/api/vision/visual-state/drafts/{saved['draft_id']}/backup?expected_revision={saved['revision']}"
+    exported = client.get(url).content
+    started, release = threading.Event(), threading.Event()
+    original = api.restore_backup
+
+    def blocked(*args, **kwargs):
+        started.set()
+        assert release.wait(10), 'test did not release transfer'
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(api, 'restore_backup', blocked)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(client.post, '/api/vision/visual-state/backups/restore?operation_id=first',
+            content=exported, headers={'content-type': 'application/zip'})
+        try:
+            assert started.wait(5)
+            busy = client.get(url)
+            assert busy.status_code == 429 and busy.json()['detail'] == 'visual_backup_busy'
+        finally:
+            release.set()
+        assert pending.result(timeout=5).status_code == 201
+    assert client.get(url).status_code == 200
 
 
 def test_storage_failure_does_not_expose_paths(client, prepared, monkeypatch):  # noqa: F811

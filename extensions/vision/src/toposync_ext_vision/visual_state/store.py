@@ -69,6 +69,10 @@ CREATE TABLE IF NOT EXISTS capture_operation (
     reference_id TEXT NOT NULL REFERENCES reference(id),
     PRIMARY KEY(draft_id, operation_id)
 );
+CREATE TABLE IF NOT EXISTS restore_operation (
+    operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL,
+    draft_id TEXT NOT NULL REFERENCES draft(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS configuration_pin (
     owner_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, configuration TEXT NOT NULL
 );
@@ -116,10 +120,10 @@ class VisualReferenceStore:
         self._connection.execute("PRAGMA busy_timeout=5000")
         self._connection.execute("PRAGMA synchronous=FULL")
         version = self._connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2):
+        if version not in (0, 1, 2, 3):
             self._connection.close()
             raise ReferenceConflict("unsupported reference schema")
-        self._connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA + "PRAGMA user_version=2; COMMIT;")
+        self._connection.executescript("BEGIN IMMEDIATE;" + _SCHEMA + "PRAGMA user_version=3; COMMIT;")
         database.chmod(0o600)
 
     def close(self) -> None:
@@ -189,16 +193,19 @@ class VisualReferenceStore:
         if type(lifetime_seconds) is not int or not 1 <= lifetime_seconds <= 86400:
             raise ValueError("draft lifetime must be between one second and one day")
         with self._transaction():
-            if self._connection.execute("SELECT count(*) FROM draft").fetchone()[0] >= self.limits.drafts:
-                raise ReferenceLimit("draft limit reached; collect expired drafts first")
-            references = self._check_configuration(config)
-            draft_id = uuid.uuid4().hex
-            self._connection.execute("INSERT INTO draft VALUES (?,0,?,?)", (
-                draft_id, self._now() + lifetime_seconds, config.model_dump_json(),
-            ))
-            self._connection.executemany("INSERT INTO draft_reference VALUES (?,?)",
-                                         [(draft_id, reference) for reference in references])
-            return self._draft(draft_id)
+            return self._create_draft(config, lifetime_seconds=lifetime_seconds)
+
+    def _create_draft(self, config: VisualStateConfig, *, lifetime_seconds: int = 3600) -> ReferenceDraft:
+        if self._connection.execute("SELECT count(*) FROM draft").fetchone()[0] >= self.limits.drafts:
+            raise ReferenceLimit("draft limit reached; collect expired drafts first")
+        references = self._check_configuration(config)
+        draft_id = uuid.uuid4().hex
+        self._connection.execute("INSERT INTO draft VALUES (?,0,?,?)", (
+            draft_id, self._now() + lifetime_seconds, config.model_dump_json(),
+        ))
+        self._connection.executemany("INSERT INTO draft_reference VALUES (?,?)",
+                                     [(draft_id, reference) for reference in references])
+        return self._draft(draft_id)
 
     def _replace_configuration(self, draft: ReferenceDraft, config: VisualStateConfig) -> ReferenceDraft:
         if config.sensor_id != draft.configuration.sensor_id:

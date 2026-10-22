@@ -18,6 +18,7 @@ from toposync.runtime.pipelines.preview import PipelinePreviewError
 
 from ..processing.runtime_backends.embedding import embedding_model_revision
 from ..registry import build_default_model_registry
+from .backup import MAX_BACKUP_BYTES, export_backup, restore_backup
 from .preview import VisualPreviewBusy, VisualStatePreviewRunner
 from .preparation import VisualRegionUnavailable
 from .schemas import Counter, Identifier, ReferenceEvidence, VisualStateConfig, VisualStateModel
@@ -89,6 +90,67 @@ def _private_image(data: bytes, thumbnail: bool) -> Response:
 def create_visual_reference_router(get_store: Callable[[], VisualReferenceStore], preview_runner: VisualStatePreviewRunner) -> APIRouter:
     router = APIRouter(prefix="/api/vision/visual-state")
     uploads = asyncio.Semaphore(2)
+    backups = asyncio.Semaphore(1)
+
+    async def backup_work(function, *args, **kwargs):
+        task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Keep the transfer slot until the storage transaction actually finishes.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not task.cancelled():
+                task.exception()
+            raise
+
+    @router.get("/drafts/{draft_id}/backup")
+    async def backup(request: Request, draft_id: Identifier, expected_revision: int = Query(ge=0)):
+        _authorize(request)
+        try:
+            await asyncio.wait_for(backups.acquire(), timeout=1)
+        except TimeoutError as error:
+            raise HTTPException(429, detail="visual_backup_busy") from error
+        try:
+            with _storage_errors():
+                data = await backup_work(export_backup, get_store(), draft_id, expected_revision=expected_revision)
+            return Response(data, media_type="application/zip", headers={
+                "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": 'attachment; filename="visual-sensor-backup.zip"',
+            })
+        finally:
+            backups.release()
+
+    @router.post("/backups/restore", status_code=201)
+    async def restore(request: Request, operation_id: Identifier, response: Response):
+        _authorize(request, write=True)
+        if request.headers.get("content-type", "").split(";")[0] != "application/zip":
+            raise HTTPException(415, detail="visual_backup_requires_zip")
+        try:
+            await asyncio.wait_for(backups.acquire(), timeout=1)
+        except TimeoutError as error:
+            raise HTTPException(429, detail="visual_backup_busy") from error
+        try:
+            content = bytearray()
+            try:
+                async with asyncio.timeout(30):
+                    async for chunk in request.stream():
+                        if len(content) + len(chunk) > MAX_BACKUP_BYTES:
+                            raise HTTPException(413, detail="visual_backup_byte_limit")
+                        content.extend(chunk)
+            except TimeoutError as error:
+                raise HTTPException(408, detail="visual_backup_upload_timeout") from error
+            with _storage_errors():
+                result = await backup_work(restore_backup, get_store(), bytes(content), operation_id=operation_id)
+            response.headers["Cache-Control"] = "private, no-store"
+            return result
+        finally:
+            backups.release()
 
     async def execute(request, body, *, capture=False):
         owner = _authorize(request, write=True)

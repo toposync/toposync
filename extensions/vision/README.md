@@ -113,6 +113,47 @@ configuration and must not perform side effects. Pipelines containing such an
 operator are duplicated disabled; operators without this callback retain the
 existing duplication behavior. The core does not know visual sensor identities.
 
+#### Sensor backup API
+
+`GET /api/vision/visual-state/drafts/{draft_id}/backup?expected_revision=...`
+downloads the exact draft revision as a private ZIP attachment. Synchronize the
+draft first; an outdated revision is rejected. The package contains versioned
+sensor configuration, confirmed reference metadata and PNG images with SHA-256
+hashes. It excludes pipeline/camera connection settings, provider credentials,
+model weights, vector caches, pending suggestions and current runtime values.
+Class descriptions and images are included; treat the downloaded file as private.
+
+`POST /api/vision/visual-state/backups/restore?operation_id=...` accepts
+`Content-Type: application/zip` and returns a new draft. Retry an uncertain request
+with the same operation identifier and identical bytes to recover that draft;
+using the identifier for different content is rejected. Idempotency survives
+restart and lasts as long as the draft. Restoration preserves sensor/class/image
+identities, changes the reference revision and disables Home Assistant publication.
+It never edits or enables a pipeline. Review and explicitly save the draft through
+the usual pipeline revision contract. Models, profiles and source/preparation
+compatibility remain activation requirements; an absent model does not prevent
+recovering the reference images themselves. Old live state is never restored.
+
+The package limit is 64 MiB, with at most 300 reference images, a 4 MiB manifest
+and 64 million image pixels in total (64 × 1024 × 1024). Individual image and
+installation storage limits still apply. Upload has a 30-second body deadline.
+One backup transfer runs at a time; another returns HTTP429 after a bounded wait.
+A cancelled request retains that slot until its storage worker exits. Both routes
+require the existing owner authorization; responses use private, no-store caching.
+
+Restore validates the complete archive in a private temporary directory before
+writing reference metadata. Only uncompressed regular ZIP members with exact
+manifest paths are accepted; paths are never extracted. Unknown versions, extra
+members, missing images, hash/dimension mismatches and conflicting reference
+identities are rejected. Image writes and the new draft are coordinated under the
+reference transaction; failures during image or draft writing roll back newly
+written images and metadata. Matching metadata with missing or corrupt files can
+be repaired by a valid backup. A failed database commit or abrupt process/power
+loss can leave unreferenced files for the existing collector; it cannot expose a
+partially committed draft. Exported
+packages are independent of later reference retention. Import/export controls in
+the operator panel are a separate interface integration requirement.
+
 Pipeline list/read/create/update responses include a content-based `revision`.
 Send that unchanged with `PUT /api/pipelines/{name}`. Visual operators opt into
 the generic `edit_precondition` capability: missing revisions return HTTP428;

@@ -1036,9 +1036,9 @@ async def test_shutdown_after_live_focus_requires_explicit_recovery_even_after_c
     original_end_session = store.end_session
     marker_was_durable_before_session_close: list[bool] = []
 
-    def end_session_after_marker(session_id, *, outcome, now):  # noqa: ANN001, ANN202
+    def end_session_after_marker(session_id, *, outcome, details, now):  # noqa: ANN001, ANN202
         marker_was_durable_before_session_close.append(store.is_recovery_required("front"))
-        return original_end_session(session_id, outcome=outcome, now=now)
+        return original_end_session(session_id, outcome=outcome, details=details, now=now)
 
     store.end_session = end_session_after_marker  # type: ignore[method-assign]
     await controller.shutdown()

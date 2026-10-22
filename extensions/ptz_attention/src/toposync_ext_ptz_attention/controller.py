@@ -99,6 +99,7 @@ class _DeviceRuntime:
     last_heartbeat_at: float | None = None
     movement_times: deque[float] = field(default_factory=deque)
     session_id: str = ""
+    session_started_monotonic: float | None = None
     fault: str = ""
     last_rate_limit_key: str = ""
     recovery_required: bool = False
@@ -138,6 +139,7 @@ class PtzAttentionController:
         self._operator_bindings: dict[tuple[str, str, str], _OperatorBinding] = {}
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+        self._clock_scope = uuid.uuid4().hex
 
     def service_status(self, profile: AttentionProfile | None = None) -> dict[str, bool]:
         known = getattr(self.services, "_services", {})
@@ -1310,15 +1312,7 @@ class PtzAttentionController:
             runtime.focused_since = self._clock()
             runtime.focused_started_monotonic = now
             self._set_state(runtime, "FOCUSED", now)
-            runtime.session_id = self.store.start_session(
-                ptz_device_id=profile.ptz_device_id,
-                profile_id=profile.id,
-                event_key=tracked.intent.key,
-                preset_token=tracked.resolved.preset_token,
-                priority=tracked.intent.priority,
-                recovery_on_restart=False,
-                now=self._clock(),
-            )
+            self._start_session(profile, runtime, tracked.resolved, tracked=tracked)
             self._record(
                 profile,
                 runtime,
@@ -1342,16 +1336,10 @@ class PtzAttentionController:
             return
         try:
             await self._ensure_lease(profile, runtime, now)
-            runtime.session_id = self.store.start_session(
-                ptz_device_id=profile.ptz_device_id,
-                profile_id=profile.id,
-                event_key=tracked.intent.key,
-                preset_token=tracked.resolved.preset_token,
-                priority=tracked.intent.priority,
-                now=self._clock(),
-            )
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
             runtime.command_event_key = tracked.intent.key
+            runtime.command_started_monotonic = None
+            self._start_session(profile, runtime, tracked.resolved, tracked=tracked)
             runtime.command_started_monotonic = self._monotonic_clock()
             if tracked.resolved.panorama is not None:
                 options = {}
@@ -1488,17 +1476,11 @@ class PtzAttentionController:
             return False
         try:
             await self._ensure_lease(profile, runtime, now)
-            if not runtime.session_id:
-                runtime.session_id = self.store.start_session(
-                    ptz_device_id=profile.ptz_device_id,
-                    profile_id=profile.id,
-                    event_key="__return_home__",
-                    preset_token=resolved.preset_token,
-                    priority=0,
-                    now=self._clock(),
-                )
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
             runtime.command_event_key = "__return_home__"
+            runtime.command_started_monotonic = None
+            if not runtime.session_id:
+                self._start_session(profile, runtime, resolved)
             runtime.command_started_monotonic = self._monotonic_clock()
             runtime.command_preset = resolved.preset_token
             runtime.command_target_key = resolved.target_key
@@ -1646,6 +1628,8 @@ class PtzAttentionController:
                     details={"cleanup_confirmed": False},
                 )
                 return
+            if runtime.session_id:
+                self.store.update_session(runtime.session_id, details={"return_verified": True})
             self._end_session(runtime, outcome="returned_home")
             self._clear_command(runtime)
             self._set_cooldown(runtime, now=now, seconds=profile.cooldown_seconds)
@@ -2535,10 +2519,42 @@ class PtzAttentionController:
                 break
             runtime.events.pop(item.intent.key, None)
 
+    def _start_session(
+        self, profile: AttentionProfile, runtime: _DeviceRuntime, target: ResolvedTarget,
+        *, tracked: _TrackedEvent | None = None,
+    ) -> None:
+        now = self._monotonic_clock()
+        mode = effective_mode(profile)
+        details = {"mode": mode, "source_id": profile.source_id, "clock_scope": self._clock_scope,
+                   "timing_clock": "controller_monotonic", "arrival_verified": False, "return_verified": False,
+                   "candidate_confirm_seconds": profile.candidate_confirm_seconds}
+        if target.panorama is not None:
+            details["panorama"] = target.panorama.model_dump(mode="json")
+        if mode != "shadow":
+            details["initial_command_id"] = runtime.command_id
+        if tracked is not None:
+            details["initial_event_at"] = tracked.intent.event_at
+            details["initial_received_at"] = tracked.intent.received_at
+            details["initial_capture_evidence"] = tracked.intent.capture_evidence
+            if tracked.candidate_received_monotonic is not None:
+                details["candidate_before_session_ms"] = max(0.0, now - tracked.candidate_received_monotonic) * 1000
+        runtime.session_id = self.store.start_session(
+            ptz_device_id=profile.ptz_device_id, profile_id=profile.id,
+            event_key=tracked.intent.key if tracked is not None else "__return_home__",
+            preset_token=target.preset_token, priority=tracked.intent.priority if tracked is not None else 0,
+            recovery_on_restart=mode != "shadow", details=details, now=self._clock(),
+        )
+        runtime.session_started_monotonic = now
+
     def _end_session(self, runtime: _DeviceRuntime, *, outcome: str) -> None:
         if runtime.session_id:
-            self.store.end_session(runtime.session_id, outcome=outcome, now=self._clock())
+            details = {"state_before_close": runtime.state, "recovery_required": runtime.recovery_required}
+            if runtime.session_started_monotonic is not None:
+                details["session_elapsed_ms"] = max(0.0,
+                    self._monotonic_clock() - runtime.session_started_monotonic) * 1000
+            self.store.end_session(runtime.session_id, outcome=outcome, details=details, now=self._clock())
             runtime.session_id = ""
+            runtime.session_started_monotonic = None
 
     def _record_missing_profile(self, intent: AttentionIntent) -> None:
         record = self.store.record_decision(
@@ -2568,6 +2584,10 @@ class PtzAttentionController:
         details: dict[str, Any] | None = None,
     ) -> None:
         payload = dict(details or {})
+        if runtime is not None and runtime.session_id and action in {
+            "move_submitted", "focus_acquired", "shadow_focus", "return_home_submitted",
+        }:
+            payload.setdefault("session_id", runtime.session_id)
         tracked = runtime.events.get(intent.key) if runtime is not None and intent is not None else None
         if tracked is not None and tracked.candidate_received_monotonic is not None:
             # UPDATE and candidate reconfirmation must not erase time already spent waiting.
@@ -2599,6 +2619,8 @@ class PtzAttentionController:
             payload.setdefault("received_at", intent.received_at)
             payload.setdefault("event_to_decision_ms", max(0.0, self._clock() - intent.event_at) * 1000)
             payload.setdefault("controller_to_decision_ms", max(0.0, self._clock() - intent.received_at) * 1000)
+        if payload.get("timing_clock") == "controller_monotonic":
+            payload.setdefault("clock_scope", self._clock_scope)
         record = self.store.record_decision(
             ptz_device_id=profile.ptz_device_id,
             profile_id=profile.id,
@@ -2612,6 +2634,12 @@ class PtzAttentionController:
             details=payload,
             now=self._clock(),
         )
+        if action == "focus_acquired" and runtime is not None and runtime.session_id:
+            self.store.update_session(runtime.session_id, details={
+                "arrival_verified": True, "arrival_decision_id": record.id,
+                **{key: payload[key] for key in ("command_to_arrival_ms", "candidate_to_arrival_ms",
+                    "arrival_source_id", "arrival_evidence") if key in payload},
+            })
         self.events.publish({"type": "decision", "decision": record.public_payload()})
 
     def _require_profile(self, profile_id: str) -> AttentionProfile:

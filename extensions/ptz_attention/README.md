@@ -64,7 +64,8 @@ Decision timing distinguishes event observation age (`event_to_decision_ms`, a
 wall-clock age of the latest intent) from elapsed controller time. It is not
 detector processing time or camera exposure latency. `candidate_elapsed_ms`
 starts when a valid candidate request enters the controller and survives UPDATE
-and reconfirmation; it includes resolution, selection waits and arbitration.
+and reconfirmation; it includes resolution, selection waits and arbitration after
+the device lock is acquired. It does not include time waiting for that lock.
 `candidate_confirm_seconds` reports the configured confirmation wait, not a
 measured duration to subtract from that total. A fresh candidate after observation
 expiry starts a new interval. `command_elapsed_ms` starts at navigation dispatch,
@@ -77,3 +78,16 @@ original candidate interval. Fault decisions retain the interrupted command's
 identifier and event key and never imply arrival. Shadow decisions have no physical
 arrival metrics. Missing or interrupted acquisitions must remain failures or
 incomplete samples in an evaluation, never be dropped from the denominator.
+
+The existing session journal retains the mode, source, panorama binding, initial
+capture evidence and command identifier. Verified focus stores its decision
+identifier and timing before the session ends. `arrival_verified` describes event
+acquisition; `return_verified` is separate and requires a confirmed physical
+return. Shadow never sets either flag. Ending a session merges evidence instead
+of discarding it, so pause, preemption, fault and shutdown remain evaluable.
+`session_elapsed_ms` includes holding and cleanup; it is not acquisition latency.
+Decisions and sessions identify their controller monotonic `clock_scope`.
+On restart, open sessions retain their last evidence and end as
+`process_restarted`; no elapsed duration is invented across clock scopes. The
+physical recovery requirement is immutable through diagnostic updates. These
+records do not establish camera exposure time or independently certify tracking.

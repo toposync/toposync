@@ -1,5 +1,6 @@
 """Panorama attention contracts; synthetic results never qualify a device."""
 import asyncio
+import json
 import math
 
 import pytest
@@ -517,6 +518,80 @@ async def test_failed_acquisition_keeps_candidate_and_command_timing_without_cla
     assert fault.details["command_elapsed_ms"] == pytest.approx(2100)
     assert "candidate_to_arrival_ms" not in fault.details
     assert "command_to_arrival_ms" not in fault.details
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish", ["arrival_then_pause", "arrival_then_return", "fault", "shutdown", "preempt", "shadow"])
+async def test_session_summary_keeps_acquisition_evidence_and_interrupted_attempts(finish):
+    mode = "shadow" if finish == "shadow" else "live_panorama"
+    arrival_expected = finish in {"arrival_then_pause", "arrival_then_return"}
+    clock, _, _, _, _, _, store, controller = environment(mode=mode, qualified=True, blocked=not arrival_expected)
+    store.replace_profile(panorama_profile(mode=mode, follow_view_updates=finish == "preempt",
+                                          candidate_confirm_seconds=.1 if finish == "preempt" else 0))
+
+    def observed(**kwargs):
+        return event(clock, **kwargs).model_copy(update={"capture_evidence": {
+            "capture_instance": "decoder", "generation": 1, "sequence": 1, "published_at": clock(),
+        }})
+
+    await controller.submit_intent(observed())
+    if finish == "preempt":
+        clock.advance(.11)
+        await controller.tick_once()
+    row = store._conn.execute("SELECT * FROM attention_session").fetchone()
+    session_id = row["id"]
+    initial = json.loads(row["details_json"])
+    assert initial["source_id"] == "wide"
+    assert initial["mode"] == mode
+    assert initial["arrival_verified"] is False
+    assert initial["panorama"]["revision"] == 1
+    if arrival_expected:
+        clock.advance(.4)
+        await asyncio.sleep(0)
+        await controller.tick_once()
+        clock.advance(.2)
+        if finish == "arrival_then_return":
+            assert await controller.return_home("front_attention")
+            clock.advance(.3)
+            await asyncio.sleep(0)
+            await controller.tick_once()
+            outcome, elapsed = "returned_home", 900
+        else:
+            await controller.pause("front_attention")
+            outcome, elapsed = "paused", 600
+    elif finish == "fault":
+        clock.advance(2.1)
+        await controller.tick_once()
+        outcome, elapsed = "fault", 2100
+    elif finish == "preempt":
+        clock.advance(.2)
+        await controller.submit_intent(observed(name="two", kind="high", x=-.5))
+        clock.advance(.11)
+        await controller.tick_once()
+        outcome, elapsed = "preempted", 310
+    else:
+        clock.advance(.3)
+        await controller.shutdown()
+        outcome, elapsed = "shutdown", 300
+    row = store._conn.execute("SELECT * FROM attention_session WHERE id = ?", (session_id,)).fetchone()
+    details = json.loads(row["details_json"])
+    assert row["outcome"] == outcome
+    assert details["source_id"] == "wide" and details["clock_scope"] == initial["clock_scope"]
+    assert details["session_elapsed_ms"] == pytest.approx(elapsed)
+    assert details["arrival_verified"] is arrival_expected
+    assert details["return_verified"] is (finish == "arrival_then_return")
+    if arrival_expected:
+        assert details["command_to_arrival_ms"] == pytest.approx(400)
+        assert details["candidate_to_arrival_ms"] == pytest.approx(400)
+        arrival = next(item for item in store.list_decisions()[0] if item.action == "focus_acquired")
+        assert details["arrival_decision_id"] == arrival.id
+        assert arrival.details["session_id"] == session_id
+        assert arrival.details["clock_scope"] == details["clock_scope"]
+    else:
+        assert "command_to_arrival_ms" not in details
+    assert details["recovery_on_restart"] is (finish != "shadow")
     await controller.shutdown()
     store.close()
 

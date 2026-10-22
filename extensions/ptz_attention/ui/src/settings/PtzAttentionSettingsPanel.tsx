@@ -28,7 +28,7 @@ import type {
   AttentionValidationResponse,
 } from "../types";
 import { PtzAttentionWizard } from "./PtzAttentionWizard";
-import { ArrivalFramingNotice } from "./ArrivalFramingNotice";
+import { ArrivalFramingNotice, ObservedFramingNotice } from "./ArrivalFramingNotice";
 
 type Translate = ReturnType<HostI18n["useI18n"]>["t"];
 type Tone = "success" | "warning" | "danger" | "info" | "neutral";
@@ -466,6 +466,7 @@ function PtzAttentionSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: 
                 locale={locale}
                 profile={selectedProfile}
                 session={session}
+                statusAge={status?.generated_at ? Date.now() / 1000 - status.generated_at : Infinity}
                 camera={camera}
                 currentViewId={currentViewId(session)}
                 bindingReady={bindingReady}
@@ -574,6 +575,7 @@ function SessionCockpit({
   locale,
   profile,
   session,
+  statusAge,
   camera,
   currentViewId,
   bindingReady,
@@ -593,6 +595,7 @@ function SessionCockpit({
   locale: string;
   profile: AttentionProfile;
   session: AttentionSession | null;
+  statusAge: number;
   camera: AttentionCameraCatalogItem | null;
   currentViewId: string;
   bindingReady: boolean;
@@ -655,7 +658,8 @@ function SessionCockpit({
         </div>
 
         {profile.mode === "shadow" ? <SessionNotice tone="info">{t("ext.ptz_attention.session.shadow_notice", {}, "Shadow review active.")}</SessionNotice> : null}
-        {profile.mode !== "shadow" && (state === "FOCUSED" || state === "GRACE") ? <SessionNotice tone="info">{t("ext.ptz_attention.framing.presence_unconfirmed")}</SessionNotice> : null}
+        {profile.mode !== "shadow" && (state === "FOCUSED" || state === "GRACE") ? <ObservedFramingNotice
+          observation={!stale && state === "FOCUSED" ? session?.observed_framing : null} statusAge={statusAge} t={t} /> : null}
         {!bindingReady ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.binding_notice", {}, "No enabled pipeline binding is ready for this profile.")}</SessionNotice> : null}
         {sharedObserver ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.shared_observer_notice", {}, "The event observer and PTZ actuator are the same camera; focus movement changes the observed scene.")}</SessionNotice> : null}
         {state === "MANUAL_OVERRIDE" ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.manual_notice", {}, "Manual control owns the camera.")}</SessionNotice> : null}

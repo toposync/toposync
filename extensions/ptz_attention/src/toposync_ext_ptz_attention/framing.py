@@ -273,7 +273,8 @@ class FramingContinuity:
 
 
 def framing_status(observation: FramingObservation | None, profile, now: float,
-                   *, continuity: FramingContinuity | None = None) -> dict | None:
+                   *, continuity: FramingContinuity | None = None,
+                   arrival_geometry: dict | None = None) -> dict | None:
     if observation is None:
         return None
     x1, y1, x2, y2 = observation.bbox01
@@ -286,8 +287,26 @@ def framing_status(observation: FramingObservation | None, profile, now: float,
         "extent01": [x2 - x1, y2 - y1],
         "minimum_margin01": min(x1, y1, 1 - x2, 1 - y2),
         "kind": "observed_image_extent",
+        "observed_after_arrival": False, "physical_capture_verified": False,
         "assessment_margin01": .05,
         "box_with_margin": _assessment(observation, profile, now) == "within_margin"}
     if continuity is not None:
         result["continuity"] = continuity.status(observation, profile, now)
+    if (arrival_geometry is not None and observation.panorama is not None and result["box_with_margin"]
+            and result.get("continuity", {}).get("consecutive_observations", 0) > 0):
+        try:
+            capture = arrival_geometry["capture_evidence"]
+            scope = {"camera_id": observation.camera_id, "source_id": observation.source_id,
+                **observation.panorama.model_dump(exclude={"center_ray", "corner_rays"})}
+            result["observed_after_arrival"] = bool(
+                arrival_geometry["source_scope"] == scope
+                and arrival_geometry["lens"]["width"] == observation.source_width
+                and arrival_geometry["lens"]["height"] == observation.source_height
+                and capture["capture_instance"] == observation.capture_instance
+                and type(capture["generation"]) is int and capture["generation"] == observation.generation
+                and type(capture["sequence"]) is int and 0 < capture["sequence"] < observation.sequence
+                and type(capture["published_at"]) in (int, float) and math.isfinite(capture["published_at"])
+                and 0 < capture["published_at"] < observation.published_at)
+        except (KeyError, TypeError, ValueError):
+            pass
     return result

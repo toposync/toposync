@@ -7,6 +7,7 @@ import re
 import time
 import uuid
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
@@ -72,6 +73,7 @@ class _TrackedEvent:
     observation_expired: bool = False
     expected_group_member_event_ids: tuple[str, ...] | None = None
     framing_continuity: FramingContinuity = field(default_factory=FramingContinuity)
+    arrival_geometry: dict | None = None
 
     def __post_init__(self) -> None:
         if self.expected_group_member_event_ids is None:
@@ -813,7 +815,13 @@ class PtzAttentionController:
                     active_view_id=(active.resolved.view_id if active and active.resolved else ""),
                     active_target=(active.resolved.panorama.model_dump(mode="json") if active and active.resolved and active.resolved.panorama else None),
                     observed_framing=framing_status(active.intent.framing_observation if active else None, profile, wall_now,
-                        continuity=active.framing_continuity if active else None),
+                        continuity=active.framing_continuity if active else None,
+                        arrival_geometry=active.arrival_geometry if (active and active.open
+                            and not active.observation_expired and runtime.state == "FOCUSED"
+                            and profile.mode == "live_panorama"
+                            and (active.expected_group_member_event_ids is None or (
+                                active.intent.framing_observation is not None
+                                and active.expected_group_member_event_ids == active.intent.framing_observation.member_event_ids))) else None),
                     estimated_group_framing=group_framing_status(active.intent.group_framing if active else None, wall_now),
                     active_priority=(active.intent.priority if active else None),
                     candidate_event_key=runtime.candidate_key,
@@ -1495,6 +1503,7 @@ class PtzAttentionController:
             and previous.resolved
             and previous.resolved.target_key == tracked.resolved.target_key
         ):
+            tracked.arrival_geometry = deepcopy(previous.arrival_geometry) if runtime.state == "FOCUSED" else None
             runtime.active_key = tracked.intent.key
             runtime.candidate_key = ""
             self._set_state(runtime, "FOCUSED", now)
@@ -1518,6 +1527,7 @@ class PtzAttentionController:
         runtime.command_preset = tracked.resolved.preset_token
         runtime.command_target_key = tracked.resolved.target_key
         runtime.movement_times.append(now)
+        tracked.arrival_geometry = None
 
         if effective_mode(profile) == "shadow":
             runtime.focused_since = self._clock()
@@ -1878,6 +1888,9 @@ class PtzAttentionController:
         if runtime.focused_started_monotonic is None:
             runtime.focused_since = self._clock()
             runtime.focused_started_monotonic = now
+        geometry = visual_evidence.get("frame_geometry") if visual_evidence else None
+        tracked.arrival_geometry = deepcopy(geometry) if (isinstance(geometry, dict)
+            and geometry.get("capture_evidence") == visual_evidence.get("capture_evidence")) else None
         self._set_state(runtime, "FOCUSED", now)
         if not runtime.session_id:
             await self._fault(profile, runtime, "focus_session_missing_after_move")

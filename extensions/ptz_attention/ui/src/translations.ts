@@ -1,4 +1,5 @@
 const en = {
+  "ext.ptz_attention.framing.observed_after_arrival": "Event box observed with margin after arrival in the selected source. This confirms the received sample only; identity and visibility between frames are not verified.",
   "ext.ptz_attention.framing.unavailable": "Framing assessment unavailable at this arrival.",
   "ext.ptz_attention.framing.inside": "Projected extent inside the image at arrival.",
   "ext.ptz_attention.framing.offset": "Projected extent displaced outside the image at arrival; fitting after a new aim has not been verified.",
@@ -348,6 +349,7 @@ const en = {
 } as const;
 
 const ptBR: Record<keyof typeof en, string> = {
+  "ext.ptz_attention.framing.observed_after_arrival": "Caixa do evento observada com margem após a chegada na fonte selecionada. A confirmação vale apenas para a amostra recebida; identidade e visibilidade entre quadros não foram verificadas.",
   "ext.ptz_attention.framing.unavailable": "Avaliação do enquadramento indisponível nesta chegada.",
   "ext.ptz_attention.framing.inside": "Extensão projetada dentro da imagem na chegada.",
   "ext.ptz_attention.framing.offset": "Extensão projetada deslocada para fora da imagem na chegada; ainda não foi verificado se outro apontamento a inclui.",

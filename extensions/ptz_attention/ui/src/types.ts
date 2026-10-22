@@ -164,6 +164,13 @@ export type AttentionSession = {
   active_event_key: string;
   active_view_id: string;
   active_target?: { ray: number[]; revision: number; source_id: string } | null;
+  observed_framing?: {
+    observed_after_arrival?: boolean;
+    publication_age_seconds?: number | null;
+    publication_recent?: boolean;
+    on_selected_source?: boolean;
+    box_with_margin?: boolean;
+  } | null;
   active_priority?: number | null;
   candidate_event_key: string;
   candidate_view_id: string;

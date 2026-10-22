@@ -50,6 +50,33 @@ def test_framing_span_counts_distinct_samples_and_never_polling_time():
     assert expired["reason"] == "publication_not_recent"
 
 
+@pytest.mark.parametrize('change', ['valid', 'same_frame', 'epoch', 'source', 'reference', 'dimensions',
+    'stale', 'future', 'no_arrival', 'no_continuity', 'boundary', 'timestamp'])
+def test_framing_after_arrival_requires_fresh_associated_sample_in_same_source(change):
+    from copy import deepcopy
+    profile = SimpleNamespace(camera_id='front', source_id='wide')
+    value = observation(with_localization(observed_packet()))
+    geometry = {'capture_evidence': {'capture_instance': 'decoder', 'generation': 1,
+        'sequence': 3, 'published_at': 999.9}, 'lens': {'width': 201, 'height': 101},
+        'source_scope': {'camera_id': 'front', 'source_id': 'wide',
+            **value.panorama.model_dump(exclude={'center_ray', 'corner_rays'})}}
+    if change == 'same_frame': geometry['capture_evidence']['sequence'] = 4
+    elif change == 'epoch': geometry['capture_evidence']['generation'] = 2
+    elif change == 'source': geometry['source_scope']['source_id'] = 'zoom'
+    elif change == 'reference': geometry['source_scope']['revision'] = 9
+    elif change == 'dimensions': geometry['lens']['width'] = 301
+    elif change == 'timestamp': geometry['capture_evidence']['published_at'] = 1000.1
+    elif change == 'no_arrival': geometry = None
+    elif change == 'boundary': value = value.model_copy(update={'boundary_contact': True})
+    run = FramingContinuity()
+    run.observe(value, profile, 1000.)
+    now = {'stale': 1002., 'future': 999.}.get(change, 1000.2)
+    result = framing_status(value, profile, now,
+        continuity=None if change == 'no_continuity' else run, arrival_geometry=deepcopy(geometry))
+    assert result['observed_after_arrival'] is (change == 'valid')
+    assert result['physical_capture_verified'] is False
+
+
 @pytest.mark.parametrize("failure", ["missing", "boundary", "margin", "source", "stale", "future", "sequence", "timestamp", "conflicting_repeat"])
 def test_invalid_observations_interrupt_without_reusing_the_old_frame(failure):
     profile = SimpleNamespace(camera_id="front", source_id="wide")
@@ -415,6 +442,92 @@ async def test_pipeline_preserves_box_alongside_world_anchor_in_status_and_decis
     assert controller.status()[0].observed_framing is None
     tracked = next(iter(controller._runtime_for(store.list_profiles()[0]).events.values()))
     assert tracked.framing_continuity.count == 0
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_sample_after_arrival_is_exposed_until_expiry_or_new_move(monkeypatch):
+    import asyncio
+    from copy import deepcopy
+    from test_panorama_attention import panorama_profile
+    from test_pipeline_api_plugin import MutableConfigStore, attention_pipeline
+
+    clock, _, services, state, calls, _, store, controller = environment(mode='live_panorama', qualified=True)
+    state['revision'] = 3
+    monkeypatch.setattr('toposync_ext_ptz_attention.pipelines.time.time', clock)
+    profile = panorama_profile(mode='live_panorama', follow_view_updates=True, candidate_confirm_seconds=.25,
+        follow_interval_seconds=.2, min_focus_seconds=0, same_head_observer_acknowledged=True)
+    store.replace_profile(profile)
+    pipeline = PtzAttentionRequestRuntime({'profile_id': profile.id, 'event_type': 'low'},
+        PipelineRuntimeDependencies(services=services, config_store=MutableConfigStore([attention_pipeline('front')])), controller)
+    context = SimpleNamespace(pipeline_name='events', node_id='attention')
+    packet = with_localization(observed_packet())
+    framed = observation(packet)
+    arrival_capture = {**packet.payload['capture_evidence'], 'sequence': 5, 'published_at': 1000.1}
+    state['arrival_evidence'] = {'capture_evidence': arrival_capture, 'frame_geometry': {
+        'capture_evidence': deepcopy(arrival_capture),
+        'lens': packet.payload['mapping']['visual_localization']['lens'],
+        'source_scope': {'camera_id': 'front', 'source_id': 'wide',
+            **framed.panorama.model_dump(exclude={'center_ray', 'corner_rays'})}}}
+    await pipeline.process_packet(packet, context)
+    clock.advance(.3)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    assert controller.status()[0].state == 'FOCUSED', [(item.action, item.reason) for item in store.list_decisions()[0]]
+    assert not controller.status()[0].observed_framing['observed_after_arrival']
+
+    async def publish(sequence, box=None):
+        fresh = with_localization(observed_packet())
+        for capture in (fresh.payload['capture_evidence'],
+                fresh.artifacts['main'].metadata['image_geometry']['capture_evidence'],
+                fresh.payload['mapping']['visual_localization']['capture_evidence']):
+            capture.update(sequence=sequence, published_at=clock())
+        if box: fresh.payload['subject']['bbox01'] = box
+        await pipeline.process_packet(replace(fresh, lifecycle=Lifecycle.UPDATE), context)
+
+    clock.advance(.1)
+    await publish(6)
+    public = controller.status()[0].public_payload()['observed_framing']
+    assert public['observed_after_arrival'] and public['box_with_margin']
+    assert not public['physical_capture_verified']
+    assert len(calls) == 1, 'A new sample at the same position must not request another move'
+    runtime = controller._runtime_for(profile)
+    for state_name in ['GRACE', 'ACQUIRING', 'MANUAL_OVERRIDE', 'FAULT']:
+        runtime.state = state_name
+        assert not controller.status()[0].observed_framing['observed_after_arrival']
+    runtime.state = 'FOCUSED'
+    store.replace_profile(profile.model_copy(update={'mode': 'shadow'}))
+    assert not controller.status()[0].observed_framing['observed_after_arrival']
+    store.replace_profile(profile)
+    tracked = next(iter(runtime.events.values()))
+    tracked.expected_group_member_event_ids = ('missing',)
+    assert not controller.status()[0].observed_framing['observed_after_arrival']
+    tracked.expected_group_member_event_ids = None
+    # Coalescing another event at this position must use the current arrival, not its old history.
+    candidate = replace(tracked, arrival_geometry={'obsolete': True},
+        intent=tracked.intent.model_copy(update={'event_id': 'replacement', 'key': 'replacement'}))
+    runtime.events[candidate.intent.key] = candidate
+    await controller._begin_focus(profile, runtime, candidate, clock(), reason='same_target')
+    assert candidate.arrival_geometry == tracked.arrival_geometry
+    assert candidate.arrival_geometry is not tracked.arrival_geometry
+    runtime.active_key = tracked.intent.key
+    runtime.events.pop(candidate.intent.key)
+    state['arrival_evidence']['frame_geometry']['source_scope']['source_id'] = 'mutated'
+    assert controller.status()[0].observed_framing['observed_after_arrival'], 'Snapshot is immutable'
+    clock.advance(1.1)
+    assert not controller.status()[0].observed_framing['observed_after_arrival']
+    await publish(7)
+    assert controller.status()[0].observed_framing['observed_after_arrival']
+    clock.advance(.1)
+    await publish(8, [.6, .1, .8, .5])
+    clock.advance(.3)
+    await publish(9, [.6, .1, .8, .5])
+    assert controller.status()[0].state == 'ACQUIRING'
+    tracked = next(iter(controller._runtime_for(profile).events.values()))
+    assert tracked.arrival_geometry is None
+    assert not controller.status()[0].observed_framing['observed_after_arrival']
     await controller.shutdown()
     store.close()
 

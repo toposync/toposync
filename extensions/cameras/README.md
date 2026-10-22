@@ -13,6 +13,16 @@ First-party extension focused on camera integration for the global Pipelines run
 
 The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tracking`, and `toposync_ext_cameras.processor_server`) is no longer part of this extension.
 
+The read-only `capture-observation` diagnostic separates opening, observation and
+release costs using the process monotonic clock. `first_frame_elapsed_seconds`
+counts from request admission in the capture service, including opening, to the
+first distinct decoded sample; it is null when no sample was observed. This is
+not camera exposure latency or physical arrival confirmation. Existing
+`duration_seconds` retains its post-opening meaning, including cleanup;
+`request_elapsed_seconds` includes all three phases, without HTTP overhead.
+Samples include capture instance, generation and sequence so overlapping consumers
+can be compared without treating decoder replacement as stream continuity.
+
 The person/vehicle stopped recipes sample continuously at four frames per second:
 motion gating would stop supplying evidence after the subject stops. Detection and
 mapping still determine whether a stationary event has sufficient evidence; this

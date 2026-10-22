@@ -336,6 +336,7 @@ const en = {
   "ext.ptz_attention.priority.low": "Low",
   "ext.ptz_attention.priority.medium": "Medium",
   "ext.ptz_attention.priority.high": "High",
+  "ext.ptz_attention.priority.custom": "Custom ({{priority}})",
 } as const;
 
 const ptBR: Record<keyof typeof en, string> = {
@@ -676,6 +677,7 @@ const ptBR: Record<keyof typeof en, string> = {
   "ext.ptz_attention.priority.low": "Baixa",
   "ext.ptz_attention.priority.medium": "Média",
   "ext.ptz_attention.priority.high": "Alta",
+  "ext.ptz_attention.priority.custom": "Personalizada ({{priority}})",
 };
 
 export const ptzAttentionTranslations = { en, "pt-BR": ptBR };

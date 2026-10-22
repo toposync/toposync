@@ -593,6 +593,9 @@ function EventsStep({
                 <label className="ptzAttentionField" style={{ marginTop: 10 }}>
                   <span>{t("ext.ptz_attention.operator.priority", {}, "Attention priority")}</span>
                   <select className="input" value={String(policy.priority)} onChange={(input) => onUpdatePolicy(policy.event_type, { priority: Number(input.target.value) })}>
+                    {![-100, 0, 100].includes(policy.priority) ? <option value={String(policy.priority)}>
+                      {t("ext.ptz_attention.priority.custom", { priority: policy.priority }, "Custom ({{priority}})")}
+                    </option> : null}
                     <option value="-100">{t("ext.ptz_attention.priority.low", {}, "Low")}</option>
                     <option value="0">{t("ext.ptz_attention.priority.medium", {}, "Medium")}</option>
                     <option value="100">{t("ext.ptz_attention.priority.high", {}, "High")}</option>

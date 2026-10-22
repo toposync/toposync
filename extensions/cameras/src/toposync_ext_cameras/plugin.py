@@ -461,6 +461,7 @@ class OnvifDiscoverResponse(BaseModel):
 class CameraCaptureObservationRequest(BaseModel):
     duration_s: float = Field(default=5.0, ge=0.5, le=30.0)
     sample_interval_s: float = Field(default=0.05, ge=0.02, le=1.0)
+    fps: float | None = Field(default=None, ge=1.0, le=60.0)
 
 
 class ControlPointMapQuery(BaseModel):
@@ -3897,6 +3898,7 @@ class CamerasExtension(BaseExtension):
                         owner_id=f"observation:{uuid.uuid4().hex}",
                         camera_id=cid,
                         source_id=sid,
+                        fps=body.fps,
                     ),
                     _capture_dependencies(),
                     duration_s=body.duration_s,

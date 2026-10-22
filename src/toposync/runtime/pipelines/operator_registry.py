@@ -381,6 +381,8 @@ class RegisteredOperator:
     runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None
     diagnostics_factory: Callable[[dict[str, Any], dict[str, Any]], list[OperatorDiagnostic | dict[str, Any]]] | None = None
     split_stream_when: Callable[[dict[str, Any]], bool] | None = None
+    # Return a recursive configuration patch; affected pipeline copies start disabled.
+    duplicate_config: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
     def splits_stream(self, config: dict[str, Any]) -> bool:
         """Resolve configured fan-out without changing static access/placement capabilities.
@@ -438,6 +440,7 @@ class OperatorRegistry:
         runtime_factory: Callable[[dict[str, Any], Any], Any] | None = None,
         diagnostics_factory: Callable[[dict[str, Any], dict[str, Any]], list[OperatorDiagnostic | dict[str, Any]]] | None = None,
         split_stream_when: Callable[[dict[str, Any]], bool] | None = None,
+        duplicate_config: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> OperatorDefinition:
         normalized_operator_id = str(operator_id or "").strip()
         if normalized_operator_id in self._items:
@@ -553,6 +556,7 @@ class OperatorRegistry:
             runtime_factory=runtime_factory,
             diagnostics_factory=diagnostics_factory,
             split_stream_when=split_stream_when,
+            duplicate_config=duplicate_config,
         )
         return definition
 

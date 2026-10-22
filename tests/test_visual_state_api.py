@@ -341,6 +341,12 @@ def test_saved_pipeline_reopens_private_photos_after_draft_expiry(client, prepar
     reference_id = captured["reference"]["reference_id"]
     copied = client.post("/api/pipelines/sensor/duplicate")
     assert copied.status_code == 201, copied.text
+    original_config = response.json()["graph"]["nodes"][0]["config"]
+    copied_config = copied.json()["graph"]["nodes"][0]["config"]
+    assert copied_config["sensor_id"] != original_config["sensor_id"]
+    assert copied_config["classes"] == original_config["classes"]
+    assert not copied.json()["enabled"] and not copied_config["home_assistant"]["enabled"]
+    assert client.get("/api/pipelines/sensor").json() == response.json()
     assert client.delete("/api/pipelines/sensor").status_code == 200
     store = client.portal.call(client.app.state.services.call, "vision.visual_references")
     store._clock = lambda: captured["draft"]["expires_at"] + 86401
@@ -388,6 +394,14 @@ def test_signed_invalid_image_is_still_decoded_and_rejected(client, prepared):  
 def test_member_and_anonymous_cannot_access_pixels_or_drafts(client, prepared):  # noqa: F811
     saved = capture(client, prepared).json()
     image_url = f"/api/vision/visual-state/drafts/{saved['draft']['draft_id']}/references/{saved['reference']['reference_id']}/image"
+    assert client.post('/api/pipelines', json=_configured_pipeline(saved['draft']['configuration'])).status_code == 201
+    copied = client.post('/api/pipelines/sensor/duplicate')
+    assert copied.status_code == 201, copied.text
+    copied_configuration = copied.json()['graph']['nodes'][0]['config']
+    copied_draft = client.post('/api/vision/visual-state/drafts', json=copied_configuration)
+    assert copied_draft.status_code == 201, copied_draft.text
+    copied_image_url = f"/api/vision/visual-state/drafts/{copied_draft.json()['draft_id']}/references/{saved['reference']['reference_id']}/image"
+    assert client.get(copied_image_url).status_code == 200
     user = client.post("/api/access/users", json={"username": "member", "display_name": "Member",
         "role": "member", "password": "password123"}).json()
     for action, resource in [("core:extension:use", "core:extension"), ("core:pipelines:read", "core:global"), ("core:pipelines:write", "core:global")]:
@@ -396,10 +410,13 @@ def test_member_and_anonymous_cannot_access_pixels_or_drafts(client, prepared): 
         assert grant.status_code == 200, grant.text
     assert client.post("/api/auth/login", json={"username": "member", "password": "password123", "device_label": "test"}).status_code == 200
     assert client.get(image_url).status_code == 403
+    assert client.get(copied_image_url).status_code == 403
+    assert client.post('/api/vision/visual-state/drafts', json=copied_configuration).status_code == 403
     assert capture(client, prepared).status_code == 403
     assert client.post("/api/vision/visual-state/drafts", json=config(prepared["evidence"])).status_code == 403
     client.post("/api/auth/logout")
     assert client.get(image_url).status_code == 401
+    assert client.get(copied_image_url).status_code == 401
     assert capture(client, prepared).status_code == 401
 
 

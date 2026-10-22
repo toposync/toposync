@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 import json
 
 import pytest
@@ -116,3 +117,62 @@ def test_revision_is_canonical_content_and_response_does_not_mutate_pipeline():
     response = PipelineRead.from_pipeline(left)
     assert len(response.revision) == 64 and left.model_dump() == before
     assert pipeline_revision(left.model_copy(update={'enabled': True})) != response.revision
+
+
+def visual_config(pipeline):
+    return next(node['config'] for node in pipeline['graph']['nodes'] if node['operator'] == 'vision.visual_state')
+
+
+@pytest.mark.parametrize('python_editor', [False, True])
+def test_duplicate_has_new_identity_and_preserves_configuration_after_save(client, python_editor):  # noqa: F811
+    original = create_sensor(client)
+    if python_editor:
+        original['editor_mode'] = 'python'
+        original['python_source'] = (
+            'sensor = camera.source(_id="source", rtsp_url="rtsp://synthetic-never-opened") '
+            f'| vision.visual_state(_id="state", **{configuration()!r})'
+        )
+        response = client.put('/api/pipelines/sensor', json=original)
+        assert response.status_code == 200, response.text
+        original = response.json()
+    identities = {visual_config(original)['sensor_id']}
+    source_name = 'sensor'
+    for name in ('copy', 'copy_again'):
+        response = client.post(f'/api/pipelines/{source_name}/duplicate', json={'new_name': name})
+        assert response.status_code == 201, response.text
+        duplicate = response.json()
+        actual = visual_config(duplicate)
+        assert actual['sensor_id'] not in identities
+        identities.add(actual['sensor_id'])
+        assert duplicate['enabled'] is False and actual['home_assistant']['enabled'] is False
+        expected = deepcopy(visual_config(original))
+        expected.update(sensor_id=actual['sensor_id'])
+        expected['home_assistant']['enabled'] = False
+        assert actual == expected
+        assert duplicate['graph']['uid'] == name
+        # Saving a Python copy recompiles its source and must retain the new identity.
+        duplicate['display_name'] = f'Reviewed {name}'
+        saved = client.put(f'/api/pipelines/{name}', json=duplicate)
+        assert saved.status_code == 200, saved.text
+        assert visual_config(saved.json()) == actual
+        assert client.get(f'/api/pipelines/{name}').json() == saved.json()
+        source_name = name
+    assert client.get('/api/pipelines/sensor').json() == original
+    if python_editor:
+        latest = client.get('/api/pipelines/copy_again').json()
+        latest['python_source'] = latest['python_source'].replace("'description': 'Aberta'", "'description': 'Porta aberta'")
+        saved = client.put('/api/pipelines/copy_again', json=latest)
+        assert saved.status_code == 200, saved.text
+        assert visual_config(saved.json())['classes'][0]['description'] == 'Porta aberta'
+        assert visual_config(saved.json())['sensor_id'] == visual_config(latest)['sensor_id']
+
+
+def test_duplicate_failure_does_not_create_partial_pipeline_or_modify_source(client, monkeypatch):  # noqa: F811
+    original = create_sensor(client)
+    registry = client.app.state.pipeline_operator_registry
+    registered = registry.get('vision.visual_state')
+    monkeypatch.setitem(registry._items, 'vision.visual_state', replace(registered, duplicate_config=lambda config: {'sensor_id': ''}))
+    rejected = client.post('/api/pipelines/sensor/duplicate', json={'new_name': 'broken'})
+    assert rejected.status_code == 400, rejected.text
+    assert client.get('/api/pipelines/broken').status_code == 404
+    assert client.get('/api/pipelines/sensor').json() == original

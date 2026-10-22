@@ -89,6 +89,30 @@ Changed sensor configurations must reference intact images with compatible
 classes, source and preparation. A failed write preserves both the previous and
 newly reserved images.
 
+Duplicating a pipeline creates a new `sensor_id` for every visual sensor and
+disables both the copied pipeline and its Home Assistant publication. Classes,
+descriptions, reference images, region and explicit binary mappings are preserved;
+the original pipeline is unchanged. Review the copy before enabling it. Reference
+sharing stays within the installation owner's existing authorization: copying a
+pipeline does not grant access to private images or drafts.
+
+Python copies append explicit `configure_node(node_id, **patch)` calls so later
+compilation and saving retain their new identities. Patches merge nested objects;
+lists and scalars replace their previous values. They apply in source order after
+the pipeline expression is built and undergo operator configuration validation.
+Configure stream splitting in the operator expression, since edge defaults are
+already chosen. Keep node identifiers stable, or update these calls along with
+their `_id` expressions. For identifiers based on `PIPELINE_NAME`, use the same
+expression in `configure_node` before another rename or duplication. A missing
+node or a shadowed helper rejects duplication rather than saving a broken copy.
+To enable publication in a Python copy, edit its final publication override too.
+
+Extension authors can register the generic `duplicate_config` callback to return
+a recursive configuration patch. It receives an isolated copy of the node's
+configuration and must not perform side effects. Pipelines containing such an
+operator are duplicated disabled; operators without this callback retain the
+existing duplication behavior. The core does not know visual sensor identities.
+
 Pipeline list/read/create/update responses include a content-based `revision`.
 Send that unchanged with `PUT /api/pipelines/{name}`. Visual operators opt into
 the generic `edit_precondition` capability: missing revisions return HTTP428;

@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.responses import StreamingResponse
 from toposync.runtime.pipelines.inspection import PipelineInspectionStore
 from toposync.runtime.pipelines.capture_receipts import CaptureReceipts
-from toposync.runtime.pipelines.editing import PipelineEditRequest, PipelineRead, pipeline_revision
+from toposync.runtime.pipelines.editing import PipelineEditRequest, PipelineRead, pipeline_revision, prepare_pipeline_duplicate
 from toposync.runtime.pipelines.inspection_api import install_inspection_routes
 from toposync.runtime.pipelines.demands import ResourceDemandRegistry
 from toposync.runtime.pipelines.demand_api import install_demand_routes
@@ -4289,6 +4289,7 @@ def create_app() -> FastAPI:
 
         try:
             duplicated = Pipeline.model_validate(payload)
+            duplicated = prepare_pipeline_duplicate(duplicated, request.app.state.pipeline_operator_registry)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

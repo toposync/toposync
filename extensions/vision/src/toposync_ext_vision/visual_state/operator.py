@@ -1,3 +1,5 @@
+import uuid
+
 from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, payload_path_hint
 
 from ..registry import build_default_model_registry
@@ -87,6 +89,10 @@ def visual_state_diagnostics(config, context):
     return diagnostics
 
 
+def duplicate_visual_state_config(_config):
+    return {"sensor_id": uuid.uuid4().hex, "home_assistant": {"enabled": False}}
+
+
 def register_visual_state_operator(registry):
     if registry.get("vision.visual_state") is not None:
         return
@@ -107,4 +113,5 @@ def register_visual_state_operator(registry):
                                            description="Visual sensor state, evidence revision and remaining validity.")],
         ui={"pipeline_group": "vision", "pipeline_level": "advanced"}, owner="com.toposync.vision",
         runtime_factory=VisualStateRuntime, diagnostics_factory=visual_state_diagnostics,
+        duplicate_config=duplicate_visual_state_config,
     )

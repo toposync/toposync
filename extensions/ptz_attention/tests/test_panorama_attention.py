@@ -563,11 +563,15 @@ async def test_resolver_rejection_preserves_safe_code_and_requested_target(reaso
 
 
 @pytest.mark.asyncio
-async def test_arrival_latency_is_only_recorded_after_verified_physical_arrival():
+@pytest.mark.parametrize('projection_key', ['framing_projection', 'group_framing_projection'])
+@pytest.mark.parametrize('fit_status', ['inside_frame', 'offset_within_current_extent', 'extent_exceeds_frame', None])
+async def test_arrival_latency_is_only_recorded_after_verified_physical_arrival(projection_key, fit_status):
     clock, _, _, state, _, _, store, controller = environment(mode="live_panorama", qualified=True)
     state["arrival_evidence"] = {"image_url": "/api/cameras/example-arrival.jpg",
-        "framing_projection": {"status": "corner_outside_or_behind_frame", "sampled_corners_inside": False,
-            "subject_visibility_verified": False}}
+        projection_key: {"status": "projected" if fit_status == 'inside_frame' else (
+            'member_outside_or_unqualified' if projection_key == 'group_framing_projection' else 'projected_outside'),
+            "sampled_corners_inside": fit_status == 'inside_frame',
+            "subject_visibility_verified": False, "fit": {"status": fit_status}}}
     await controller.submit_intent(event(clock))
     assert controller.status()[0].state == "ACQUIRING"
     assert all("command_to_arrival_ms" not in item.details for item in store.list_decisions()[0])
@@ -579,7 +583,8 @@ async def test_arrival_latency_is_only_recorded_after_verified_physical_arrival(
     assert acquired.details["event_to_decision_ms"] == pytest.approx(400)
     assert acquired.details["arrival_source_id"] == "wide"
     assert acquired.details["arrival_evidence"] == "visual"
-    assert acquired.details["framing_projection"] == state["arrival_evidence"]["framing_projection"]
+    assert acquired.public_payload()['details'][projection_key] == state["arrival_evidence"][projection_key]
+    assert controller.status()[0].state == 'FOCUSED', 'Point arrival is independent from subject framing'
     assert acquired.details["arrival_image_url"] == "/api/cameras/example-arrival.jpg"
     await controller.shutdown()
     store.close()

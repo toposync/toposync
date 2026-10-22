@@ -28,6 +28,7 @@ import type {
   AttentionValidationResponse,
 } from "../types";
 import { PtzAttentionWizard } from "./PtzAttentionWizard";
+import { ArrivalFramingNotice } from "./ArrivalFramingNotice";
 
 type Translate = ReturnType<HostI18n["useI18n"]>["t"];
 type Tone = "success" | "warning" | "danger" | "info" | "neutral";
@@ -654,6 +655,7 @@ function SessionCockpit({
         </div>
 
         {profile.mode === "shadow" ? <SessionNotice tone="info">{t("ext.ptz_attention.session.shadow_notice", {}, "Shadow review active.")}</SessionNotice> : null}
+        {profile.mode !== "shadow" && (state === "FOCUSED" || state === "GRACE") ? <SessionNotice tone="info">{t("ext.ptz_attention.framing.presence_unconfirmed")}</SessionNotice> : null}
         {!bindingReady ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.binding_notice", {}, "No enabled pipeline binding is ready for this profile.")}</SessionNotice> : null}
         {sharedObserver ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.shared_observer_notice", {}, "The event observer and PTZ actuator are the same camera; focus movement changes the observed scene.")}</SessionNotice> : null}
         {state === "MANUAL_OVERRIDE" ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.manual_notice", {}, "Manual control owns the camera.")}</SessionNotice> : null}
@@ -777,6 +779,7 @@ function DecisionReview({
                         decision.details.target ? t("ext.ptz_attention.panorama.target") : "",
                       ].filter(Boolean).join(" · ") || "-"}
                     </div>
+                    <ArrivalFramingNotice action={decision.action} details={decision.details} t={t} />
                     {typeof decision.details.event_to_decision_ms === "number" ? (
                       <div className="ptzAttentionMuted">
                         {t("ext.ptz_attention.latency.decision", {
@@ -923,7 +926,7 @@ function modeLabel(mode: AttentionExecutionMode, t: Translate): string {
 function stateTone(state: AttentionRuntimeState): Tone {
   if (state === "FAULT") return "danger";
   if (state === "MANUAL_OVERRIDE" || state === "GRACE") return "warning";
-  if (state === "FOCUSED") return "success";
+  if (state === "FOCUSED") return "info";
   if (state === "ACQUIRING" || state === "RETURNING" || state === "CANDIDATE") return "info";
   return "neutral";
 }
@@ -939,6 +942,7 @@ function decisionTone(decision: AttentionDecision): Tone {
   const action = decision.action.toLowerCase();
   if (decision.state === "FAULT" || action.includes("fault") || action.includes("failed")) return "danger";
   if (action.includes("suppress") || action.includes("reject") || action.includes("shadow")) return "warning";
+  if (action === "focus_acquired") return "info";
   if (action.includes("focus") || action.includes("home") || action.includes("return")) return "success";
   return "neutral";
 }

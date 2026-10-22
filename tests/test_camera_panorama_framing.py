@@ -4,7 +4,7 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from toposync_ext_cameras.panorama_navigation import arrival_frame_geometry, project_arrival_framing
+from toposync_ext_cameras.panorama_navigation import arrival_frame_geometry, project_arrival_framing, project_group_framing, group_framing_rays
 
 
 def scene(monkeypatch):
@@ -24,6 +24,38 @@ def scene(monkeypatch):
         'panorama': {key: value for key, value in scope.items() if key not in ('camera_id', 'source_id')} |
             {'center_ray': [1., 0., 0.], 'corner_rays': [(ray / np.linalg.norm(ray)).tolist() for ray in rays]}}
     return frame, located, lens, framing, {'frame_geometry': geometry, 'capture_evidence': deepcopy(capture)}
+
+
+@pytest.mark.parametrize('outside', [False, True])
+def test_group_projection_preserves_every_member_and_never_certifies_visibility(monkeypatch, outside):
+    _, _, _, first, evidence = scene(monkeypatch)
+    second = deepcopy(first)
+    for ray in second['panorama']['corner_rays']:
+        raw = np.array([ray[0], ray[1] + (.9 if outside else .1), ray[2]])
+        ray[:] = (raw / np.linalg.norm(raw)).tolist()
+    group = {'members': {'person': first, 'vehicle': second}}
+    result = project_group_framing(group, evidence)
+    assert set(result['members']) == {'person', 'vehicle'}
+    assert result['kind'] == 'projected_member_history'
+    assert result['subject_visibility_verified'] is False
+    assert result['physical_capture_verified'] is False
+    if outside:
+        assert result['status'] == 'member_outside_or_unqualified' and 'bbox01' not in result
+    else:
+        assert result['status'] == 'projected'
+        assert result['bbox01'][0] == pytest.approx(.4)
+        assert result['bbox01'][2] > .6
+
+
+def test_group_center_uses_all_corners_and_is_independent_of_world_anchor():
+    # Symmetric corners around the panorama forward axis have a known center.
+    corners = [np.array([1., y, z]) for y, z in [(-.4, -.2), (-.4, .2), (.4, -.2), (.4, .2)]]
+    normalized = [(ray / np.linalg.norm(ray)).tolist() for ray in corners]
+    group = {'members': {'left': {'panorama': {'corner_rays': normalized[:2] * 2}},
+                         'right': {'panorama': {'corner_rays': normalized[2:] * 2}}}}
+    rays = group_framing_rays(group)
+    assert rays[0] == pytest.approx([1., 0., 0.])
+    assert len(rays) == 9
 
 
 def test_arrival_geometry_is_a_snapshot_and_projection_is_not_detection(monkeypatch):

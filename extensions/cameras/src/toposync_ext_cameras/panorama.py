@@ -2234,6 +2234,13 @@ class PanoramaService:
             if ray is None:
                 raise ValueError("World point has no ray")
             resolved = {"ray": list(ray)}
+            if target.get("group_framing") is not None:
+                if target.get("framing") is not None:
+                    raise _error("invalid_target", "Choose one framing evidence contract", 422)
+                self._attention_group_rays(job, target["group_framing"])
+                if (target.get("world_envelope") or {}).get("member_count") != len(target["group_framing"]["members"]):
+                    raise _error("invalid_target", "The group envelope must include every member", 422)
+                resolved["group_framing"] = copy.deepcopy(target["group_framing"])
             if target.get("framing") is not None:
                 self._attention_framing_rays(job, target["framing"])
                 resolved["framing"] = copy.deepcopy(target["framing"])
@@ -2245,6 +2252,25 @@ class PanoramaService:
                 "job_id": job["id"], "revision": job["revision"], "target": resolved,
                 "positioning_available": active["job"]["permissions"]["aim_enabled"],
                 "attention_qualified": self._attention_qualified(job)}
+
+    @staticmethod
+    def _attention_group_rays(job: dict, group: dict) -> np.ndarray:
+        from .panorama_navigation import group_framing_rays
+        members = group.get("members") if isinstance(group, dict) else None
+        if (not isinstance(members, dict) or not members
+                or any(not isinstance(name, str) or not name.strip() or len(name) > 512 for name in members)):
+            raise _error("invalid_framing_observation", "The group members are invalid", 422)
+        epoch = None
+        for member in members.values():
+            PanoramaService._attention_framing_rays(job, member)
+            current = (member["capture_instance"], member["generation"])
+            if epoch is not None and current != epoch:
+                raise _error("tracking_capture_epoch_changed", "The group mixes capture epochs", 422)
+            epoch = current
+        try:
+            return group_framing_rays(group)
+        except (ValueError, TypeError, KeyError):
+            raise _error("invalid_framing_observation", "The group has no supported viewing envelope", 422) from None
 
     @staticmethod
     def _attention_framing_rays(job: dict, framing: dict) -> np.ndarray:
@@ -2371,12 +2397,12 @@ class PanoramaService:
             job = self.jobs[public["id"]]
             if not self._attention_qualified(job):
                 raise _error("attention_physical_qualification_required", "Physical attention qualification is required")
-            if returning and (target_provider is not None or destination.get("framing") is not None):
+            if returning and (target_provider is not None or destination.get("framing") is not None or destination.get("group_framing") is not None):
                 raise _error("invalid_target", "Return navigation cannot inherit subject framing", 422)
             if target_provider is not None and not callable(target_provider):
                 raise _error("invalid_target", "The target provider is invalid", 422)
             localizer = None
-            if destination.get("framing") is not None or target_provider is not None:
+            if destination.get("framing") is not None or destination.get("group_framing") is not None or target_provider is not None:
                 localizer = await self.reference_localizer(camera_id, source_id, job["source_panorama"])
             started_wall, started_monotonic = time.time(), time.monotonic()
             reached = copy.deepcopy(destination)
@@ -2393,12 +2419,16 @@ class PanoramaService:
                 if world is None or mapping_extrapolated(job["solution"], *world):
                     raise _error("outside_validated_region", "The attention target is outside the mapped region", 422)
                 framing = updated.get("framing")
-                if framing is None:
+                group = updated.get("group_framing")
+                if group is not None and framing is not None:
+                    raise _error("invalid_target", "Choose one framing evidence contract", 422)
+                if framing is None and group is None:
                     return anchor.tolist()
-                rays = self._attention_framing_rays(job, framing)
-                age = started_wall + time.monotonic() - started_monotonic - framing["published_at"]
-                if not 0 <= age < observation_timeout_seconds:
-                    raise PanoramaCaptureError("following_observation_expired")
+                rays = self._attention_group_rays(job, group) if group is not None else self._attention_framing_rays(job, framing)
+                for observation in group["members"].values() if group is not None else (framing,):
+                    age = started_wall + time.monotonic() - started_monotonic - observation["published_at"]
+                    if not 0 <= age < observation_timeout_seconds:
+                        raise PanoramaCaptureError("following_observation_expired")
                 if any(localizer.target_reference(vector) is None for vector in rays):
                     raise PanoramaCaptureError("visual_target_unreachable")
                 coverage = getattr(localizer, "coverage_mask", None)
@@ -2425,6 +2455,13 @@ class PanoramaService:
                         for key in ("camera_id", "source_id", "composition_id", "element_id", "job_id", "revision"))):
                     raise PanoramaCaptureError("panorama_reference_changed")
                 previous, observed = reached.get("framing"), updated.get("framing")
+                old_group, new_group = reached.get("group_framing"), updated.get("group_framing")
+                if old_group is not None:
+                    from .panorama_navigation import group_framing_update_valid
+                    if new_group is not None:
+                        self._attention_group_rays(job, new_group)
+                    if not group_framing_update_valid(old_group, new_group):
+                        raise PanoramaCaptureError("following_observation_expired")
                 if previous is not None:
                     if observed is None:
                         raise PanoramaCaptureError("following_observation_expired")
@@ -2454,7 +2491,7 @@ class PanoramaService:
             if (owned.get("lease_id") != lease_id or owned.get("fence") != fence
                     or owned.get("owner_kind") != "automation" or snapshot.get("automation_ready") is not True):
                 raise _error("control_lost", "Attention no longer owns exclusive camera control")
-            follows_observation = target_provider is not None or destination.get("framing") is not None
+            follows_observation = target_provider is not None or destination.get("framing") is not None or destination.get("group_framing") is not None
             _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray},
                 borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12,
                 **({"target_provider": current_ray, "target_observation_provider": current_observation} if follows_observation else {}))
@@ -2466,8 +2503,9 @@ class PanoramaService:
                 raise _error("control_lost", "The stopped attention result no longer owns control")
             if follows_observation and not np.allclose(destination_ray(reached), evidence.get("target_ray"), atol=1e-7, rtol=0):
                 raise _error("following_target_changed", "The verified direction no longer matches the subject")
-            from .panorama_navigation import project_arrival_framing
+            from .panorama_navigation import project_arrival_framing, project_group_framing
             evidence["framing_projection"] = project_arrival_framing(reached.get("framing"), evidence)
+            evidence["group_framing_projection"] = project_group_framing(reached.get("group_framing"), evidence)
             result = {"destination": reached, "command_id": command_id, "lease_id": lease_id,
                     "fence": fence, "motion_epoch": final.get("motion_epoch"), "stop_confirmed": True,
                     "returning": returning, "evidence": evidence}

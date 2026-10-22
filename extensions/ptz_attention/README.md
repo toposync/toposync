@@ -29,9 +29,32 @@ operator preserves each member's image provenance without storing extra pixels.
 Framing unions actual member boxes, not the padded display box, and carries
 `member_event_ids`; membership changes reset the sampled continuity. Missing,
 older, private or incompatible member evidence leaves the group observation
-unavailable instead of reducing the membership count. Groups observed across
-different frames or transforms still need temporal/geometric association; this
-synchronous path does not certify physical framing or independent identity.
+unavailable instead of reducing the membership count. Different frames or
+transforms do not enter this synchronous path, which does not certify physical
+framing or independent identity.
+
+For asynchronous groups, `group_framing` carries each declared active member's
+own capture, image extent and panorama directions. Every member must be available,
+bound to the same optical reference and capture epoch; differing crops/resizes
+are reconstructed through their own pixel transforms. Conflicting poses for one
+capture, missing members and unknown geometry are rejected. The angular center
+comes from an envelope of all member corners in a common viewing hemisphere,
+without averaging ground anchors into a body target. This is a temporal estimate,
+not a simultaneous image box; `estimated_group_framing` reports individual ages
+separately from `observed_framing`.
+
+The oldest member controls freshness. New evidence from another member cannot
+extend its lifetime, remove it silently, rewind its capture or mutate an accepted
+frame. Navigation rechecks every member's age/reference and angular coverage before
+following pulses. Missing or expired members use the same stopped-grace/reacquisition
+path as lost single-subject framing. Group velocity prediction is disabled because
+one updated member is not a new simultaneous group observation. Arrival projects
+every member's historical corners into the stopped image and records failures
+without dropping members; it does not certify current visibility or association
+in a second lens. A group outside one viewing hemisphere is unavailable, and the
+current fixed-lens controller cannot make an oversized group fit by changing zoom.
+Requests that have never supplied qualified framing retain the legacy world-target
+path; that initial pointing is not group-framing acceptance.
 
 Once following has accepted panorama-bound framing, losing that evidence expires
 the current observation even if a ground anchor remains available. Acquisition

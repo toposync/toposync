@@ -263,6 +263,56 @@ def arrival_frame_geometry(frame: dict, located: dict, lens: dict, ray: Any) -> 
             "validation_p95_pixels", "inlier_fraction", "reference_id")}})
 
 
+def group_framing_update_valid(previous: dict, updated: dict | None) -> bool:
+    if updated is None or not set(previous["members"]).issubset(updated["members"]):
+        return False
+    for name, old in previous["members"].items():
+        new = updated["members"][name]
+        if (any(old[key] != new[key] for key in ("capture_instance", "generation"))
+                or new["sequence"] < old["sequence"] or new["published_at"] < old["published_at"]
+                or (new["sequence"] == old["sequence"] and new != old)
+                or (new["sequence"] > old["sequence"] and new["published_at"] <= old["published_at"])):
+            return False
+    return True
+
+
+def group_framing_rays(group: dict) -> np.ndarray:
+    """Center a tangent-plane envelope of member history, without predicting motion."""
+    corners = np.asarray([ray for member in group["members"].values()
+                          for ray in member["panorama"]["corner_rays"]], dtype=float)
+    if (corners.ndim != 2 or corners.shape[1] != 3 or len(corners) == 0
+            or not np.isfinite(corners).all() or np.any(abs(np.linalg.norm(corners, axis=1) - 1) > 1e-6)):
+        raise ValueError("invalid group directions")
+    axis = corners.sum(axis=0)
+    if np.linalg.norm(axis) < 1e-8:
+        raise ValueError("group has no common viewing hemisphere")
+    axis /= np.linalg.norm(axis)
+    depths = corners @ axis
+    if np.any(depths <= 1e-3):
+        raise ValueError("group has no common viewing hemisphere")
+    right = np.cross(axis, [0, 0, 1] if abs(axis[2]) < .9 else [0, 1, 0])
+    right /= np.linalg.norm(right)
+    up = np.cross(right, axis)
+    points = np.column_stack((corners @ right, corners @ up)) / depths[:, None]
+    middle = (points.min(axis=0) + points.max(axis=0)) / 2
+    center = axis + middle[0] * right + middle[1] * up
+    center /= np.linalg.norm(center)
+    return np.vstack((center, corners))
+
+
+def project_group_framing(group: dict | None, evidence: dict) -> dict | None:
+    if group is None:
+        return None
+    projections = {name: project_arrival_framing(member, evidence) for name, member in group["members"].items()}
+    result = {"kind": "projected_member_history", "subject_visibility_verified": False,
+        "physical_capture_verified": False, "members": projections, "status": "member_outside_or_unqualified"}
+    if all(item and item.get("status") == "projected" for item in projections.values()):
+        boxes = np.asarray([item["bbox01"] for item in projections.values()])
+        box = [*boxes[:, :2].min(axis=0).tolist(), *boxes[:, 2:].max(axis=0).tolist()]
+        result.update(status="projected", bbox01=box, minimum_margin01=min(*box[:2], 1-box[2], 1-box[3]))
+    return result
+
+
 def project_arrival_framing(framing: dict | None, evidence: dict) -> dict | None:
     """Project observed corner directions; this does not detect the subject again."""
     if framing is None:

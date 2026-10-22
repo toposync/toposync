@@ -9,15 +9,14 @@ from toposync.runtime.pipelines.image_geometry import inspection_geometry, sourc
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
 from toposync.runtime.pipelines.inspection import frame_reference
 
-from .models import AttentionTarget, FramingObservation, PanoramaFraming
+from .models import AttentionTarget, FramingObservation, GroupFramingEstimate, PanoramaFraming
 
 
-def _panorama_framing(packet, reference, geometry, corners, center) -> PanoramaFraming | None:
-    mapping = packet.payload.get("mapping")
+def _panorama_framing(mapping, capture, reference, geometry, corners, center) -> PanoramaFraming | None:
     if not isinstance(mapping, dict) or mapping.get("status") != "mapped" or mapping.get("pose_evidence") != "visual_frame_rotation":
         return None
     located = mapping.get("visual_localization")
-    if (not isinstance(located, dict) or located.get("capture_evidence") != packet.payload.get("capture_evidence")
+    if (not isinstance(located, dict) or located.get("capture_evidence") != capture
             or located.get("source_id") != reference["source_id"]
             or type(located.get("revision")) is not int
             or located.get("revision") != mapping.get("panorama_revision")):
@@ -95,11 +94,17 @@ def observe_framing(packet, bbox, target: AttentionTarget | None) -> FramingObse
         if group is None:
             return None
         member_event_ids, bbox = group
+    return _observe_box(reference, geometry, bbox, packet.payload.get("mapping"),
+                        packet.payload.get("capture_evidence"), member_event_ids)
+
+
+def _observe_box(reference, geometry, bbox, mapping, capture, member_event_ids=()) -> FramingObservation | None:
     try:
         import numpy as np
 
+        width, height = geometry["image_size"]
         x1, y1, x2, y2 = AttentionTarget(bbox01=bbox).bbox01
-        corners = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]]) * [shape[1] - 1, shape[0] - 1]
+        corners = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]]) * [width - 1, height - 1]
         boundary_contact = min(x1, y1, 1 - x2, 1 - y2) <= 1e-6
         # Reject padded/projectively unsupported regions; never clip away missing extent.
         domains = [*geometry["valid_domains"],
@@ -115,16 +120,67 @@ def observe_framing(packet, bbox, target: AttentionTarget | None) -> FramingObse
             boundary_contact |= bool(np.any(normalized <= 1e-6) or np.any(normalized >= 1 - 1e-6))
         normalized = np.clip(normalized, 0, 1)  # Numerical boundary tolerance only.
         lower, upper = normalized.min(axis=0), normalized.max(axis=0)
-        center = np.array([(x1 + x2) / 2, (y1 + y2) / 2]) * [shape[1] - 1, shape[0] - 1]
+        center = np.array([(x1 + x2) / 2, (y1 + y2) / 2]) * [width - 1, height - 1]
         return FramingObservation(camera_id=reference["device_id"], source_id=reference["source_id"],
             capture_instance=reference["capture_instance"], generation=reference["generation"],
             sequence=reference["sequence"], published_at=reference["published_at"],
             source_width=geometry["source_size"][0], source_height=geometry["source_size"][1],
             bbox01=(*lower, *upper), boundary_contact=boundary_contact,
             member_event_ids=member_event_ids,
-            panorama=_panorama_framing(packet, reference, geometry, corners, center))
+            panorama=_panorama_framing(mapping, capture, reference, geometry, corners, center))
     except (ValueError, TypeError, KeyError, OverflowError):
         return None
+
+
+def estimate_group_framing(packet, target: AttentionTarget | None) -> GroupFramingEstimate | None:
+    """Reconstruct each member in its own image; never union pixels across frames."""
+    if target is None or target.world_envelope is None:
+        return None
+    try:
+        subject = packet.payload["subject"]
+        expected, members = subject["member_event_ids"], subject["members"]
+        if (subject.get("type") != "group_event" or not expected or len(set(expected)) != len(expected)
+                or sorted(subject["active_member_event_ids"]) != sorted(expected)
+                or sorted(item["event_id"] for item in members) != sorted(expected)
+                or target.world_envelope.member_count != len(expected)):
+            return None
+        latest = frame_reference(packet)
+        observations, poses = {}, {}
+        for member in members:
+            if member.get("active") is not True:
+                return None
+            source = member["image_observation"]
+            reference, capture = source["frame_reference"], member["capture_evidence"]
+            if (any(reference[key] != latest[key] for key in ("device_id", "source_id", "capture_instance", "generation"))
+                    or any(reference[key] != capture[key] for key in ("capture_instance", "generation", "sequence", "published_at"))
+                    or reference["sequence"] > latest["sequence"] or reference["published_at"] > latest["published_at"]):
+                return None
+            raw = source["geometry"]
+            geometry = inspection_geometry({**raw, "capture_evidence": capture}, *raw["image_size"], reference)
+            if geometry is None:
+                return None
+            mapping = member["mapping"]
+            pose = mapping["visual_localization"]
+            sequence = reference["sequence"]
+            if sequence in poses and poses[sequence] != pose:
+                return None
+            poses[sequence] = pose
+            observed = _observe_box(reference, geometry, member["bbox01"], mapping, capture)
+            if observed is None or observed.panorama is None:
+                return None
+            observations[member["event_id"]] = observed
+        return GroupFramingEstimate(members=observations)
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        return None
+
+
+def group_framing_status(estimate: GroupFramingEstimate | None, now: float) -> dict | None:
+    if estimate is None:
+        return None
+    return {"kind": "temporal_group_estimate", "member_event_ids": sorted(estimate.members),
+        "member_publication_ages_seconds": {name: now-member.published_at for name, member in estimate.members.items()},
+        "oldest_publication_age_seconds": now-estimate.oldest_published_at,
+        "simultaneous_observation": False, "subject_visibility_verified": False}
 
 
 def _assessment(observation: FramingObservation | None, profile, now: float) -> str:

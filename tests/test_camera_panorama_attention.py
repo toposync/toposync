@@ -482,6 +482,111 @@ def framing_service(monkeypatch):
     return service, job, ground
 
 
+def group_destination(job):
+    from copy import deepcopy
+    import numpy as np
+    destination = subject_destination(job)
+    first = destination.pop("framing")
+    second = deepcopy(first)
+    second.update(sequence=2, published_at=1000.2)
+    angle = .2
+    rotation = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    second["panorama"]["corner_rays"] = [(rotation @ ray).tolist() for ray in second["panorama"]["corner_rays"]]
+    second["panorama"]["center_ray"] = (rotation @ second["panorama"]["center_ray"]).tolist()
+    destination["group_framing"] = {"members": {"person": first, "vehicle": second}}
+    return destination
+
+
+@pytest.mark.anyio
+async def test_temporal_group_drives_angular_navigation_and_checks_oldest_member_between_pulses(monkeypatch):
+    from copy import deepcopy
+    from toposync_ext_cameras.panorama_navigation import group_framing_rays
+    from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
+    service, job, ground = framing_service(monkeypatch)
+    destination = group_destination(job)
+    estimate = destination["group_framing"]
+    resolved = await service.resolve_target(camera_id="camera", source_id="wide", composition_id="yard", element_id="element",
+        target={"world_envelope": {"center": {"x": 0, "z": 0}, "radius_meters": 1, "member_count": 2}, "group_framing": estimate})
+    assert resolved["target"]["group_framing"] == estimate
+    updated = deepcopy(destination)
+    updated["group_framing"]["members"]["vehicle"].update(sequence=3, published_at=1000.4)
+    elapsed = [0.]
+    monkeypatch.setattr(module.time, "monotonic", lambda: 50.+elapsed[0])
+    async def aim(request, current, target, **options):
+        assert target["ray"] == pytest.approx(group_framing_rays(estimate)[0])
+        assert options["target_provider"]() == pytest.approx(target["ray"])
+        assert options["target_observation_provider"]() is None, "One changing member cannot imply group velocity"
+        elapsed[0] = .6
+        with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+            options["target_provider"]()
+        elapsed[0] = 0.
+        return {}, {"target_ray": target["ray"], "verified": True}
+    service._visual_operation_with_pinned_reference.side_effect = aim
+    result = await service.navigate_attention(destination=destination, lease_id="attention", fence=7,
+        command_id="command", target_provider=lambda: updated, observation_timeout_seconds=1.)
+    assert result["destination"]["group_framing"] == updated["group_framing"]
+    assert result["evidence"]["framing_projection"] is None
+    projected = result["evidence"]["group_framing_projection"]
+    assert projected["kind"] == "projected_member_history" and projected["subject_visibility_verified"] is False
+    assert set(projected["members"]) == {"person", "vehicle"}
+    assert all(list(call.args[1]) == [0, 0, 1] for call in ground.call_args_list)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", ["stale", "future", "epoch", "source", "empty", "hemisphere", "coverage", "return", "dual"])
+async def test_temporal_group_rejects_unqualified_members_before_navigation(monkeypatch, failure):
+    from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
+    service, job, _ = framing_service(monkeypatch)
+    destination = group_destination(job)
+    members = destination["group_framing"]["members"]
+    first = members["person"]
+    if failure == "stale":
+        first["published_at"] = 998.
+    elif failure == "future":
+        first["published_at"] = 1001.
+    elif failure == "epoch":
+        first["generation"] = 2
+    elif failure == "source":
+        first["source_id"] = "zoom"
+    elif failure == "empty":
+        members.clear()
+    elif failure == "hemisphere":
+        members["vehicle"]["panorama"]["corner_rays"] = [[-v for v in ray] for ray in first["panorama"]["corner_rays"]]
+    elif failure == "coverage":
+        service.reference_localizer.return_value.coverage_mask[:] = 0
+    elif failure == "dual":
+        destination["framing"] = first
+    with pytest.raises((HTTPException, PanoramaCaptureError)):
+        await service.navigate_attention(destination=destination, lease_id="attention", fence=7,
+            command_id="command", returning=failure == "return")
+    service._visual_operation_with_pinned_reference.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("change", ["missing", "rewind", "mutation", "loss"])
+async def test_temporal_group_updates_keep_every_member_and_its_capture_order(monkeypatch, change):
+    from copy import deepcopy
+    from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
+    service, job, _ = framing_service(monkeypatch)
+    destination = group_destination(job)
+    updated = deepcopy(destination)
+    member = updated["group_framing"]["members"]["vehicle"]
+    if change == "missing":
+        updated["group_framing"]["members"].pop("vehicle")
+    elif change == "rewind":
+        member["sequence"] = 1
+    elif change == "mutation":
+        member["panorama"]["center_ray"] = [1., 0., 0.]
+    else:
+        updated.pop("group_framing")
+    async def aim(request, current, target, **options):
+        options["target_provider"]()
+    service._visual_operation_with_pinned_reference.side_effect = aim
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        await service.navigate_attention(destination=destination, lease_id="attention", fence=7,
+            command_id="command", target_provider=lambda: updated)
+
+
 @pytest.mark.anyio
 async def test_subject_center_drives_navigation_without_moving_world_anchor(monkeypatch):
     service, job, ground = framing_service(monkeypatch)

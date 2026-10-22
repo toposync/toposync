@@ -382,10 +382,10 @@ async def test_complete_group_reaches_attention_with_members_and_body_directions
     assert packet.lifecycle == Lifecycle.OPEN
     await runtime.process_packet(packet, SimpleNamespace(pipeline_name="events", node_id="attention"))
     status = controller.status()[0]
-    assert status.active_target["framing"]["member_event_ids"] == ["person", "vehicle"]
+    assert sorted(status.active_target["group_framing"]["members"]) == ["person", "vehicle"]
     assert status.observed_framing["bbox01"] == pytest.approx([.1, .1, .9, .8])
     assert status.observed_framing["member_event_ids"] == ["person", "vehicle"]
-    assert status.active_target["framing"]["panorama"]["center_ray"] != status.active_target["ray"]
+    assert status.active_target["group_framing"]["members"]["person"]["panorama"]["center_ray"] != status.active_target["ray"]
     assert packet.payload["world_envelope"]["member_count"] == 2
     await controller.shutdown()
     store.close()

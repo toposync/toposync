@@ -28,7 +28,7 @@ from .models import (
     target_in_region,
 )
 from .store import AttentionStore, ProfileNotFoundError
-from .framing import FramingContinuity, framing_status
+from .framing import FramingContinuity, framing_status, group_framing_status
 
 
 _LIVE_SERVICES = (
@@ -423,6 +423,8 @@ class PtzAttentionController:
 
             existing = runtime.events.get(governed.key)
             observation_age = max(0.0, max(self._clock(), governed.received_at) - governed.event_at)
+            if governed.group_framing:
+                observation_age = max(observation_age, self._clock() - governed.group_framing.oldest_published_at)
             if profile.follow_view_updates and governed.lifecycle != "close":
                 freshness = resolve_frame_freshness(
                     Packet.create(stream_id=governed.key, payload={"capture_evidence": governed.capture_evidence}),
@@ -478,10 +480,16 @@ class PtzAttentionController:
                 )
                 return
 
+            group_lost = False
+            if existing and existing.intent.group_framing and governed.lifecycle != "close":
+                from toposync_ext_cameras.panorama_navigation import group_framing_update_valid
+                group_lost = not group_framing_update_valid(existing.intent.group_framing.model_dump(mode="json"),
+                    governed.group_framing.model_dump(mode="json") if governed.group_framing else None)
             if (profile.follow_view_updates and governed.lifecycle != "close" and existing
-                    and existing.intent.framing_observation is not None
-                    and existing.intent.framing_observation.panorama is not None
-                    and (governed.framing_observation is None or governed.framing_observation.panorama is None)):
+                    and (existing.intent.group_framing is not None or (
+                        existing.intent.framing_observation is not None and existing.intent.framing_observation.panorama is not None))
+                    and (group_lost or (governed.group_framing is None
+                        and (governed.framing_observation is None or governed.framing_observation.panorama is None)))):
                 # Keep the last complete intent through grace; a ground point cannot reacquire a framed subject.
                 existing.following_view = None
                 existing.following_confirmed = False
@@ -546,6 +554,9 @@ class PtzAttentionController:
                 return
 
             if existing is not None and existing.open and existing.resolved is not None:
+                if profile.follow_view_updates and governed.group_framing is not None:
+                    await self._follow_update(profile, runtime, existing, governed, observed_monotonic)
+                    return
                 existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
                 return
 
@@ -779,6 +790,7 @@ class PtzAttentionController:
                     active_target=(active.resolved.panorama.model_dump(mode="json") if active and active.resolved and active.resolved.panorama else None),
                     observed_framing=framing_status(active.intent.framing_observation if active else None, profile, wall_now,
                         continuity=active.framing_continuity if active else None),
+                    estimated_group_framing=group_framing_status(active.intent.group_framing if active else None, wall_now),
                     active_priority=(active.intent.priority if active else None),
                     candidate_event_key=runtime.candidate_key,
                     candidate_preset_token=(
@@ -1113,7 +1125,7 @@ class PtzAttentionController:
             active = runtime.events.get(runtime.active_key)
             current, _ = await self._resolve(profile, active.intent) if active else (None, "")
             if (current is None or active.resolved is None or current.panorama is None or active.resolved.panorama is None
-                    or current.panorama.model_dump(exclude={"ray", "framing"}) != active.resolved.panorama.model_dump(exclude={"ray", "framing"})):
+                    or current.panorama.model_dump(exclude={"ray", "framing", "group_framing"}) != active.resolved.panorama.model_dump(exclude={"ray", "framing", "group_framing"})):
                 await self._fault(profile, runtime, "panorama_reference_changed")
                 return
         if profile.follow_view_updates and effective_mode(profile) == "shadow":
@@ -1349,14 +1361,15 @@ class PtzAttentionController:
                          action="intent_rejected" if effective_mode(profile) == "live_panorama" else "shadow_blocked",
                          reason=resolution_reason or "following_target_unqualified", intent=intent)
             return
-        tracked.last_seen_monotonic = max(tracked.last_seen_monotonic, observed_monotonic)
+        tracked.last_seen_monotonic = (observed_monotonic if intent.group_framing
+            else max(tracked.last_seen_monotonic, observed_monotonic))
         tracked.intent = intent
         tracked.framing_continuity.observe(intent.framing_observation, profile, self._clock())
 
         def same_reference(previous: ResolvedTarget | None) -> bool:
             return bool(
                 previous and previous.panorama and resolved.panorama
-                and previous.panorama.model_dump(exclude={"ray", "framing"}) == resolved.panorama.model_dump(exclude={"ray", "framing"})
+                and previous.panorama.model_dump(exclude={"ray", "framing", "group_framing"}) == resolved.panorama.model_dump(exclude={"ray", "framing", "group_framing"})
             )
 
         if runtime.active_key != intent.key:
@@ -1860,6 +1873,7 @@ class PtzAttentionController:
                 "arrival_source_id": profile.source_id,
                 "arrival_evidence": "visual" if tracked.resolved.panorama else "preset_pose",
                 **({"framing_projection": visual_evidence.get("framing_projection"),
+                    "group_framing_projection": visual_evidence.get("group_framing_projection"),
                     "arrival_image_url": visual_evidence.get("image_url")} if visual_evidence is not None else {}),
             },
         )
@@ -1917,8 +1931,8 @@ class PtzAttentionController:
             if profile.follow_view_updates and not returning:
                 tracked = runtime.events.get(runtime.active_key)
                 if (tracked is None or tracked.resolved is None
-                        or tracked.resolved.panorama.model_dump(exclude={"ray", "framing"})
-                        != destination.panorama.model_dump(exclude={"ray", "framing"})):
+                        or tracked.resolved.panorama.model_dump(exclude={"ray", "framing", "group_framing"})
+                        != destination.panorama.model_dump(exclude={"ray", "framing", "group_framing"})):
                     raise ValueError("following reference changed")
                 tracked.resolved = destination
                 runtime.command_target_key = destination.target_key
@@ -1956,7 +1970,11 @@ class PtzAttentionController:
             if not target_in_region(anchor, profile.attention_region, radius):
                 return None, "target_outside_attention_region"
             target = intent.target.service_payload()
-            if intent.framing_observation and intent.framing_observation.panorama:
+            if intent.group_framing:
+                if intent.target.world_envelope is None or intent.target.world_envelope.member_count != len(intent.group_framing.members):
+                    return None, "group_member_count_mismatch"
+                target["group_framing"] = intent.group_framing.model_dump(mode="json")
+            elif intent.framing_observation and intent.framing_observation.panorama:
                 target["framing"] = intent.framing_observation.model_dump(mode="json")
             return await self._resolve_panorama(profile, target)
         if not self.has_service("cameras.views.resolve_target"):
@@ -2000,7 +2018,8 @@ class PtzAttentionController:
                 return None, "attention_physical_qualification_required"
             return ResolvedTarget(panorama={key: raw[key] for key in (
                 "camera_id", "source_id", "composition_id", "element_id", "job_id", "revision")}
-                | {"ray": raw["target"]["ray"], "framing": raw["target"].get("framing")}, confidence=0, reason="panorama_mapped"), ""
+                | {"ray": raw["target"]["ray"], "framing": raw["target"].get("framing"),
+                    "group_framing": raw["target"].get("group_framing")}, confidence=0, reason="panorama_mapped"), ""
         except Exception:
             return None, "target_resolution_failed"
 
@@ -2888,6 +2907,8 @@ class PtzAttentionController:
                 payload.setdefault("target", tracked.resolved.panorama.model_dump(mode="json"))
         if intent is not None:
             payload.setdefault("event_type", intent.event_type)
+            if intent.group_framing is not None:
+                payload.setdefault("estimated_group_framing", group_framing_status(intent.group_framing, self._clock()))
             if intent.framing_observation is not None:
                 payload.setdefault("observed_framing", framing_status(intent.framing_observation, profile, self._clock(),
                     continuity=tracked.framing_continuity if tracked and tracked.intent.framing_observation == intent.framing_observation else None))

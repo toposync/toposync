@@ -312,6 +312,31 @@ class FramingObservation(StrictModel):
         return AttentionTarget._valid_bbox(value)
 
 
+class GroupFramingEstimate(StrictModel):
+    """Member history in one panorama, not a simultaneous image observation."""
+
+    members: dict[str, FramingObservation] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _member_reference(self):
+        first = next(iter(self.members.values()))
+        for name, member in self.members.items():
+            if (not name.strip() or len(name) > 512 or member.panorama is None or member.member_event_ids
+                    or first.panorama is None
+                    or any(getattr(member, key) != getattr(first, key) for key in
+                           ("camera_id", "source_id", "capture_instance", "generation", "source_width", "source_height"))
+                    or member.panorama.model_dump(exclude={"center_ray", "corner_rays"})
+                    != first.panorama.model_dump(exclude={"center_ray", "corner_rays"})):
+                raise ValueError("group framing requires complete members in one optical reference")
+        from toposync_ext_cameras.panorama_navigation import group_framing_rays
+        group_framing_rays(self.model_dump(mode="json"))
+        return self
+
+    @property
+    def oldest_published_at(self) -> float:
+        return min(member.published_at for member in self.members.values())
+
+
 class AttentionIntent(StrictModel):
     key: str
     event_id: str
@@ -329,6 +354,7 @@ class AttentionIntent(StrictModel):
     received_at: float
     capture_evidence: dict[str, Any] | None = None
     framing_observation: FramingObservation | None = None
+    group_framing: GroupFramingEstimate | None = None
 
     @field_validator(
         "key",
@@ -376,6 +402,7 @@ class PanoramaDestination(StrictModel):
     revision: int = Field(strict=True, ge=1)
     ray: tuple[float, float, float]
     framing: FramingObservation | None = None
+    group_framing: GroupFramingEstimate | None = None
 
     @field_validator("camera_id", "source_id", "composition_id", "element_id", "job_id")
     @classmethod
@@ -418,10 +445,15 @@ class ResolvedTarget(StrictModel):
         if self.panorama is None:
             return self.preset_token
         import json
-        target = self.panorama.model_dump(mode="json", exclude={"framing"})
+        target = self.panorama.model_dump(mode="json", exclude={"framing", "group_framing"})
         if self.panorama.framing and self.panorama.framing.panorama:
             # Fixed-lens navigation aims at the center; extent-only changes refresh evidence.
             target["framing"] = self.panorama.framing.panorama.model_dump(mode="json", exclude={"corner_rays"})
+        if self.panorama.group_framing:
+            from toposync_ext_cameras.panorama_navigation import group_framing_rays
+            group = self.panorama.group_framing.model_dump(mode="json")
+            target["group_framing"] = {"members": sorted(group["members"]),
+                "center_ray": group_framing_rays(group)[0].tolist()}
         return json.dumps(target, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
@@ -513,6 +545,7 @@ class DeviceStatus(StrictModel):
     active_view_id: str = ""
     active_target: dict[str, Any] | None = None
     observed_framing: dict[str, Any] | None = None
+    estimated_group_framing: dict[str, Any] | None = None
     active_priority: int | None = None
     candidate_event_key: str = ""
     candidate_preset_token: str = ""

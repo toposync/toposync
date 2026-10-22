@@ -28,6 +28,7 @@ from .models import (
     target_in_region,
 )
 from .store import AttentionStore, ProfileNotFoundError
+from .framing import framing_status
 
 
 _LIVE_SERVICES = (
@@ -753,6 +754,7 @@ class PtzAttentionController:
                     ),
                     active_view_id=(active.resolved.view_id if active and active.resolved else ""),
                     active_target=(active.resolved.panorama.model_dump(mode="json") if active and active.resolved and active.resolved.panorama else None),
+                    observed_framing=framing_status(active.intent.framing_observation if active else None, profile, wall_now),
                     active_priority=(active.intent.priority if active else None),
                     candidate_event_key=runtime.candidate_key,
                     candidate_preset_token=(
@@ -2849,6 +2851,8 @@ class PtzAttentionController:
                 payload.setdefault("target", tracked.resolved.panorama.model_dump(mode="json"))
         if intent is not None:
             payload.setdefault("event_type", intent.event_type)
+            if intent.framing_observation is not None:
+                payload.setdefault("observed_framing", framing_status(intent.framing_observation, profile, self._clock()))
             if intent.target is not None:
                 payload.setdefault("requested_target", intent.target.service_payload())
             payload.setdefault("event_at", intent.event_at)

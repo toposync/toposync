@@ -12,6 +12,16 @@ boxes and legacy preferred destinations are rejected. Resolving through
 `cameras.panorama.resolve_target` is read-only and returns a normalized ray bound
 to source, composition, element, job and revision.
 
+The operator also preserves a subject's image box as `framing_observation` when
+its source, capture and image transformation are known. Ground coordinates remain
+the navigation target. Status and decision details expose `observed_framing` with
+the box in the original source, extent, margin, boundary contact, publication age
+and whether it belongs to the selected source. An update without this evidence
+clears the current observation. Contact with a crop boundary remains visible even
+when the recovered box is inside the original image. This observation does not
+certify arrival, subject completeness or association with another lens. A single
+subject box is not used as evidence for a world-space group envelope.
+
 `shadow` records decisions with zero motor commands. Optional following
 uses fresh `capture_evidence`, stable capture instance/generation and increasing
 sequence/publication time to confirm target changes. Minimum dwell, movement

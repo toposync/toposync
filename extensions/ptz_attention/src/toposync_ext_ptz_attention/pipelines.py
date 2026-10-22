@@ -17,6 +17,7 @@ from toposync.runtime.pipelines.runtime import Packet
 from .bindings import attention_bindings, live_observer_binding_issue
 from .constants import EXTENSION_ID, OPERATOR_ID_REQUEST
 from .controller import PtzAttentionController
+from .framing import observe_framing
 from .models import (
     AttentionIntent,
     AttentionProfile,
@@ -286,6 +287,8 @@ class PtzAttentionRequestRuntime(SinkRuntime):
                 self.config.hold_after_close_seconds if direct_operator else None
             ),
             target=target,
+            framing_observation=(observe_framing(packet, _packet_value(packet, self.config.bbox01_field), target)
+                                 if lifecycle in {"open", "update"} else None),
             preferred_view_id=preferred_view_id,
             event_at=float(packet.created_at or now),
             received_at=now,

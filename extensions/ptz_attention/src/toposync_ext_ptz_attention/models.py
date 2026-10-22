@@ -265,6 +265,26 @@ class AttentionProfile(StrictModel):
         return self
 
 
+class FramingObservation(StrictModel):
+    """Observed image extent, independent of a ground target or arrival proof."""
+
+    camera_id: str = Field(min_length=1, max_length=200)
+    source_id: str = Field(min_length=1, max_length=200)
+    capture_instance: str = Field(min_length=1, max_length=128)
+    generation: int = Field(strict=True, ge=0)
+    sequence: int = Field(strict=True, ge=1)
+    published_at: float = Field(gt=0, allow_inf_nan=False)
+    source_width: int = Field(strict=True, ge=2)
+    source_height: int = Field(strict=True, ge=2)
+    bbox01: tuple[float, float, float, float]
+    boundary_contact: bool = Field(strict=True)
+
+    @field_validator("bbox01")
+    @classmethod
+    def _box(cls, value):
+        return AttentionTarget._valid_bbox(value)
+
+
 class AttentionIntent(StrictModel):
     key: str
     event_id: str
@@ -281,6 +301,7 @@ class AttentionIntent(StrictModel):
     event_at: float
     received_at: float
     capture_evidence: dict[str, Any] | None = None
+    framing_observation: FramingObservation | None = None
 
     @field_validator(
         "key",
@@ -459,6 +480,7 @@ class DeviceStatus(StrictModel):
     active_preset_token: str = ""
     active_view_id: str = ""
     active_target: dict[str, Any] | None = None
+    observed_framing: dict[str, Any] | None = None
     active_priority: int | None = None
     candidate_event_key: str = ""
     candidate_preset_token: str = ""

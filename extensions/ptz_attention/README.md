@@ -34,6 +34,15 @@ explicit CLOSE and changed capture generations cannot reopen that event.
 Higher-priority events cancel and drain the previous approach before taking
 control. This is bounded visual feedback, with physical latency dependent on
 capture, localization and the device's observed response.
+
+Serial panorama attention operations may reuse protocol discovery for up to
+30 seconds under the same lease, fence, source, mapping and geometry revision.
+Only a successfully stopped and closed operation supplies this metadata. Each
+operation still refreshes pose and native automation, checks current configuration
+and ownership, and obtains a new stopped image. The original discovery age is
+preserved across reuse; failures discard the entry. No control lease, capture
+consumer, image or Stop receipt is copied. `discovery_reused` in the navigation
+trace identifies the optimization; it does not certify a physical latency gain.
 Successful stopped operations can retain their measured local motor response in
 memory for up to five minutes, bound to the exact optical identity and panorama
 revision. Fresh localization invalidates an axis response beyond 15 degrees of

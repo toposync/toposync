@@ -348,6 +348,7 @@ class PanoramaService:
         self.camera_factory: Any = None
         self._navigation_scanners: dict[str, Any] = {}
         self._attention_responses: dict[str, dict[str, Any]] = {}
+        self._attention_metadata: dict[str, dict[str, Any]] = {}
         for path in self.root.glob("*/job.json"):
             job = self._read(path)
             if (
@@ -1593,6 +1594,11 @@ class PanoramaService:
         await self._reserve(job["camera_id"], job["id"])
         prepared("reserved")
         self._navigation_scanners[job["id"]] = scanner
+        metadata_binding = {key: job.get(key) for key in
+            ("id", "revision", "source_id", "_source_digest", "_composition_digest", "source_panorama")}
+        metadata_binding["control"] = borrowed_control
+        metadata = getattr(self, "_attention_metadata", {}).pop(job["camera_id"], None)
+        discovery_reused = False
         image_url, evidence = "", {}
         failure_code = None
         cleanup_cancellation = None
@@ -1603,7 +1609,12 @@ class PanoramaService:
         response_observed = None
         job["stop_confirmed"] = False
         try:
-            scanner.capabilities = await camera.discover()
+            discovery_reused = bool(borrowed_control is not None and metadata
+                and metadata["binding"] == metadata_binding
+                and callable(getattr(camera, "reuse_discovery_from", None))
+                and camera.reuse_discovery_from(metadata["camera"]))
+            scanner.capabilities = (await camera.refresh_discovery_observations()
+                if discovery_reused else await camera.discover())
             prepared("discovered")
             await camera.acquire()
             prepared("acquired")
@@ -1779,6 +1790,7 @@ class PanoramaService:
                         for key in ("navigation_commands", "navigation_observation_timings")}
                     job["_attention_navigation_trace"].update(preparation=preparation,
                         preparation_elapsed_ms=preparation_elapsed_ms, timing_clock="process_monotonic",
+                        discovery_reused=discovery_reused,
                         final_stop_reused=scanner.checkpoint.get("final_stop_reused") is True,
                         finished_at=time.time(), error_code=failure_code, target=target)
                     job["_attention_navigation_history"] = [
@@ -1803,6 +1815,10 @@ class PanoramaService:
             finally:
                 try:
                     await camera.close()
+                    if (borrowed_control is not None and not failure_code and job.get("stop_confirmed")
+                            and callable(getattr(camera, "reuse_discovery_from", None))):
+                        self._attention_metadata[job["camera_id"]] = {
+                            "binding": copy.deepcopy(metadata_binding), "camera": camera}
                     if "arrival_delivery" in evidence:
                         evidence["arrival_delivery"]["capture_closed_at"] = time.time()
                 finally:
@@ -2685,6 +2701,7 @@ class PanoramaService:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._attention_metadata.clear()
 
 
 def register_panorama_routes(

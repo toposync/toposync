@@ -464,6 +464,60 @@ def test_prepared_discovery_refreshes_dynamic_readings_and_rejects_changed_bindi
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("change", [None, "expired", "clock_reversed", "source", "configuration", "control_lost", "unclosed", "automation"])
+def test_attention_reuses_only_closed_fresh_metadata_and_reads_current_state(monkeypatch, change):
+    async def run():
+        clock = [100.0]
+        monkeypatch.setattr("toposync_ext_cameras.panorama_capture.time.monotonic", lambda: clock[0])
+        previous, configuration, client, services, capture = environment()
+        await previous.acquire()
+        previous._capture_lease = SimpleNamespace(lease_id="capture")
+        if change != "unclosed":
+            await previous.close()
+        current = PanoramaCamera(camera_id="camera", source_id="other" if change == "source" else "wide",
+            owner_id="next", services=services, capture_service=capture,
+            dependencies=previous.dependencies, resolve_onvif=previous.resolve_onvif,
+            borrowed_control={"lease_id": "attention", "fence": 9})
+        services.active = {"lease_id": "other" if change == "control_lost" else "attention", "fence": 9}
+        clock[0] = 131.0 if change == "expired" else 99.0 if change == "clock_reversed" else 110.0
+        try:
+            reused = current.reuse_discovery_from(previous)
+            assert reused is (change not in {"expired", "clock_reversed", "source", "unclosed"})
+            assert current._capture_lease is None and current._renewal is None
+            assert current.lease == {"lease_id": "attention", "fence": 9}
+            if not reused:
+                assert current._capabilities is None
+                return
+            if change == "configuration":
+                configuration["devices"][0]["onvif"]["xaddr"] = "http://replacement"
+                with pytest.raises(PanoramaCaptureError, match="camera_configuration_changed"):
+                    await current.acquire()
+                return
+            client.get_ptz_status.return_value = OnvifPtzStatus(pan=.6, tilt=.7, zoom=None)
+            if change == "automation":
+                current._read_motion_automation = AsyncMock(return_value={"auto_tracking": True, "automatic_return": False})
+                with pytest.raises(PanoramaCaptureError):
+                    await current.acquire()
+                assert current._automation["auto_tracking"] is True
+                assert not any(name == "cameras.control.submit" for name, _ in services.calls)
+                return
+            if change == "control_lost":
+                with pytest.raises(PanoramaCaptureError, match="control_lost"):
+                    await current.acquire()
+                return
+            await current.acquire()
+            assert current._capabilities["position"]["pan"] == .6
+            assert previous._capabilities["position"]["pan"] == .2
+            assert client.get_profiles.await_count == 1
+            assert client.get_ptz_capabilities.await_count == 1
+            assert current._discovered_monotonic == 100.0
+            assert not any(name == "cameras.control.submit" for name, _ in services.calls)
+        finally:
+            await current.close()
+            await previous.close()
+    asyncio.run(run())
+
+
 def test_operational_automation_qualification_does_not_change_capture_binding():
     camera = {
         "enabled": True,

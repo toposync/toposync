@@ -134,6 +134,7 @@ class PanoramaCamera:
         self._camera: dict[str, Any] = {}
         self._source: dict[str, Any] = {}
         self._capabilities: dict[str, Any] | None = None
+        self._discovered_monotonic: float | None = None
         self._device_information: dict[str, Any] = {}
         self._reolink: ReolinkCgiClient | None = None
         self._renewal: asyncio.Task[Any] | None = None
@@ -167,6 +168,24 @@ class PanoramaCamera:
         if self._signature and self._signature != signature:
             raise PanoramaCaptureError("camera_configuration_changed")
         self._signature, self._camera, self._source = signature, camera, source
+
+    def reuse_discovery_from(self, previous: PanoramaCamera) -> bool:
+        """Copy recent protocol metadata, never control, capture or observation ownership."""
+        if (not isinstance(previous, PanoramaCamera) or self._capabilities is not None
+                or (self.camera_id, self.source_id) != (previous.camera_id, previous.source_id)
+                or previous._capabilities is None or previous._discovered_monotonic is None
+                or not 0 <= time.monotonic() - previous._discovered_monotonic <= 30
+                or previous.lease is not None or previous._capture_lease is not None
+                or previous._renewal is not None or previous._continuous_preparation is not None
+                or previous._control_error):
+            return False
+        # The signature makes the next configuration read reject changed endpoints or optics.
+        for name in ("_client", "_ptz_xaddr", "_media_xaddr", "_profile_token", "_signature",
+                     "_reolink", "_discovered_monotonic"):
+            setattr(self, name, getattr(previous, name))
+        self._device_information = copy.deepcopy(previous._device_information)
+        self._capabilities = copy.deepcopy(previous._capabilities)
+        return True
 
     async def discover(self) -> dict[str, Any]:
         """Read capabilities and the exact optical profile; never acquire control."""
@@ -292,6 +311,7 @@ class PanoramaCamera:
                 for axis, bounds in (("pan", selected.get("x")), ("tilt", selected.get("y")))
             }
             self._capabilities = capabilities
+            self._discovered_monotonic = time.monotonic()
             return capabilities
         except PanoramaCaptureError:
             raise

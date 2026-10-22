@@ -1,5 +1,16 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Preparação de atenção — reaproveitamento de descoberta, 20/10/2026
+
+A atenção panorâmica pode reutilizar metadados ONVIF recentes de uma operação
+anterior já parada e fechada, por até 30 segundos contados da descoberta original.
+O vínculo exige mesma concessão, fence, fonte, mapeamento e geometria. Configuração,
+pose, automação nativa, posse e imagem parada continuam sendo verificadas por operação.
+Nenhum consumidor de captura, quadro ou recibo de parada é transferido. Falhas
+descartam o reaproveitamento; a telemetria o identifica por `discovery_reused`.
+Essa redução de descoberta repetida tem cobertura de software, mas ainda não
+comprova ganho físico de latência, seguimento móvel, cobertura ou precisão.
+
 ## Atenção física e ensaio local supervisionado — 20/10/2026
 
 Foi acrescentado um percurso explícito de qualificação da atenção, com ida e

@@ -1,7 +1,7 @@
 """Software qualification gates and borrowed control, using synthetic evidence only."""
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
@@ -57,7 +57,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
 @pytest.mark.parametrize("reuse", ["same", "revision_changed", "optics_changed", "expired", "stop_unknown",
     "current_arrival", "current_return", "expired_during_status", "frame_aged_during_status",
     "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status",
-    "clock_jump", "clock_jump_failure"])
+    "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence",
+    "metadata_geometry", "metadata_refresh_failure"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -66,6 +67,8 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     fresh = {**frame, "capture_evidence": {"sequence": 2}}
     camera = SimpleNamespace(discover=AsyncMock(return_value={}), acquire=AsyncMock(),
         position=AsyncMock(return_value={}), close=AsyncMock())
+    if reuse.startswith("metadata_"):
+        camera.reuse_discovery_from = Mock(return_value=True)
     scanner = SimpleNamespace(acquired=False, physical_state="stopped", last_frame=frame,
         checkpoint={}, _stop=AsyncMock(return_value=True), _reference_window=AsyncMock(return_value=frame),
         _confirm_stop=AsyncMock(), refresh_stopped_frame=AsyncMock(return_value=fresh))
@@ -101,6 +104,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     service._reserve = AsyncMock()
     service._navigation_scanners, service.busy, service.cancelled = {}, {}, set()
     service._attention_responses = {}
+    service._attention_metadata = {}
     service._save = lambda job: None
     service._current = AsyncMock()
     service.localize_frame = AsyncMock(return_value={"status": "localized"})
@@ -209,6 +213,41 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     assert list(trace["preparation"].values()) == sorted(trace["preparation"].values())
     assert trace["finished_at"] >= trace["preparation"]["localized_at"]
     cached_at = service._attention_responses["camera"]["observed_monotonic"]
+    if reuse.startswith("metadata_"):
+        assert service._attention_metadata["camera"]["camera"] is camera
+        assert trace["discovery_reused"] is False
+        following = SimpleNamespace(discover=AsyncMock(return_value={}), acquire=AsyncMock(),
+            position=AsyncMock(return_value={}), close=AsyncMock(),
+            reuse_discovery_from=Mock(return_value=True), refresh_discovery_observations=AsyncMock(return_value={}))
+        service.camera_factory = lambda **kwargs: following
+        if reuse == "metadata_revision":
+            job["revision"] += 1
+        if reuse == "metadata_geometry":
+            job["source_panorama"]["geometry"]["model_digest"] = "changed"
+            service._localizers[("artifact", "changed")] = SimpleNamespace(lens={})
+        if reuse == "metadata_refresh_failure":
+            following.refresh_discovery_observations.side_effect = PanoramaCaptureError("camera_configuration_changed")
+            scanner.acquired = False
+        operation = service._visual_operation_with_pinned_reference(None, job, {"ray": [0, 0, 1]},
+            borrowed_control={"lease_id": "attention", "fence": 8 if reuse == "metadata_fence" else 7})
+        if reuse == "metadata_refresh_failure":
+            with pytest.raises(HTTPException) as failure:
+                await operation
+            assert failure.value.detail["code"] == "camera_configuration_changed"
+            following.acquire.assert_not_awaited()
+            assert "camera" not in service._attention_metadata
+        else:
+            await operation
+            expected = reuse == "metadata_same"
+            assert job["_attention_navigation_trace"]["discovery_reused"] is expected
+            assert following.discover.await_count == int(not expected)
+            assert following.refresh_discovery_observations.await_count == int(expected)
+            assert following.acquire.await_count == 1
+            assert scanner._reference_window.await_count == 2
+            assert service._attention_metadata["camera"]["camera"] is following
+        following.close.assert_awaited_once()
+        assert not service._navigation_scanners and not service.busy
+        return
     if reuse == "revision_changed":
         job["revision"] += 1
     elif reuse == "optics_changed":

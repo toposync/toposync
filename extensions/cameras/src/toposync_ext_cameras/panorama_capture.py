@@ -695,9 +695,11 @@ class PanoramaCamera:
             parameters.update(
                 rtsp_url=uri, username=self._client.username, password=self._client.password,
             )
+        # Keep snapshot consumers from replacing the decoder during a physical observation.
+        source_fps = _finite(self._source.get("video", {}).get("fps")) or 5.0
         request = CameraCaptureRequest(
             owner_id=f"panorama:{self.owner_id}", camera_id=self.camera_id,
-            source_id=self.source_id, fps=12.0, **parameters,
+            source_id=self.source_id, fps=max(12.0, min(60.0, source_fps)), **parameters,
         )
         try:
             self._capture_lease = await self.capture_service.open(request, self.dependencies)

@@ -928,6 +928,22 @@ def test_direct_fallback_is_exact_profile_ephemeral_and_does_not_forge_media_tim
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("source_fps, expected", [(None, 12.0), (5, 12.0), (25, 25.0), (60, 60.0)])
+def test_physical_capture_retains_source_rate_against_snapshot_demand(source_fps, expected):
+    async def run():
+        camera, configuration, _, _, capture = environment()
+        if source_fps is not None:
+            configuration["devices"][0]["sources"][0]["video"]["fps"] = source_fps
+        before = copy.deepcopy(configuration)
+        try:
+            await camera.frame(timeout_s=.05)
+            assert capture.requests[0].fps == expected
+            assert configuration == before
+        finally:
+            await camera.close()
+    asyncio.run(run())
+
+
 def test_frame_identity_distinguishes_capture_instances_with_reused_counters():
     async def run():
         camera, _, _, _, capture = environment()

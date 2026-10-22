@@ -1572,6 +1572,13 @@ class PanoramaService:
         checkpoint["active_seconds"] = 0.0
         checkpoint.pop("navigation_commands", None)
         preparation = {"started_at": time.time()}
+        preparation_started = time.monotonic()
+        preparation_elapsed_ms = {}
+
+        def prepared(stage: str) -> None:
+            preparation[f"{stage}_at"] = time.time()
+            preparation_elapsed_ms[stage] = (time.monotonic() - preparation_started) * 1000
+
         camera = self.camera_factory(services=self.services, camera_id=job["camera_id"],
                                      source_id=job["source_id"], settings={}, job_id=job["id"], output_dir=directory,
                                      **({"borrowed_control": borrowed_control} if borrowed_control is not None else {}))
@@ -1584,6 +1591,7 @@ class PanoramaService:
 
         scanner = _Scan(camera, directory, progress, lambda: job["id"] in self.cancelled, checkpoint)
         await self._reserve(job["camera_id"], job["id"])
+        prepared("reserved")
         self._navigation_scanners[job["id"]] = scanner
         image_url, evidence = "", {}
         failure_code = None
@@ -1596,17 +1604,17 @@ class PanoramaService:
         job["stop_confirmed"] = False
         try:
             scanner.capabilities = await camera.discover()
-            preparation["discovered_at"] = time.time()
+            prepared("discovered")
             await camera.acquire()
-            preparation["acquired_at"] = time.time()
+            prepared("acquired")
             scanner.acquired = True
             if not await scanner._stop():
                 raise PanoramaCaptureError("stop_unconfirmed")
-            preparation["stopped_at"] = time.time()
+            prepared("stopped")
             scanner.last_frame = await scanner._reference_window()
-            preparation["reference_at"] = time.time()
+            prepared("reference")
             scanner.last_pose = await camera.position()
-            preparation["position_at"] = time.time()
+            prepared("position")
             scanner.physical_state = "stopped"
             if target is None:
                 if scanner.saved_return:
@@ -1647,7 +1655,7 @@ class PanoramaService:
                     camera_id=job["camera_id"], source_id=job["source_id"], job_id=job["id"], revision=job["revision"],
                     image=scanner.last_frame["image"], capture_evidence=scanner.last_frame.get("capture_evidence", {}),
                 )
-                preparation["localized_at"] = time.time()
+                prepared("localized")
                 if located.get("status") != "localized":
                     raise PanoramaCaptureError(located.get("reason", "panorama_visual_localization_failed"))
                 if qualification_home is None and borrowed_control is None and not scanner.checkpoint.get("visual_original_ray"):
@@ -1668,7 +1676,7 @@ class PanoramaService:
                         for name in response_fields:
                             setattr(navigator, name, copy.deepcopy(cached["response"][name]))
                         response_observed = cached["observed_monotonic"]
-                        preparation["response_reused_at"] = time.time()
+                        prepared("response_reused")
                 if qualification_home is not None:
                     stages = []
                     for label, destination, tolerance in (
@@ -1770,6 +1778,7 @@ class PanoramaService:
                     job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
                         for key in ("navigation_commands", "navigation_observation_timings")}
                     job["_attention_navigation_trace"].update(preparation=preparation,
+                        preparation_elapsed_ms=preparation_elapsed_ms, timing_clock="process_monotonic",
                         final_stop_reused=scanner.checkpoint.get("final_stop_reused") is True,
                         finished_at=time.time(), error_code=failure_code, target=target)
                     job["_attention_navigation_history"] = [

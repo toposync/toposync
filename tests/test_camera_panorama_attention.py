@@ -56,7 +56,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
 @pytest.mark.anyio
 @pytest.mark.parametrize("reuse", ["same", "revision_changed", "optics_changed", "expired", "stop_unknown",
     "current_arrival", "current_return", "expired_during_status", "frame_aged_during_status",
-    "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status"])
+    "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status",
+    "clock_jump", "clock_jump_failure"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -117,10 +118,49 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     images = []
     service._image_write = lambda job, name, data: images.append(name)
     service._image_url = lambda job, name: name
+    if reuse in {"clock_jump", "clock_jump_failure"}:
+        clock, wall = [100.0], [1000.0]
+        monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(module.time, "time", lambda: wall[0])
+        async def reserve(*args):
+            clock[0] += .01
+        async def discover():
+            clock[0] += .02
+            return {}
+        async def acquire():
+            clock[0] += .03
+            wall[0] -= 1000
+        async def reference():
+            clock[0] += .04
+            if reuse == "clock_jump_failure":
+                raise PanoramaCaptureError("capture_timeout")
+            return frame
+        async def position():
+            clock[0] += .05
+            return {}
+        async def localize(**kwargs):
+            clock[0] += .06
+            return {"status": "localized"}
+        service._reserve.side_effect = reserve
+        camera.discover.side_effect, camera.acquire.side_effect = discover, acquire
+        scanner._reference_window.side_effect, camera.position.side_effect = reference, position
+        service.localize_frame.side_effect = localize
     job = bound_job()
     job["_attention_navigation_history"] = [{"trial": index} for index in range(8)]
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance)
+    if reuse == "clock_jump_failure":
+        with pytest.raises(HTTPException) as failure:
+            await operation
+        assert failure.value.detail["code"] == "capture_timeout"
+        trace = job["_attention_navigation_trace"]
+        assert trace["preparation_elapsed_ms"] == pytest.approx({
+            "reserved": 10, "discovered": 30, "acquired": 60, "stopped": 60})
+        assert trace["error_code"] == "capture_timeout"
+        assert job["stop_confirmed"] is True
+        camera.close.assert_awaited_once()
+        assert not images
+        return
     if reuse in {"cancel_receipt", "cancel_status"}:
         with pytest.raises(module.asyncio.CancelledError):
             await operation
@@ -159,6 +199,13 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     assert trace == job["_attention_navigation_trace"]
     assert trace["error_code"] is None
     assert trace["final_stop_reused"] is reuse_expected
+    if reuse == "clock_jump":
+        assert trace["preparation"]["acquired_at"] < trace["preparation"]["discovered_at"]
+        assert trace["preparation_elapsed_ms"] == pytest.approx({
+            "reserved": 10, "discovered": 30, "acquired": 60, "stopped": 60,
+            "reference": 100, "position": 150, "localized": 210})
+        assert trace["timing_clock"] == "process_monotonic"
+        return
     assert list(trace["preparation"].values()) == sorted(trace["preparation"].values())
     assert trace["finished_at"] >= trace["preparation"]["localized_at"]
     cached_at = service._attention_responses["camera"]["observed_monotonic"]

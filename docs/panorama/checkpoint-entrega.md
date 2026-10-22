@@ -37,6 +37,14 @@ chegada, até 12. Qualquer perda dessas condições mantém a parada e a observa
 completas. O traço informa `final_stop_reused`; redução da latência física ainda
 precisa ser medida em campanha, sem extrapolar o resultado dos testes de software.
 
+O diagnóstico de atenção registra `preparation_elapsed_ms`: marcos cumulativos
+medidos por relógio monotônico na mesma operação, desde a preparação local até
+reserva, descoberta, aquisição, parada, referência, pose e localização. Diferenças
+entre marcos consecutivos medem as etapas; horários civis permanecem apenas para
+correlação. Falha mantém os marcos já concluídos, sem inventar os seguintes. Esses
+tempos não incluem espera anterior pelo controlador/referência nem certificam
+o instante físico de exposição da imagem.
+
 Passagens reais posteriores produziram pequenas correções mecânicas, mas não
 mantiveram ciclista e pessoa em movimento centralizados. A lente Zoom mostrou
 o alvo cortado na borda. Um percurso curto adicional passou com chegada de

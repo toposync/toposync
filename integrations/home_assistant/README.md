@@ -147,8 +147,10 @@ No sensor invokes Home Assistant services or interprets pipeline lifecycle
 events as a boolean value. Reconfirmation timestamps and sample counters are
 kept out of entity attributes to avoid a recorder change on every observation.
 
-A complete isolated Home Assistant installation trial and field qualification
-remain separate requirements. These checks do not qualify physical alarm use.
+The installed-integration test below exercises a complete Home Assistant application
+bootstrap and the normal configuration flow. Process restarts and abrupt producer
+termination remain separate checks; reloading an integration is not a process restart.
+These checks do not qualify physical alarm use.
 
 The entity and coordinator tests run against the official Home Assistant
 2026.10.2 Linux image, with networking disabled. A native macOS ARM validation
@@ -157,3 +159,54 @@ a reference cycle, independently of this integration. Do not treat functional
 assertions followed by that crash as a passing test run; use the Linux image
 for this validation. No serialization or garbage-collection workaround is
 installed by Toposync.
+
+### Isolated application installation test
+
+`tests/test_home_assistant_visual_state_installation.py` copies the integration into
+a fresh Home Assistant configuration directory, starts the actual application,
+creates its configuration entry through the user flow and discovers both native
+entity kinds. Only the Toposync HTTP producer is synthetic. The test checks an
+observed state change, expiry while HTTP is blocked, transport timeout, unload,
+reload without restoring a valid historical value, identity preservation, recovery
+with a new producer epoch and HTTP 403. It asserts that no service is called.
+Home Assistant retains registered entities as unavailable after unloading them.
+
+Run from the repository root with Docker and Python 3.10 or later available. The image is pinned to
+Home Assistant 2026.10.2; the validated host uses Linux ARM64 inside Docker.
+The dedicated internal bridge has no external connectivity, no other containers
+and no published ports. A bridge is needed because this Home Assistant version's
+HTTP resolver initializes Zeroconf and fails when `--network none` leaves no usable
+interface. No host network, Docker socket, device or real configuration is mounted.
+The test requires an explicit environment flag and a Docker environment marker;
+ordinary test collection must not start discovery on the developer's computer.
+
+```sh
+(
+  set -eu
+  visual_artifacts="$HOME/.codex/task-artifacts/toposync-2/visual-installation"
+  mkdir -p "$visual_artifacts"
+  visual_run=$(mktemp -d "$visual_artifacts/run.XXXXXX")
+  visual_tools="$visual_artifacts/test-tools"
+  python3 -m pip install --target "$visual_tools" pytest==9.1.1 pytest-asyncio==1.4.0
+  visual_network="toposync-visual-validation-$$"
+  docker network create --internal "$visual_network"
+  trap 'docker network rm "$visual_network" >/dev/null' EXIT
+  docker run --rm --network "$visual_network" --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+    -v "$PWD/integrations/home_assistant:/workspace/integrations/home_assistant:ro" \
+    -v "$PWD/tests:/workspace/tests:ro" \
+    -v "$visual_tools:/test-tools:ro" -v "$visual_run:/artifacts" \
+    -e PYTHONPATH=/test-tools:/workspace:/workspace/tests \
+    -e TOPOSYNC_HA_INSTALLATION_TEST=1 \
+    -e PYTHONDONTWRITEBYTECODE=1 -w /workspace --entrypoint python \
+    ghcr.io/home-assistant/home-assistant@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4 \
+    -m pytest -q -p no:cacheprovider \
+    tests/test_home_assistant_visual_state_installation.py --basetemp /artifacts/data
+)
+```
+
+The test writes `installation-report.json` under its external test directory.
+Its single transition measurement includes receiver polling and entity updates;
+it is not a latency percentile, a camera-to-entity measurement or a capacity claim.
+Full quality and performance qualification still require the representative corpus
+and the remaining process-failure trials.

@@ -57,6 +57,8 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const [aiReady, setAiReady] = useState(false);
   const [preview, setPreview] = useState<{ result: VisualPreview; classes: VisualClass[]; context: string; pipeline: string } | null>(null);
   const active = useRef<AbortController | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  const restoreOperationFocus = useRef<(() => void) | null>(null);
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const readonly = referenceCapture?.available === false && referenceCapture.reason === "read_only";
@@ -94,10 +96,23 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
 
   async function run(name: string, work: (signal: AbortSignal) => Promise<void>) {
     if (readonly || active.current) return;
+    const root = panel.current;
+    const origin = root?.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+    const category = origin?.closest(".visualStateClass");
+    const restoreFocus = () => {
+      if (!origin || !root) return;
+      requestAnimationFrame(() => {
+        if (!root.isConnected || (document.activeElement !== document.body && document.activeElement !== origin)) return;
+        const target = origin.isConnected ? origin : category?.isConnected
+          ? category.querySelector<HTMLElement>("input") : root.querySelector<HTMLElement>("[data-visual-add-class]");
+        target?.focus();
+      });
+    };
+    restoreOperationFocus.current = restoreFocus;
     const controller = new AbortController(); active.current = controller; setBusy(name); setError(null);
     const timeout = name === "test" || name.startsWith("backup_") ? setTimeout(() => {
       controller.abort();
-      if (active.current === controller) { active.current = null; setBusy(null); setError(name === "test" ? "visual_preview_timeout" : "visual_backup_uncertain"); }
+      if (active.current === controller) { active.current = null; setBusy(null); setError(name === "test" ? "visual_preview_timeout" : "visual_backup_uncertain"); restoreFocus(); }
     }, name === "test" ? 30_000 : 60_000) : undefined;
     try { await work(controller.signal); }
     catch (cause) {
@@ -109,7 +124,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
           ?? (status === 401 || status === 403 ? "forbidden" : status === 409 ? "reference_conflict"
             : name === "test" ? "visual_preview_failed" : status === 413 ? "reference_limit" : status === 422 ? "invalid_classes" : "request_failed"));
       }
-    } finally { clearTimeout(timeout); if (active.current === controller) { active.current = null; setBusy(null); } }
+    } finally { clearTimeout(timeout); if (active.current === controller) { active.current = null; setBusy(null); restoreFocus(); } }
   }
   async function synchronize(configuration: VisualConfiguration, signal: AbortSignal): Promise<VisualDraft> {
     const previous = draftRef.current;
@@ -160,7 +175,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const closePhoto = React.useCallback(() => setPhoto(null), []);
   const unavailable = !referenceCapture ? "host_unavailable" : referenceCapture.available ? null : referenceCapture.reason;
   const hasReferences = classes.some(item => Array.isArray(item?.reference_ids) && item.reference_ids.length > 0);
-  return <section className="identityGallery visualStatePanel" aria-label={t("title")}>
+  return <section ref={panel} className="identityGallery visualStatePanel" aria-label={t("title")}>
     <style>{styles}</style>
     <p>{t("help")}</p>
     {value.strategy !== "direct" && !value.model_id && <p className="identityMuted">{t("model_missing")}</p>}
@@ -190,7 +205,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       })}>{t("suggestions_reopen")}</button>
     </div>}
     {reviewed && <p role="status">{t("suggestions_reviewed")}</p>}
-    {busy && <div role="status">{t(busy === "test" ? "testing" : busy.startsWith("backup_") ? "backup_working" : "working")} <button type="button" className="chipButton" onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setPending(null); }}>{t("cancel")}</button></div>}
+    {busy && <div role="status">{t(busy === "test" ? "testing" : busy.startsWith("backup_") ? "backup_working" : "working")} <button type="button" className="chipButton" onClick={() => { active.current?.abort(); active.current = null; setBusy(null); setPending(null); restoreOperationFocus.current?.(); }}>{t("cancel")}</button></div>}
     {!valid && <p role="alert">{t("invalid_classes")}</p>}
     <fieldset disabled={disabled}>
       <legend>{t("region")}</legend>
@@ -241,7 +256,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
         <label><input type="checkbox" checked={category.enabled} onChange={event => updateClass(category.class_id, { enabled: event.target.checked })} />{t("enabled")}</label></>}
     </fieldset>)}
     <div className="identityToolbar">
-      <button type="button" className="chipButton" disabled={disabled || classes.length >= 32} onClick={() => changed({ ...value,
+      <button type="button" data-visual-add-class className="chipButton" disabled={disabled || classes.length >= 32} onClick={() => changed({ ...value,
         classes: [...classes, newVisualClass(classes, t("state", { index: classes.length + 1 }))] })}>{t("add_class")}</button>
       {hasReferences && !draft && <button type="button" className="chipButton" disabled={disabled || !valid} onClick={() => void run("load", async signal => { await synchronize(value, signal); })}>{t("load_references")}</button>}
       {undo && <button type="button" className="chipButton" disabled={disabled} onClick={() => { mutate(restoreVisualReferences(value, undo), false); }}>{t("undo")}</button>}

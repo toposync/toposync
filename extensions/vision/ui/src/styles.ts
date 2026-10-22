@@ -36,7 +36,7 @@ export const styles = `
 .identityGallery .identityChoice .identityPortrait {width:48px;height:48px}
 .visualStatePanel .visualStateClass {border:1px solid var(--border);border-radius:10px;padding:12px;gap:10px}
 .visualStatePanel legend {font-weight:600;padding:0 5px}
-.visualStatePanel .visualStateName {flex:1;min-width:150px}
+.visualStatePanel .identityField.visualStateName {flex:1 1 150px;min-width:150px}
 .visualStatePanel .identityField {justify-content:stretch;min-width:0}
 .visualStatePanel textarea {box-sizing:border-box;width:100%;max-width:100%;resize:vertical;font:inherit;line-height:1.5}
 .visualStatePhotos {display:flex;gap:8px;flex-wrap:wrap}

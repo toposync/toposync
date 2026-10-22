@@ -257,9 +257,7 @@ class PtzAttentionRequestRuntime(SinkRuntime):
             if event_id not in self._event_types and len(self._event_types) >= 4096:
                 self._event_types.pop(next(iter(self._event_types)))
             self._event_types[event_id] = event_type
-        target = _target_from_packet(packet, self.config) if lifecycle == "open" or (
-            lifecycle == "update" and profile.follow_view_updates
-        ) else None
+        target = _target_from_packet(packet, self.config) if lifecycle in {"open", "update"} else None
         if lifecycle == "open" and target is None:
             self.controller.record_operator_rejection(
                 profile_id=profile.id,

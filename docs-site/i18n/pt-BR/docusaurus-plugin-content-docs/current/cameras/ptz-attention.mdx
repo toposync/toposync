@@ -95,6 +95,10 @@ contorna o bloqueio, pois ambas ainda compartilham o cabeçote físico. Uma alte
 posterior do pipeline para um observador no mesmo cabeçote fica bloqueada até que a
 confirmação seja salva.
 
+Chegada verificada na fonte ampla não comprova enquadramento na lente Zoom.
+Cada lente precisa da própria geometria e evidência de enquadramento; compartilhar
+o motor não torna as imagens intercambiáveis.
+
 ## Configure um perfil {/* #configure-a-profile */}
 
 Abra **Configurações > Atenção PTZ** e crie um perfil. O assistente tem quatro
@@ -174,9 +178,12 @@ evento semântico com OPEN / UPDATE / CLOSE
     -> navegação panorâmica visual qualificada
 ```
 
-Um pacote `OPEN` deve incluir um alvo espacial. Pacotes `UPDATE` apenas renovam a
-sessão ativa. O acompanhamento opcional em simulação confirma mudanças de alvo
-com capturas recentes ao longo do intervalo configurado; não move motores. `CLOSE`
+Um pacote `OPEN` deve incluir um alvo espacial. Pacotes `UPDATE` renovam a
+sessão ativa. Em simulação, um evento observado que teve o alvo recusado pode ser
+reavaliado quando uma atualização trouxer coordenadas válidas. O acompanhamento
+opcional em simulação confirma mudanças de alvo com capturas recentes ao longo
+do intervalo configurado; mudanças de raio na mesma referência panorâmica não
+reiniciam a confirmação a cada quadro. Esse acompanhamento não move motores. `CLOSE`
 libera o evento semântico e inicia a tolerância e o comportamento de retorno
 configurados. As arestas do grafo devem preservar `OPEN` e `CLOSE`; somente
 atualizações intermediárias podem ser compactadas.
@@ -252,6 +259,30 @@ concessão, contador de isolamento e época de movimento.
 Verifique se o perfil está `disabled`, `shadow` ou `paused`; se o controle manual
 possui a câmera; se o usuário tem permissão de controle da câmera; e se o evento
 selecionado atingiu a confirmação de candidato.
+
+### O alvo não pode ser resolvido
+
+As decisões recentes distinguem alvo ausente, envelope fora da região permitida,
+mapeamento indisponível, vínculo de fonte incompatível e qualificação física
+pendente. As coordenadas solicitadas ficam registradas para inspeção. Atualizações
+simuladas com a mesma recusa não repetem o aviso; o encerramento do evento
+observado continua reconhecido.
+
+Relações pessoa–veículo conservam coordenadas mundiais quando ambos os participantes
+têm geometria panorâmica pronta do mesmo mapeamento e revisão. A localização visual
+deve corresponder à captura de cada participante. Essa evidência não inventa uma
+confiança numérica nem substitui uma confiança explicitamente baixa. Coordenadas
+sem qualificação continuam usando proximidade na imagem, insuficiente para
+direcionar um perfil de atenção panorâmica.
+
+### Medir a latência
+
+As decisões registram o tempo desde o pacote de entrada e desde o recebimento pelo
+controlador. Esses tempos não equivalem ao tempo desde a primeira aparição do
+sujeito. O foco físico também registra o intervalo entre despacho e chegada
+verificada, identificando a fonte usada na confirmação. Simulação nunca publica
+latência de chegada física. Separe detecção, confirmação do evento, transporte do
+comando e chegada visual ao investigar demora.
 
 ### A câmera se move com muita frequência
 

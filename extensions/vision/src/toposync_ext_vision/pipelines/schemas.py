@@ -336,7 +336,8 @@ class VisionSpatialRelationEventConfig(BaseModel):
         le=1.0,
         description=(
             "Minimum confidence required on both world anchors before world-space distance is "
-            "used. Missing or weaker confidence falls back to image-space distance."
+            "used. Confidence-free anchors also qualify when both carry ready panorama "
+            "geometry from the same reference and revision. Otherwise image-space distance is used."
         ),
     )
     enter_image_center_distance: float = Field(default=0.20, gt=0.0, le=2.0)

@@ -28,7 +28,8 @@ def environment(mode="shadow", qualified=False, failure=None, blocked=False):
     calls, cancelled = [], asyncio.Event()
 
     async def resolve(**kwargs):
-        anchor = kwargs["target"]["world_anchor"]
+        target = kwargs["target"]
+        anchor = target.get("world_anchor") or target["world_envelope"]["center"]
         ray = [anchor["x"], anchor["z"], 1.]
         length = math.sqrt(sum(item * item for item in ray))
         return {"status": "ready", "camera_id": "front", "source_id": "wide", "composition_id": "yard",
@@ -122,6 +123,104 @@ async def test_unqualified_physical_attention_does_not_acquire_control_and_shado
     physical = await _validate_profile(controller, panorama_profile(mode="live_panorama"))
     assert not physical["ok"]
     assert not camera.resolve_calls and not camera.commands
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_relational_envelope_can_enter_region_after_rejected_open():
+    clock, camera, _, _, calls, _, store, controller = environment()
+    outside = event(clock).model_copy(update={"target": AttentionTarget(world_envelope={
+        "center": {"x": 1.8, "z": 0}, "radius_meters": .5, "member_count": 2,
+    })})
+    await controller.submit_intent(outside)
+    rejected = store.list_decisions()[0][0]
+    assert rejected.reason == "target_outside_attention_region"
+    assert rejected.details["requested_target"]["world_envelope"]["radius_meters"] == .5
+    assert controller.status()[0].active_target is None
+    clock.advance(1)
+    await controller.submit_intent(outside.model_copy(update={"lifecycle": "update",
+        "event_at": clock(), "received_at": clock()}))
+    assert len(store.list_decisions()[0]) == 1  # Repeated rejection does not flood the log.
+    clock.advance(1)
+    inside = outside.model_copy(update={"lifecycle": "update", "event_at": clock(), "received_at": clock(),
+        "target": AttentionTarget(world_envelope={
+            "center": {"x": .5, "z": 0}, "radius_meters": .5, "member_count": 2,
+        })})
+    await controller.submit_intent(inside)
+    assert controller.status()[0].state == "FOCUSED"
+    focus = store.list_decisions()[0][0]
+    assert focus.action == "shadow_focus"
+    assert focus.details["requested_target"]["world_envelope"]["member_count"] == 2
+    assert "command_to_arrival_ms" not in focus.details
+    await controller.submit_intent(inside.model_copy(update={"lifecycle": "close"}))
+    assert not any(item.reason == "unknown_close" for item in store.list_decisions()[0])
+    assert not calls and not camera.commands and not camera.acquires
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason,expected", [
+    ("outside_validated_region", "outside_validated_region"),
+    ("rtsp://user:secret@camera", "panorama_target_unavailable"),
+])
+async def test_resolver_rejection_preserves_safe_code_and_requested_target(reason, expected):
+    clock, camera, services, _, calls, _, store, controller = environment()
+
+    async def unavailable(**kwargs):
+        return {"status": "unavailable", "reason": reason}
+
+    services.register("cameras.panorama.resolve_target", unavailable)
+    await controller.submit_intent(event(clock))
+    rejected = store.list_decisions()[0][0]
+    assert rejected.reason == expected
+    assert rejected.details["requested_target"] == {"world_anchor": {"x": .5, "z": 0.0}}
+    assert "secret" not in str(rejected.public_payload())
+    assert not calls and not camera.commands
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_arrival_latency_is_only_recorded_after_verified_physical_arrival():
+    clock, _, _, _, _, _, store, controller = environment(mode="live_panorama", qualified=True)
+    await controller.submit_intent(event(clock))
+    assert controller.status()[0].state == "ACQUIRING"
+    assert all("command_to_arrival_ms" not in item.details for item in store.list_decisions()[0])
+    clock.advance(.4)
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    acquired = next(item for item in store.list_decisions()[0] if item.action == "focus_acquired")
+    assert acquired.details["command_to_arrival_ms"] == pytest.approx(400)
+    assert acquired.details["event_to_decision_ms"] == pytest.approx(400)
+    assert acquired.details["arrival_source_id"] == "wide"
+    assert acquired.details["arrival_evidence"] == "visual"
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_continuously_changing_world_ray_does_not_restart_shadow_confirmation():
+    clock, camera, _, _, calls, _, store, controller = environment()
+    store.replace_profile(panorama_profile(follow_view_updates=True, candidate_confirm_seconds=1))
+
+    async def observe(sequence, x):
+        await controller.submit_intent(event(clock, lifecycle="open" if sequence == 1 else "update", x=x)
+            .model_copy(update={"capture_evidence": {
+                "capture_instance": "decoder", "generation": 1,
+                "sequence": sequence, "published_at": clock(),
+            }}))
+
+    await observe(1, .1)
+    for sequence in range(2, 7):
+        clock.advance(.5)
+        await observe(sequence, sequence / 10)
+    status = controller.status()[0]
+    assert status.state == "FOCUSED"
+    assert status.active_target["ray"][0] == pytest.approx(.6 / math.sqrt(1 + .6**2))
+    assert sum(item.action == "shadow_focus" for item in store.list_decisions()[0]) == 2
+    assert not calls and not camera.commands and not camera.acquires
     await controller.shutdown()
     store.close()
 

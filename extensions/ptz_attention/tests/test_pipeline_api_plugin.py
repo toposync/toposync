@@ -421,6 +421,50 @@ async def test_sink_registration_and_runtime_preserve_lifecycle_without_update_m
     store.close()
 
 
+@pytest.mark.asyncio
+async def test_sink_retries_observed_unresolved_open_with_updated_target() -> None:
+    services = ServiceRegistry()
+    targets = []
+
+    async def resolve(**kwargs):
+        targets.append(kwargs["target"])
+        if len(targets) == 1:
+            raise ValueError("Target currently unavailable")
+        return {
+            "view_id": "driveway", "preset_token": "preset-driveway",
+            "confidence": 1, "reason": "test",
+        }
+
+    services.register("cameras.views.resolve_target", resolve)
+    store = AttentionStore(None)
+    store.create_profile(AttentionProfile.model_validate(profile_payload()))
+    controller = PtzAttentionController(store=store, services=services)
+    runtime = PtzAttentionRequestRuntime(
+        {"profile_id": "front_attention", "event_type": "person_near_vehicle"},
+        PipelineRuntimeDependencies(
+            services=services,
+            config_store=MutableConfigStore([attention_pipeline("front")]),
+        ),
+        controller,
+    )
+    context = SimpleNamespace(pipeline_name="events", node_id="attention")
+    for lifecycle, left in ((Lifecycle.OPEN, .1), (Lifecycle.UPDATE, .2)):
+        await runtime.process_packet(Packet.create(
+            stream_id="event-one", lifecycle=lifecycle,
+            payload={"event_id": "one", "subject": {"bbox01": [left, .1, .4, .5]}},
+        ), context)
+    assert len(targets) == 2 and targets[0] != targets[1]
+    assert controller.status()[0].state == "FOCUSED"
+    await runtime.process_packet(Packet.create(
+        stream_id="event-one", lifecycle=Lifecycle.CLOSE, payload={"event_id": "one"},
+    ), context)
+    decisions = store.list_decisions()[0]
+    assert any(item.action == "shadow_focus" for item in decisions)
+    assert not any(item.reason == "unknown_close" for item in decisions)
+    await controller.shutdown()
+    store.close()
+
+
 def test_api_crud_validate_status_decisions_pause_and_resume() -> None:
     store = AttentionStore(None)
     controller = PtzAttentionController(store=store, services=ServiceRegistry())

@@ -1,5 +1,26 @@
 # Panorâmica ao vivo — retorno preciso ainda reprovado, 04/10/2026
 
+## Diagnóstico da atenção por eventos — 20/10/2026
+
+A atenção simulada preserva o alvo solicitado e distingue recusa pela região,
+referência indisponível, vínculo incompatível e qualificação física pendente.
+Um evento observado inicialmente recusado pode ser reavaliado em atualizações
+válidas; seu encerramento conserva o ciclo de vida. A confirmação de seguimento
+simulado continua durante mudanças do raio na mesma referência panorâmica.
+
+Relações espaciais aceitam a evidência geométrica de ambos os participantes na
+mesma referência panorâmica e revisão, sem fabricar confiança estatística.
+Localizações visuais precisam corresponder à captura individual; referências
+incompatíveis e confiança explicitamente baixa continuam sem alvo mundial
+qualificado. O teste integrado percorre mapeamento, rastreamento, agrupamento e
+relação, além dos casos de rejeição.
+
+A telemetria separa evento até decisão de comando até chegada verificada na fonte
+selecionada. Simulação não publica latência de chegada física. Uma chegada na lente
+Wide não qualifica enquadramento na lente Zoom. Estas mudanças não promovem
+qualificações, não habilitam seguimento mecânico contínuo e não alteram os critérios
+de reconstrução, cobertura, apontamento ou retorno.
+
 ## Edição de regiões de interesse — 12/10/2026
 
 A assinatura de composição versão 2 preserva a calibração ao editar vértices

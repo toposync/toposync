@@ -16,6 +16,47 @@ from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines.postprocess import CameraMappingRuntime
 from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
 from toposync_ext_vision.processing.tasks.tracking import VisionTrackRuntime
+from toposync_ext_vision.processing.tasks.spatial_relation_event import VisionSpatialRelationEventRuntime
+
+
+def test_panorama_geometry_reaches_relation_through_tracking_and_grouping():
+    async def scenario():
+        services = ServiceRegistry()
+        services.register("cameras.panorama.get_active", lambda **kwargs: {"applies": True, "job": _job()})
+        mapping = CameraMappingRuntime({"composition_id": "yard"}, PipelineRuntimeDependencies(services=services))
+        tracking = VisionTrackRuntime({"tracker_id": "byte_world", "default_interval_seconds": 0}, PipelineRuntimeDependencies())
+        grouping = VisionGroupEventsRuntime({"mode": "session", "update_interval_seconds": 0})
+        relation = VisionSpatialRelationEventRuntime({"dwell_seconds": 0})
+
+        async def run_blocking(function, *args, concurrency_key=None, **kwargs):
+            return function(*args, **kwargs)
+
+        context = SimpleNamespace(run_blocking=run_blocking)
+        packet = _packet()
+        packet.payload.update({
+            "frame_ts": time.monotonic(),
+            "capture_evidence": {"capture_instance": "fixture", "generation": 1, "sequence": 1, "published_at": time.time()},
+            "vision": {"detections": [
+                {"label": category, "label_id": index, "model_id": "fixture", "score": .9,
+                 "bbox01": [.4 + index * .1, .4, .5 + index * .1, .5]}
+                for index, category in enumerate(("person", "car"))
+            ]},
+        })
+        mapped = (await mapping.process_packet(packet, context))[0]
+        events = await tracking.process_packet(mapped, context)
+        outputs = []
+        for event in events:
+            for group in await grouping.process_packet(event, None):
+                outputs.extend(await relation.process_packet(group, None))
+        assert len(outputs) == 1
+        payload = outputs[0].payload
+        assert payload["spatial_relation_event"]["coordinate_space"] == "world"
+        assert payload["world_envelope"]["member_count"] == 2
+        assert payload["world_anchor"]["x"] == pytest.approx(3.0)
+        assert "confidence" not in payload["world_anchor"]
+        assert payload["mapping"]["panorama_revision"] == 3
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("recover", [False, True])

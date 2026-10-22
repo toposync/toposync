@@ -70,6 +70,45 @@ def _world_anchor_meets_confidence(
     return float(anchor["confidence"]) >= float(minimum)
 
 
+def _panorama_reference(member: dict[str, Any]) -> tuple[Any, ...] | None:
+    anchor = _world_anchor(member.get("world_anchor"))
+    mapping = member.get("mapping")
+    if anchor is None or "confidence" in member["world_anchor"] or not isinstance(mapping, dict):
+        return None
+    revision = mapping.get("panorama_revision")
+    quality = mapping.get("quality")
+    model = mapping.get("projection_model")
+    pose = mapping.get("pose_evidence")
+    if (
+        mapping.get("status") != "mapped"
+        or not isinstance(quality, dict) or quality.get("status") != "ready"
+        or type(revision) is not int or revision < 1
+        or any(not isinstance(value, str) or not value.strip() for value in (
+            mapping.get("composition_id"), mapping.get("calibrated_view_id"),
+        ))
+        or (model, pose) not in (
+            ("panorama_image_ground_v1", "fixed_source_frame"),
+            ("panorama_ray_ground_v1", "numeric_pose"),
+            ("panorama_ray_ground_v1", "visual_frame_rotation"),
+        )
+    ):
+        return None
+    reference = (mapping["composition_id"], mapping["calibrated_view_id"], revision, model, pose)
+    if pose == "visual_frame_rotation":
+        localization = mapping.get("visual_localization")
+        if (
+            not isinstance(localization, dict)
+            or not isinstance(member.get("capture_evidence"), dict)
+            or localization.get("capture_evidence") != member["capture_evidence"]
+            or any(not isinstance(value, str) or not value.strip() for value in (
+                localization.get("source_artifact_id"), localization.get("geometry_digest"),
+            ))
+        ):
+            return None
+        reference += (localization["source_artifact_id"], localization["geometry_digest"])
+    return reference
+
+
 def _trusted_world_envelope(match: _RelationMatch) -> dict[str, Any]:
     assert match.left.world_anchor is not None
     assert match.right.world_anchor is not None
@@ -116,6 +155,7 @@ class _Member:
     confidence: float
     bbox01: tuple[float, float, float, float]
     world_anchor: dict[str, float] | None
+    panorama_reference: tuple[Any, ...] | None
     active: bool
     media_ts: float
 
@@ -262,6 +302,7 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
                     confidence=max(0.0, min(1.0, confidence)),
                     bbox01=bbox01,
                     world_anchor=_world_anchor(raw.get("world_anchor")),
+                    panorama_reference=_panorama_reference(raw),
                     active=bool(raw.get("active", True)),
                     media_ts=float(member_ts),
                 )
@@ -309,13 +350,19 @@ class VisionSpatialRelationEventRuntime(TransformOperatorRuntime):
         for left in left_members:
             for right in right_members:
                 minimum_world_confidence = float(self._config.minimum_world_anchor_confidence)
-                if _world_anchor_meets_confidence(
+                confidence_accepted = _world_anchor_meets_confidence(
                     left.world_anchor,
                     minimum=minimum_world_confidence,
                 ) and _world_anchor_meets_confidence(
                     right.world_anchor,
                     minimum=minimum_world_confidence,
-                ):
+                )
+                # Calibrated geometry has provenance, not a fabricated probability.
+                geometry_accepted = (
+                    left.panorama_reference is not None
+                    and left.panorama_reference == right.panorama_reference
+                )
+                if confidence_accepted or geometry_accepted:
                     coordinate_space = "world"
                     assert left.world_anchor is not None
                     assert right.world_anchor is not None

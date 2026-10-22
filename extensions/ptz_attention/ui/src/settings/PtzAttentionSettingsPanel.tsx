@@ -767,6 +767,19 @@ function DecisionReview({
                         decision.details.target ? t("ext.ptz_attention.panorama.target") : "",
                       ].filter(Boolean).join(" · ") || "-"}
                     </div>
+                    {typeof decision.details.event_to_decision_ms === "number" ? (
+                      <div className="ptzAttentionMuted">
+                        {t("ext.ptz_attention.latency.decision", {
+                          milliseconds: Math.round(decision.details.event_to_decision_ms),
+                        })}
+                        {typeof decision.details.command_to_arrival_ms === "number"
+                          ? ` · ${t("ext.ptz_attention.latency.arrival", {
+                            milliseconds: Math.round(decision.details.command_to_arrival_ms),
+                            source: String(decision.details.arrival_source_id || "-"),
+                          })}`
+                          : ""}
+                      </div>
+                    ) : null}
                   </div>
                   <time className="ptzAttentionDecisionTime" dateTime={new Date(decision.created_at * 1000).toISOString()}>{formatDateTime(decision.created_at, locale)}</time>
                 </div>

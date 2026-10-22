@@ -90,7 +90,7 @@ async def until(predicate):
             await asyncio.sleep(0.005)
 
 
-async def harness(tmp_path, backend_factory=build_embedding_backend):
+async def harness(tmp_path, backend_factory=build_embedding_backend, *, sensor_id="sensor", scheduler=None):
     clock = Clock()
     manifest = color_model(tmp_path)
     probe = build_embedding_backend(manifest)
@@ -99,7 +99,7 @@ async def harness(tmp_path, backend_factory=build_embedding_backend):
     host = store_at(tmp_path / "host")
     store = VisualReferenceStore(tmp_path / "references", scope="installation")
     configuration = VisualStateConfig(
-        sensor_id="sensor", source_identity="camera:synthetic", use_full_image=True,
+        sensor_id=sensor_id, source_identity="camera:synthetic", use_full_image=True,
         preparation_revision="pending", reference_revision="references", model_revision=revision, model_id=manifest.model_id,
         classes=[{"class_id": key, "key": key, "label": key} for key in ("red", "blue")],
         comparison={"enter_threshold": .9, "enter_margin": .2, "hold_threshold": .8, "hold_margin": .1},
@@ -123,7 +123,7 @@ async def harness(tmp_path, backend_factory=build_embedding_backend):
     await host.create_pipeline(saved)
     services = ServiceRegistry()
     services.register("vision.visual_references", lambda: store)
-    scheduler = ExecutionScheduler(thread_pool_max_workers=3)
+    scheduler = scheduler or ExecutionScheduler(thread_pool_max_workers=3)
     dependencies = PipelineRuntimeDependencies(config_store=host, services=services,
                                                vision_model_registry=ModelRegistry([manifest]), execution_scheduler=scheduler)
     runtime = VisualStateRuntime(configuration.model_dump(), dependencies, backend_factory=backend_factory,

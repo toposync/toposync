@@ -25,7 +25,7 @@ from PIL import Image
 from .panorama import _digest, _error
 from .panorama_capture import PanoramaCaptureError, require_motion_automation
 from .panorama_navigation import (
-    MAXIMUM_LIVE_CENTER_ERROR_PIXELS, VisualNavigator,
+    MAXIMUM_LIVE_CENTER_ERROR_PIXELS, VisualNavigator, _arrival_stop_is_current,
 )
 from .panorama_scan import ATTEMPT_SECONDS, _Scan, _Stopped
 from .processing.panorama_mapping import _rotation_basis, panorama_pixel_to_ray
@@ -66,35 +66,6 @@ async def _stopped_control_is_current(scanner: Any, camera: Any) -> bool:
     except Exception:
         return False
     return current is True and 0 <= time.monotonic() - received <= 1
-
-
-async def _arrival_stop_is_current(scanner: Any, camera: Any, result: Any) -> bool:
-    """Reuse fresh visual arrival only while its accepted Stop still owns control."""
-    frame = scanner.last_frame or {}
-    evidence = frame.get("capture_evidence") or {}
-    receipt = getattr(scanner, "last_stop_receipt", None)
-    accepted = getattr(scanner, "last_stop_accepted_monotonic", None)
-    received = frame.get("received_monotonic")
-    if (not isinstance(result, dict) or result.get("verified") is not True
-            or result.get("kind") != "visual_aim_verified"
-            or scanner.physical_state != "stopped"
-            or not evidence.get("capture_instance")
-            or type(evidence.get("generation")) is not int
-            or type(evidence.get("sequence")) is not int
-            or result.get("capture_evidence") != evidence
-            or type(accepted) not in (float, int) or type(received) not in (float, int)
-            or not accepted <= received <= time.monotonic()
-            or not 0 <= time.monotonic() - received <= 1.0):
-        return False
-    error = (result.get("measurement") or {}).get("center_error_pixels")
-    if type(error) not in (float, int) or not 0 <= error <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
-        return False
-    try:
-        current = await camera.stop_receipt_is_current(receipt)
-    except Exception:
-        return False
-    # The control lookup can wait; never renew the image's freshness with it.
-    return current is True and 0 <= time.monotonic() - received <= 1.0
 
 
 class OpenSession(BaseModel):

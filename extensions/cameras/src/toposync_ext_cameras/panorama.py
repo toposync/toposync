@@ -1563,7 +1563,7 @@ class PanoramaService:
     ) -> tuple[str, dict[str, Any]]:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
-        from .panorama_navigation import VisualNavigator
+        from .panorama_navigation import VisualNavigator, _arrival_stop_is_current
 
         if self.camera_factory is None:
             raise _error("visual_control_unavailable", "Visual camera control is unavailable")
@@ -1587,6 +1587,7 @@ class PanoramaService:
         self._navigation_scanners[job["id"]] = scanner
         image_url, evidence = "", {}
         failure_code = None
+        cleanup_cancellation = None
         navigator = None
         response_fields = ("response", "response_rotations", "pulse_limits",
                            "direction_responses", "stationary_durations")
@@ -1711,19 +1712,34 @@ class PanoramaService:
                 restored = scanner.physical_state == "restored"
                 if scanner.acquired:
                     control_stopped = True
+                    arrival_reused = False
                     if borrowed_control is not None:
                         control_stopped = False
-                        if await scanner._stop():
-                            status_task = asyncio.create_task(self._attention_stopped_control(
-                                job, borrowed_control))
-                            try:
-                                await scanner._confirm_stop(reuse_accepted=True)
-                            finally:
-                                control_stopped = await asyncio.shield(status_task)
+                        try:
+                            if (not failure_code and await _arrival_stop_is_current(
+                                    scanner, camera, evidence, maximum_error_pixels=maximum_error_pixels)):
+                                control_stopped = await self._attention_stopped_control(job, borrowed_control)
+                                # Native status can wait; recheck image age and the same Stop afterward.
+                                arrival_reused = control_stopped and await _arrival_stop_is_current(
+                                    scanner, camera, evidence, maximum_error_pixels=maximum_error_pixels)
+                        except asyncio.CancelledError as error:
+                            # Cancelling the shortcut must still run the mandatory Stop path.
+                            cleanup_cancellation = error
+                            failure_code = "capture_cancelled"
+                        if not arrival_reused:
+                            control_stopped = False
+                            if await scanner._stop():
+                                status_task = asyncio.create_task(self._attention_stopped_control(
+                                    job, borrowed_control))
+                                try:
+                                    await scanner._confirm_stop(reuse_accepted=True)
+                                finally:
+                                    control_stopped = await asyncio.shield(status_task)
                     else:
                         await scanner._confirm_stop()
                     job["stop_confirmed"] = scanner.physical_state == "stopped" and control_stopped
-                    if borrowed_control is not None and job["stop_confirmed"] and not failure_code:
+                    scanner.checkpoint["final_stop_reused"] = arrival_reused
+                    if borrowed_control is not None and job["stop_confirmed"] and not failure_code and not arrival_reused:
                         # Cleanup observes newer video; arrival must refer to that
                         # stopped frame, not to the frame preceding Stop.
                         try:
@@ -1754,6 +1770,7 @@ class PanoramaService:
                     job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
                         for key in ("navigation_commands", "navigation_observation_timings")}
                     job["_attention_navigation_trace"].update(preparation=preparation,
+                        final_stop_reused=scanner.checkpoint.get("final_stop_reused") is True,
                         finished_at=time.time(), error_code=failure_code, target=target)
                     job["_attention_navigation_history"] = [
                         *job.get("_attention_navigation_history", []),
@@ -1783,6 +1800,8 @@ class PanoramaService:
                     self._navigation_scanners.pop(job["id"], None)
                     if self.busy.get(job["camera_id"]) == job["id"]:
                         self.busy.pop(job["camera_id"], None)
+        if cleanup_cancellation is not None:
+            raise cleanup_cancellation
         if job.get("stop_confirmed") is not True:
             raise _error("stop_unconfirmed", "The camera stop could not be confirmed")
         if failure_code:

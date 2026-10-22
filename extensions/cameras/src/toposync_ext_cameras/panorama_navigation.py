@@ -46,6 +46,39 @@ MAXIMUM_PROBE_ERROR_GROWTH_RATIO = 1.2
 MAXIMUM_RESPONSE_VIEW_CHANGE_DEGREES = 15.0
 
 
+async def _arrival_stop_is_current(
+    scanner: Any, camera: Any, result: Any, *, maximum_error_pixels: float = MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
+) -> bool:
+    """Reuse fresh visual arrival only while its accepted Stop still owns control."""
+    frame = scanner.last_frame or {}
+    evidence = frame.get("capture_evidence") or {}
+    receipt = getattr(scanner, "last_stop_receipt", None)
+    accepted = getattr(scanner, "last_stop_accepted_monotonic", None)
+    received = frame.get("received_monotonic")
+    if (not isinstance(result, dict) or result.get("verified") is not True
+            or result.get("kind") != "visual_aim_verified"
+            or scanner.physical_state != "stopped"
+            or not evidence.get("capture_instance")
+            or type(evidence.get("generation")) is not int
+            or type(evidence.get("sequence")) is not int
+            or result.get("capture_evidence") != evidence
+            or type(accepted) not in (float, int) or type(received) not in (float, int)
+            or not accepted <= received <= time.monotonic()
+            or not 0 <= time.monotonic() - received <= 1.0
+            or type(maximum_error_pixels) not in (float, int)
+            or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS):
+        return False
+    error = (result.get("measurement") or {}).get("center_error_pixels")
+    if type(error) not in (float, int) or not 0 <= error <= maximum_error_pixels:
+        return False
+    try:
+        current = await camera.stop_receipt_is_current(receipt)
+    except Exception:
+        return False
+    # The control lookup can wait; never renew the image's freshness with it.
+    return current is True and 0 <= time.monotonic() - received <= 1.0
+
+
 def reference_probe_observations(model: dict, photographs: list, commands: list, attempts: list) -> list:
     """Recover command direction, never motor gain, from causal reference pairs."""
     if not isinstance(commands, list) or not isinstance(attempts, list):

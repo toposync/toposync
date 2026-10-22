@@ -54,7 +54,9 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("reuse", ["same", "revision_changed", "optics_changed", "expired", "stop_unknown"])
+@pytest.mark.parametrize("reuse", ["same", "revision_changed", "optics_changed", "expired", "stop_unknown",
+    "current_arrival", "current_return", "expired_during_status", "frame_aged_during_status",
+    "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -71,6 +73,24 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         _target_measurement=AsyncMock(return_value={"center_error_pixels": .3}),
         response={"pan": np.array([.2, 0])}, response_rotations={"pan": np.eye(3)},
         pulse_limits={"pan": .3}, direction_responses={}, stationary_durations={}, commands=1)
+    reuse_expected = reuse in {"current_arrival", "current_return"}
+    tolerance = 3 if reuse in {"current_return", "return_needs_correction"} else 12
+    if reuse_expected or reuse in {"expired_during_status", "frame_aged_during_status", "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status"}:
+        import time
+        frame.update(received_monotonic=time.monotonic(), capture_evidence={
+            "capture_instance": "decoder", "generation": 1, "sequence": 1})
+        scanner.last_stop_accepted_monotonic = frame["received_monotonic"] - .01
+        scanner.last_stop_receipt = {"command_id": "stop"}
+        camera.stop_receipt_is_current = AsyncMock(return_value=True)
+        navigator.aim.return_value.update(verified=True, kind="visual_aim_verified",
+            capture_evidence=frame["capture_evidence"],
+            measurement={"center_error_pixels": 4 if reuse == "return_needs_correction" else .3})
+        if reuse in {"expired_during_status", "stop_failed_after_expiry"}:
+            camera.stop_receipt_is_current.side_effect = [True, False]
+        if reuse == "stop_failed_after_expiry":
+            scanner._stop.side_effect = [True, False]
+        if reuse == "cancel_receipt":
+            camera.stop_receipt_is_current.side_effect = module.asyncio.CancelledError()
     monkeypatch.setattr(panorama_scan, "_Scan", lambda *args: scanner)
     monkeypatch.setattr(panorama_scan, "_write_image", lambda *args: pytest.fail("Duplicate endpoint encoding"))
     monkeypatch.setattr(panorama_navigation, "VisualNavigator", lambda *args: navigator)
@@ -85,15 +105,52 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     service.localize_frame = AsyncMock(return_value={"status": "localized"})
     service._localizers = {("artifact", "geometry"): SimpleNamespace(lens={})}
     service._attention_stopped_control = AsyncMock(return_value=True)
+    if reuse == "cancel_status":
+        service._attention_stopped_control.side_effect = [module.asyncio.CancelledError(), True]
+    if reuse == "frame_aged_during_status":
+        clock = [frame["received_monotonic"]]
+        monkeypatch.setattr(panorama_navigation.time, "monotonic", lambda: clock[0])
+        async def slow_status(*args):
+            clock[0] += 1.1
+            return True
+        service._attention_stopped_control.side_effect = slow_status
     images = []
     service._image_write = lambda job, name, data: images.append(name)
     service._image_url = lambda job, name: name
     job = bound_job()
     job["_attention_navigation_history"] = [{"trial": index} for index in range(8)]
-    _, evidence = await service._visual_operation_with_pinned_reference(None, job,
-        {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7})
-    assert evidence["capture_evidence"]["sequence"] == 2
-    scanner.refresh_stopped_frame.assert_awaited_once()
+    operation = service._visual_operation_with_pinned_reference(None, job,
+        {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance)
+    if reuse in {"cancel_receipt", "cancel_status"}:
+        with pytest.raises(module.asyncio.CancelledError):
+            await operation
+        assert scanner._stop.await_count == 2, "Cancellation must still attempt a final Stop"
+        scanner._confirm_stop.assert_awaited_once_with(reuse_accepted=True)
+        assert job["stop_confirmed"] is True
+        assert job["_attention_navigation_trace"]["error_code"] == "capture_cancelled"
+        assert job["_attention_navigation_trace"]["final_stop_reused"] is False
+        scanner.refresh_stopped_frame.assert_not_awaited()
+        camera.close.assert_awaited_once()
+        assert not service._navigation_scanners and not images
+        return
+    if reuse == "stop_failed_after_expiry":
+        with pytest.raises(HTTPException) as failure:
+            await operation
+        assert failure.value.detail["code"] == "stop_unconfirmed"
+        assert job["stop_confirmed"] is False
+        assert job["_attention_navigation_trace"]["final_stop_reused"] is False
+        scanner.refresh_stopped_frame.assert_not_awaited()
+        camera.close.assert_awaited_once()
+        assert not images
+        return
+    _, evidence = await operation
+    assert evidence["capture_evidence"]["sequence"] == (1 if reuse_expected else 2)
+    if reuse_expected:
+        scanner.refresh_stopped_frame.assert_not_awaited()
+        scanner._confirm_stop.assert_not_awaited()
+        assert scanner._stop.await_count == 1, "Only initial Stop is needed with a current qualified arrival"
+    else:
+        scanner.refresh_stopped_frame.assert_awaited_once()
     assert len(images) == 1 and images[0].endswith(".jpg")
     camera.close.assert_awaited_once()
     history = job["_attention_navigation_history"]
@@ -101,6 +158,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     trace = history[-1]
     assert trace == job["_attention_navigation_trace"]
     assert trace["error_code"] is None
+    assert trace["final_stop_reused"] is reuse_expected
     assert list(trace["preparation"].values()) == sorted(trace["preparation"].values())
     assert trace["finished_at"] >= trace["preparation"]["localized_at"]
     cached_at = service._attention_responses["camera"]["observed_monotonic"]
@@ -122,8 +180,8 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         assert "camera" not in service._attention_responses
     else:
         await operation
-        assert bool(navigator.response) is (reuse == "same")
-        if reuse == "same":
+        assert bool(navigator.response) is (reuse not in {"revision_changed", "optics_changed", "expired"})
+        if reuse == "same" or reuse_expected:
             assert service._attention_responses["camera"]["observed_monotonic"] == cached_at
             navigator.response["pan"][0] = 99
             assert service._attention_responses["camera"]["response"]["response"]["pan"][0] == .2

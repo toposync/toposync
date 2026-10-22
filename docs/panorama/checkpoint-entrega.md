@@ -27,6 +27,16 @@ passa a confirmar ambos e medir o alvo na imagem final parada. Seguimento móvel
 latência ponta a ponta e conservação do rastro mundial permanecem em validação
 física; este checkpoint não declara sua aprovação.
 
+A atenção passa a compartilhar com a panorâmica ao vivo a verificação de chegada
+recente sob o mesmo Stop. Quando o quadro parado ainda é o da chegada, sua idade
+é de até um segundo, a posse continua válida e o estado físico ONVIF é confirmado,
+essa evidência pode ser entregue sem repetir Stop, janela de estabilização e
+localização. A consulta de estado não renova a idade do quadro: imagem e comando
+são conferidos novamente depois dela. Retorno continua exigindo até 3 pixels;
+chegada, até 12. Qualquer perda dessas condições mantém a parada e a observação
+completas. O traço informa `final_stop_reused`; redução da latência física ainda
+precisa ser medida em campanha, sem extrapolar o resultado dos testes de software.
+
 Passagens reais posteriores produziram pequenas correções mecânicas, mas não
 mantiveram ciclista e pessoa em movimento centralizados. A lente Zoom mostrou
 o alvo cortado na borda. Um percurso curto adicional passou com chegada de

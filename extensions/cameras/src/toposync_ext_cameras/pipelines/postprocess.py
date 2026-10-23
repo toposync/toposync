@@ -32,6 +32,7 @@ from toposync.runtime.pipelines.operator_registry import (
     payload_path_hint,
 )
 from toposync.runtime.pipelines.packet_contract import (
+    get_media_descriptor,
     get_source_descriptor,
     resolve_media_ts,
     resolve_frame_freshness,
@@ -448,6 +449,18 @@ def _area_restriction_expression_hints() -> list[Any]:
 
 def _velocity_expression_hints() -> list[Any]:
     return [
+        payload_path_hint("payload.velocity.vector_mps", value_type="object",
+            description="Signed x/z world velocity over the same window as speed; not a motor command."),
+        payload_path_hint("payload.velocity.vector_mps.x", value_type="number",
+            description="Signed velocity along the world's x axis in meters per second."),
+        payload_path_hint("payload.velocity.vector_mps.z", value_type="number",
+            description="Signed velocity along the world's z axis in meters per second."),
+        payload_path_hint("payload.velocity.vector_raw_mps", value_type="object",
+            description="Signed x/z velocity between the two most recent world samples."),
+        payload_path_hint("payload.velocity.world_reference", value_type="object",
+            description="Source and mapping identity used by the velocity samples."),
+        payload_path_hint("payload.velocity.time_basis", value_type="string",
+            description="Timestamp field used for elapsed time; not proof of physical exposure timing."),
         payload_path_hint(
             "payload.velocity.arrival_evidence", value_type="object",
             description="Recent movement within the same capture continuity; not a confirmed arrival or stop.",
@@ -5062,11 +5075,36 @@ class _VelocityState:
     published_at: float = float("-inf")
     last_seen: float = 0.0
     last_moving_at: float | None = None
+    reference: dict[str, Any] | None = None
+    time_basis: str = ""
 
 
 _VELOCITY_WINDOW_SECONDS = 0.8
 _VELOCITY_HISTORY_SECONDS = 3.0
 _VELOCITY_MAX_SAMPLES = 128
+
+
+def _velocity_reference(packet: Packet) -> dict[str, Any]:
+    mapping = packet.payload.get("mapping")
+    mapping = mapping if isinstance(mapping, dict) else {}
+    visual = mapping.get("visual_localization")
+    visual = visual if isinstance(visual, dict) else {}
+    return {"camera_id": resolve_source_device_id(packet), "source_id": _resolve_camera_source_scope(packet)[0],
+        **{key: mapping.get(key) for key in ("status", "composition_id", "calibrated_view_id",
+            "control_point_set_id", "map_revision", "panorama_revision", "projection_model")},
+        **{key: visual.get(key) for key in ("source_artifact_id", "geometry_digest")}}
+
+
+def _velocity_time_basis(packet: Packet) -> str:
+    # Mirror the media contract's precedence, while keeping its fallback explicit.
+    for label, value in (("media.ts", get_media_descriptor(packet).get("ts")),
+                         ("frame_ts", packet.payload.get("frame_ts")), ("ts", packet.payload.get("ts"))):
+        try:
+            if math.isfinite(float(value)):
+                return label
+        except (ValueError, TypeError, OverflowError):
+            pass
+    return "packet.created_at"
 
 
 class VelocityEstimationRuntime(TransformOperatorRuntime):
@@ -5113,7 +5151,11 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         key = _resolve_tracking_key(packet)
 
         now_ts = _resolve_packet_time(packet, time_field="frame_ts")
+        reference = _velocity_reference(packet)
+        time_basis = _velocity_time_basis(packet)
         state = self._state_by_key.get(key)
+        continuity_reason = ("world_reference_changed" if state is not None and state.reference != reference else
+            "time_basis_changed" if state is not None and state.time_basis != time_basis else "")
         capture_evidence = packet.payload.get("capture_evidence")
         capture = None
         invalid_reason = None
@@ -5140,7 +5182,8 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 raw_valid=False, window_seconds=_VELOCITY_WINDOW_SECONDS, reason=invalid_reason)
             return self._apply_filter_mode(out_packet, valid=False, moving=False, ever_stopped=False)
         if state is not None and (
-            (capture is not None and state.capture is not None and capture[:2] != state.capture[:2])
+            state.reference != reference or state.time_basis != time_basis
+            or (capture is not None and state.capture is not None and capture[:2] != state.capture[:2])
             or (state.samples and now_ts - state.samples[-1].ts > self._config.evidence_timeout_seconds)
             or time.monotonic() - state.last_seen > self._config.evidence_timeout_seconds
         ):
@@ -5222,7 +5265,8 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                 self._state_by_key = {k: v for k, v in self._state_by_key.items() if v.last_seen >= cutoff}
                 if len(self._state_by_key) >= 4096:
                     return []
-            state = _VelocityState(samples=deque(maxlen=_VELOCITY_MAX_SAMPLES))
+            state = _VelocityState(samples=deque(maxlen=_VELOCITY_MAX_SAMPLES),
+                reference=deepcopy(reference), time_basis=time_basis)
             self._state_by_key[key] = state
 
         samples = state.samples
@@ -5328,7 +5372,9 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
             raw_elapsed=raw_elapsed,
             raw_valid=raw_valid,
             window_seconds=_VELOCITY_WINDOW_SECONDS,
-            reason="",
+            reason=continuity_reason,
+            vector={"x": window_dx / window_elapsed, "z": window_dz / window_elapsed} if valid else None,
+            raw_vector={"x": raw_dx / raw_elapsed, "z": raw_dz / raw_elapsed} if raw_valid else None,
         )
 
         if packet.lifecycle == Lifecycle.CLOSE:
@@ -5360,6 +5406,8 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
         raw_valid: bool,
         window_seconds: float,
         reason: str,
+        vector: dict[str, float] | None = None,
+        raw_vector: dict[str, float] | None = None,
     ) -> Packet:
         payload = dict(packet.payload)
         state = self._state_by_key.get(_resolve_tracking_key(packet))
@@ -5370,6 +5418,10 @@ class VelocityEstimationRuntime(TransformOperatorRuntime):
                            "subject_id": str((packet.payload.get("subject") or {}).get("id") or ""),
                            "source_stream_id": str(packet.payload.get("source_stream_id") or packet.stream_id)}
         payload["velocity"] = {
+            "vector_mps": vector,
+            "vector_raw_mps": raw_vector,
+            "world_reference": _velocity_reference(packet),
+            "time_basis": _velocity_time_basis(packet),
             "arrival_evidence": arrival,
             "speed": float(speed),
             "speed_mps": float(speed),

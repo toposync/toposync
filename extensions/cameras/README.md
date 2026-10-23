@@ -172,6 +172,17 @@ ids are diagnostic only.
 - `camera.area_restriction`
 - `camera.velocity_estimation`
 
+Velocity output includes signed `vector_mps` and `vector_raw_mps` (`x`/`z`),
+using the same window and most recent interval as the existing speed estimates.
+Invalid estimates expose null vectors. `world_reference` identifies the source
+and mapping used by the samples; a source, mapping revision or timestamp-field
+change resets the history, stationary memory and arrival evidence. Ordinary PTZ
+pose changes within the same mapped reference do not reset it.
+`time_basis` names the resolved media timestamp field or the packet creation-time
+fallback; neither certifies physical exposure timing. Windowed direction can lag
+behind a stop or reversal, so it is not sufficient by itself for motor prediction.
+These fields add no camera commands or required configuration.
+
 Public vision operators are registered by the `com.toposync.vision` extension:
 
 - `vision.detect`

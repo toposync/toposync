@@ -404,3 +404,137 @@ async def test_supervised_round_trip_is_the_only_qualification_writer(failure):
         assert result["trial"]["stages"] == stages
         assert service._visual_operation_with_pinned_reference.await_args.kwargs == {
             "qualification_home": {"ray": [0., 0., 1]}}
+
+
+def subject_destination(job, *, published_at=1000., sequence=1, anchor=None, center=None):
+    anchor = anchor or [0, 0, 1]
+    center = center or [0, 1, 0]
+    return {**{key: job[key] for key in ("camera_id", "source_id", "composition_id", "element_id", "revision")},
+        "job_id": job["id"], "ray": anchor,
+        "framing": {"camera_id": job["camera_id"], "source_id": job["source_id"],
+            "capture_instance": "decoder", "generation": 1, "sequence": sequence, "published_at": published_at,
+            "source_width": 201, "source_height": 101, "bbox01": [.4, .1, .6, .5], "boundary_contact": False,
+            "panorama": {"job_id": job["id"], "revision": job["revision"], "composition_id": job["composition_id"],
+                "source_artifact_id": "artifact", "geometry_digest": "geometry",
+                "center_ray": center, "corner_rays": [[0, .8, .6], [.6, .8, 0], [0, .8, -.6], [-.6, .8, 0]]}}}
+
+
+def framing_service(monkeypatch):
+    import numpy as np
+    job = bound_job()
+    qualify(job)
+    service = object.__new__(PanoramaService)
+    service.jobs = {"job": job}
+    service._save = lambda _: None
+    service.reference_coordinator = SimpleNamespace(hold=hold)
+    service.get_active = AsyncMock(return_value={"job": {**job, "permissions": {"aim_enabled": True}}})
+    service.reference_localizer = AsyncMock(return_value=SimpleNamespace(
+        target_reference=Mock(return_value={"id": "reference"}), coverage_mask=np.ones((40, 80), dtype=np.uint8)))
+    snapshot = {"active_lease": {"lease_id": "attention", "fence": 7, "owner_kind": "automation"},
+        "automation_ready": True, "motion_epoch": 4}
+    service.services = SimpleNamespace(call=AsyncMock(return_value=snapshot))
+    service._visual_operation_with_pinned_reference = AsyncMock()
+    ground = Mock(return_value=(0, 0))
+    monkeypatch.setattr(module, "map_ray_to_world", ground)
+    monkeypatch.setattr(module, "map_world_to_ray", lambda *args: [0, 0, 1])
+    monkeypatch.setattr(module, "mapping_extrapolated", lambda *args: False)
+    monkeypatch.setattr(module.time, "time", lambda: 1000.5)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 50.)
+    return service, job, ground
+
+
+@pytest.mark.anyio
+async def test_subject_center_drives_navigation_without_moving_world_anchor(monkeypatch):
+    service, job, ground = framing_service(monkeypatch)
+    destination = subject_destination(job)
+    resolved = await service.resolve_target(camera_id="camera", source_id="wide", composition_id="yard",
+        element_id="element", target={"world_anchor": {"x": 0, "z": 0}, "framing": destination["framing"]})
+    assert resolved["target"] == {"ray": [0, 0, 1], "framing": destination["framing"]}
+    updated = subject_destination(job, sequence=2, published_at=1000.2, anchor=[.6, 0, .8], center=[.6, .8, 0])
+
+    async def aim(request, current, target, **options):
+        assert target == {"ray": [0, 1, 0]}, "Aim above the ground anchor"
+        assert options["target_provider"]() == [.6, .8, 0]
+        return {}, {"target_ray": [.6, .8, 0], "verified": True}
+
+    service._visual_operation_with_pinned_reference.side_effect = aim
+    result = await service.navigate_attention(destination=destination, lease_id="attention", fence=7,
+        command_id="command", target_provider=lambda: updated)
+    assert result["destination"] == updated
+    assert result["destination"]["ray"] == [.6, 0, .8], "Keep the actual world anchor in returned destination"
+    assert destination["ray"] == [0, 0, 1]
+    assert all(list(call.args[1]) in [[0, 0, 1], [.6, 0, .8]] for call in ground.call_args_list)
+    assert len(service.reference_localizer.return_value.target_reference.call_args_list) >= 10
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", ["camera", "source", "job", "revision", "artifact", "geometry", "composition",
+    "nan_ray", "non_unit", "missing_corner", "null", "frame", "timestamp", "stale", "future", "coverage", "hole", "missing_coverage", "ground", "return"])
+async def test_invalid_subject_observation_never_reaches_motion(monkeypatch, failure):
+    service, job, _ = framing_service(monkeypatch)
+    destination = subject_destination(job)
+    framing = destination["framing"]
+    if failure in {"camera", "source"}:
+        framing[failure + "_id"] = "other"
+    elif failure in {"job", "revision", "artifact", "geometry", "composition"}:
+        key = {"job": "job_id", "artifact": "source_artifact_id", "geometry": "geometry_digest",
+            "composition": "composition_id"}.get(failure, failure)
+        framing["panorama"][key] = True if failure == "revision" else "other"
+    elif failure in {"nan_ray", "non_unit"}:
+        framing["panorama"]["center_ray"] = [float("nan") if failure == "nan_ray" else 2, 0, 0]
+    elif failure == "missing_corner":
+        framing["panorama"]["corner_rays"].pop()
+    elif failure == "null":
+        framing["panorama"] = None
+    elif failure == "frame":
+        framing["sequence"] = True
+    elif failure == "timestamp":
+        framing["published_at"] = float("nan")
+    elif failure in {"stale", "future"}:
+        framing["published_at"] = 998 if failure == "stale" else 1001
+    elif failure == "coverage":
+        service.reference_localizer.return_value.target_reference.side_effect = [{}, {}, None]
+    elif failure == "hole":
+        service.reference_localizer.return_value.coverage_mask[:] = 0
+    elif failure == "missing_coverage":
+        service.reference_localizer.return_value.coverage_mask = None
+    elif failure == "ground":
+        monkeypatch.setattr(module, "mapping_extrapolated", lambda *args: True)
+    with pytest.raises((HTTPException, PanoramaCaptureError)):
+        await service.navigate_attention(destination=destination, lease_id="attention", fence=7,
+            command_id="command", returning=failure == "return")
+    service._visual_operation_with_pinned_reference.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", ["expired", "epoch", "sequence", "timestamp", "same_frame_changed", "lost", "reference", "wrong_arrival"])
+async def test_following_subject_is_rechecked_before_commands_and_arrival(monkeypatch, failure):
+    import copy
+    service, job, _ = framing_service(monkeypatch)
+    destination = subject_destination(job)
+    updated = copy.deepcopy(destination)
+    if failure == "epoch":
+        updated["framing"]["generation"] = 2
+    elif failure == "sequence":
+        destination["framing"]["sequence"] = 2
+    elif failure == "timestamp":
+        updated["framing"]["sequence"] = 2
+    elif failure == "same_frame_changed":
+        updated["framing"]["panorama"]["center_ray"] = [1, 0, 0]
+    elif failure == "lost":
+        updated.pop("framing")
+    elif failure == "reference":
+        updated["revision"] = 4
+
+    async def aim(request, current, target, **options):
+        if failure == "expired":
+            monkeypatch.setattr(module.time, "monotonic", lambda: 52.)
+            monkeypatch.setattr(module.time, "time", lambda: 900.)  # Wall clock rollback cannot extend validity.
+        options["target_provider"]()
+        return {}, {"target_ray": [0, 0, 1] if failure == "wrong_arrival" else [0, 1, 0]}
+
+    service._visual_operation_with_pinned_reference.side_effect = aim
+    with pytest.raises((HTTPException, PanoramaCaptureError)):
+        await service.navigate_attention(destination=destination, lease_id="attention", fence=7,
+            command_id="command", target_provider=lambda: updated)
+    assert "_attention_navigation_result" not in job

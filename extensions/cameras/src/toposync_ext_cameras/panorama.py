@@ -39,6 +39,7 @@ from .processing.panorama_mapping import (
     panorama_pixel_to_ray,
     preview_panorama_mapping,
     ray_to_pan_tilt,
+    ray_to_panorama_pixel,
     render_panorama,
 )
 from .panorama_reference import PanoramaReferenceCoordinator
@@ -2211,6 +2212,9 @@ class PanoramaService:
             if ray is None:
                 raise ValueError("World point has no ray")
             resolved = {"ray": list(ray)}
+            if target.get("framing") is not None:
+                self._attention_framing_rays(job, target["framing"])
+                resolved["framing"] = copy.deepcopy(target["framing"])
         except (HTTPException, KeyError, TypeError, ValueError) as error:
             reason = error.detail.get("code") if isinstance(error, HTTPException) and isinstance(error.detail, dict) else "invalid_target"
             return {"status": "unavailable", "reason": reason}
@@ -2219,6 +2223,32 @@ class PanoramaService:
                 "job_id": job["id"], "revision": job["revision"], "target": resolved,
                 "positioning_available": active["job"]["permissions"]["aim_enabled"],
                 "attention_qualified": self._attention_qualified(job)}
+
+    @staticmethod
+    def _attention_framing_rays(job: dict, framing: dict) -> np.ndarray:
+        """Bind observed subject directions to the same optical reference as its ground anchor."""
+        binding = job.get("source_panorama") or {}
+        panorama = framing.get("panorama") if isinstance(framing, dict) else None
+        expected = {"job_id": job["id"], "revision": job["revision"],
+                    "composition_id": job["composition_id"], "source_artifact_id": binding.get("id"),
+                    "geometry_digest": (binding.get("geometry") or {}).get("model_digest")}
+        if (not isinstance(panorama, dict) or any(value is None or panorama.get(key) != value for key, value in expected.items())
+                or type(panorama.get("revision")) is not int
+                or framing.get("camera_id") != job["camera_id"] or framing.get("source_id") != job["source_id"]):
+            raise _error("framing_reference_mismatch", "The subject observation uses a different optical reference", 422)
+        if (not isinstance(framing.get("capture_instance"), str) or not framing["capture_instance"].strip()
+                or type(framing.get("generation")) is not int or framing["generation"] < 0
+                or type(framing.get("sequence")) is not int or framing["sequence"] < 1
+                or type(framing.get("published_at")) not in (int, float)
+                or not math.isfinite(framing["published_at"]) or framing["published_at"] <= 0):
+            raise _error("invalid_framing_observation", "The subject observation has no valid frame identity", 422)
+        try:
+            rays = np.asarray([panorama["center_ray"], *panorama["corner_rays"]], dtype=float)
+            if rays.shape != (5, 3) or not np.isfinite(rays).all() or np.any(abs(np.linalg.norm(rays, axis=1) - 1) > 1e-6):
+                raise ValueError("invalid directions")
+        except (KeyError, TypeError, ValueError):
+            raise _error("invalid_framing_observation", "The subject directions are invalid", 422) from None
+        return rays
 
     @staticmethod
     def _attention_qualified(job: dict) -> bool:
@@ -2298,10 +2328,12 @@ class PanoramaService:
 
     async def navigate_attention(self, *, destination: dict, lease_id: str, fence: int,
                                  command_id: str, returning: bool = False,
-                                 target_provider: Callable[[], dict] | None = None) -> dict:
+                                 target_provider: Callable[[], dict] | None = None,
+                                 observation_timeout_seconds: float = 2.0) -> dict:
         if (not isinstance(destination, dict) or not isinstance(lease_id, str) or not lease_id.strip()
                 or type(fence) is not int or fence < 1 or not isinstance(command_id, str) or not command_id.strip()
                 or type(returning) is not bool
+                or type(observation_timeout_seconds) not in (int, float) or not .5 <= observation_timeout_seconds <= 5
                 or any(not isinstance(destination.get(key), str) or not destination[key].strip() for key in
                     ("camera_id", "source_id", "composition_id", "element_id", "job_id"))
                 or type(destination.get("revision")) is not int or destination["revision"] < 1):
@@ -2317,46 +2349,91 @@ class PanoramaService:
             job = self.jobs[public["id"]]
             if not self._attention_qualified(job):
                 raise _error("attention_physical_qualification_required", "Physical attention qualification is required")
-            ray = np.asarray(destination.get("ray"), dtype=float)
-            if ray.shape != (3,) or not np.isfinite(ray).all() or abs(np.linalg.norm(ray) - 1) > 1e-6:
-                raise _error("invalid_target", "The attention ray is invalid", 422)
-            world = map_ray_to_world(job["solution"], ray)
-            if world is None or mapping_extrapolated(job["solution"], *world):
-                raise _error("outside_validated_region", "The attention target is outside the mapped region", 422)
-            def current_ray() -> list[float]:
+            if returning and (target_provider is not None or destination.get("framing") is not None):
+                raise _error("invalid_target", "Return navigation cannot inherit subject framing", 422)
+            if target_provider is not None and not callable(target_provider):
+                raise _error("invalid_target", "The target provider is invalid", 422)
+            localizer = None
+            if destination.get("framing") is not None or target_provider is not None:
+                localizer = await self.reference_localizer(camera_id, source_id, job["source_panorama"])
+            started_wall, started_monotonic = time.time(), time.monotonic()
+            reached = copy.deepcopy(destination)
+
+            def destination_ray(updated: dict) -> list[float]:
                 from .panorama_capture import PanoramaCaptureError
                 try:
-                    updated = target_provider()
+                    anchor = np.asarray(updated.get("ray"), dtype=float)
+                except (ValueError, TypeError):
+                    raise _error("invalid_target", "The attention ray is invalid", 422) from None
+                if anchor.shape != (3,) or not np.isfinite(anchor).all() or abs(np.linalg.norm(anchor) - 1) > 1e-6:
+                    raise _error("invalid_target", "The attention ray is invalid", 422)
+                world = map_ray_to_world(job["solution"], anchor)
+                if world is None or mapping_extrapolated(job["solution"], *world):
+                    raise _error("outside_validated_region", "The attention target is outside the mapped region", 422)
+                framing = updated.get("framing")
+                if framing is None:
+                    return anchor.tolist()
+                rays = self._attention_framing_rays(job, framing)
+                age = started_wall + time.monotonic() - started_monotonic - framing["published_at"]
+                if not 0 <= age < observation_timeout_seconds:
+                    raise PanoramaCaptureError("following_observation_expired")
+                if any(localizer.target_reference(vector) is None for vector in rays):
+                    raise PanoramaCaptureError("visual_target_unreachable")
+                coverage = getattr(localizer, "coverage_mask", None)
+                if getattr(coverage, "ndim", None) != 2 or not coverage.size:
+                    raise PanoramaCaptureError("coverage_unavailable")
+                for vector in rays:
+                    u, v = ray_to_panorama_pixel(vector)
+                    row = min(coverage.shape[0] - 1, int(v * coverage.shape[0]))
+                    column = min(coverage.shape[1] - 1, int(u * coverage.shape[1]))
+                    if not coverage[row, column]:
+                        raise PanoramaCaptureError("visual_target_unreachable")
+                # Body directions are not ground positions; only the anchor is projected to the map.
+                return rays[0].tolist()
+
+            ray = destination_ray(reached)
+            def current_ray() -> list[float]:
+                from .panorama_capture import PanoramaCaptureError
+                nonlocal reached
+                try:
+                    updated = target_provider() if target_provider is not None else reached
                 except RuntimeError:
                     raise PanoramaCaptureError("following_observation_expired") from None
                 if (not isinstance(updated, dict) or any(updated.get(key) != destination.get(key)
                         for key in ("camera_id", "source_id", "composition_id", "element_id", "job_id", "revision"))):
                     raise PanoramaCaptureError("panorama_reference_changed")
-                vector = np.asarray(updated.get("ray"), dtype=float)
-                if vector.shape != (3,) or not np.isfinite(vector).all() or abs(np.linalg.norm(vector) - 1) > 1e-6:
-                    raise PanoramaCaptureError("invalid_target")
-                point = map_ray_to_world(job["solution"], vector)
-                if point is None or mapping_extrapolated(job["solution"], *point):
-                    raise PanoramaCaptureError("outside_validated_region")
-                return vector.tolist()
-            if target_provider is not None and (returning or not callable(target_provider)):
-                raise _error("invalid_target", "Return navigation cannot follow a moving target", 422)
+                previous, observed = reached.get("framing"), updated.get("framing")
+                if previous is not None:
+                    if observed is None:
+                        raise PanoramaCaptureError("following_observation_expired")
+                    self._attention_framing_rays(job, observed)
+                    if (any(previous[key] != observed[key] for key in ("capture_instance", "generation"))
+                            or observed["sequence"] < previous["sequence"]
+                            or observed["published_at"] < previous["published_at"]
+                            or (observed["sequence"] > previous["sequence"] and observed["published_at"] <= previous["published_at"])
+                            or (observed["sequence"] == previous["sequence"] and observed != previous)):
+                        raise PanoramaCaptureError("tracking_capture_epoch_changed")
+                vector = destination_ray(updated)
+                reached = copy.deepcopy(updated)
+                return vector
             snapshot = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)
             owned = snapshot.get("active_lease") or {}
             if (owned.get("lease_id") != lease_id or owned.get("fence") != fence
                     or owned.get("owner_kind") != "automation" or snapshot.get("automation_ready") is not True):
                 raise _error("control_lost", "Attention no longer owns exclusive camera control")
-            _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray.tolist()},
+            follows_observation = target_provider is not None or destination.get("framing") is not None
+            _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray},
                 borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12,
-                **({"target_provider": current_ray} if target_provider is not None else {}))
+                **({"target_provider": current_ray} if follows_observation else {}))
             final = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)
             owned = final.get("active_lease") or {}
             if (owned.get("lease_id") != lease_id or owned.get("fence") != fence
                     or final.get("automation_ready") is not True or job.get("stop_confirmed") is not True):
                 raise _error("control_lost", "The stopped attention result no longer owns control")
-            reached = {**destination, "ray": evidence["target_ray"]} if target_provider is not None else destination
+            if follows_observation and not np.allclose(destination_ray(reached), evidence.get("target_ray"), atol=1e-7, rtol=0):
+                raise _error("following_target_changed", "The verified direction no longer matches the subject")
             result = {"destination": reached, "command_id": command_id, "lease_id": lease_id,
                     "fence": fence, "motion_epoch": final.get("motion_epoch"), "stop_confirmed": True,
                     "returning": returning, "evidence": evidence}

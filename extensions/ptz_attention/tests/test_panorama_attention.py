@@ -260,7 +260,8 @@ def environment(mode="shadow", qualified=False, failure=None, blocked=False):
         length = math.sqrt(sum(item * item for item in ray))
         return {"status": "ready", "camera_id": "front", "source_id": "wide", "composition_id": "yard",
                 "element_id": "camera-element", "job_id": "panorama", "revision": state["revision"],
-                "target": {"ray": [item / length for item in ray]}, "attention_qualified": state["qualified"]}
+                "target": {"ray": [item / length for item in ray], "framing": target.get("framing")},
+                "attention_qualified": state["qualified"]}
 
     async def navigate(**kwargs):
         calls.append(kwargs)

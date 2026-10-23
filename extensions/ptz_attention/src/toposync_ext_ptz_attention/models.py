@@ -367,6 +367,7 @@ class PanoramaDestination(StrictModel):
     job_id: str
     revision: int = Field(strict=True, ge=1)
     ray: tuple[float, float, float]
+    framing: FramingObservation | None = None
 
     @field_validator("camera_id", "source_id", "composition_id", "element_id", "job_id")
     @classmethod
@@ -409,7 +410,10 @@ class ResolvedTarget(StrictModel):
         if self.panorama is None:
             return self.preset_token
         import json
-        return json.dumps(self.panorama.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        target = self.panorama.model_dump(mode="json", exclude={"framing"})
+        if self.panorama.framing and self.panorama.framing.panorama:
+            target["framing"] = self.panorama.framing.panorama.model_dump(mode="json")
+        return json.dumps(target, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 class PtzAttentionRequestConfig(StrictModel):

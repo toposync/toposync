@@ -1089,7 +1089,7 @@ class PtzAttentionController:
             active = runtime.events.get(runtime.active_key)
             current, _ = await self._resolve(profile, active.intent) if active else (None, "")
             if (current is None or active.resolved is None or current.panorama is None or active.resolved.panorama is None
-                    or current.panorama.model_dump(exclude={"ray"}) != active.resolved.panorama.model_dump(exclude={"ray"})):
+                    or current.panorama.model_dump(exclude={"ray", "framing"}) != active.resolved.panorama.model_dump(exclude={"ray", "framing"})):
                 await self._fault(profile, runtime, "panorama_reference_changed")
                 return
         if profile.follow_view_updates and effective_mode(profile) == "shadow":
@@ -1329,7 +1329,7 @@ class PtzAttentionController:
         def same_reference(previous: ResolvedTarget | None) -> bool:
             return bool(
                 previous and previous.panorama and resolved.panorama
-                and previous.panorama.model_dump(exclude={"ray"}) == resolved.panorama.model_dump(exclude={"ray"})
+                and previous.panorama.model_dump(exclude={"ray", "framing"}) == resolved.panorama.model_dump(exclude={"ray", "framing"})
             )
 
         if runtime.active_key != intent.key:
@@ -1341,6 +1341,7 @@ class PtzAttentionController:
             await self._evaluate(profile, runtime, now)
             return
         if tracked.resolved and resolved.target_key == tracked.resolved.target_key:
+            tracked.resolved = resolved
             tracked.following_view = None
             tracked.following_since = None
             tracked.following_confirmed = False
@@ -1490,6 +1491,8 @@ class PtzAttentionController:
             runtime.command_started_monotonic = self._monotonic_clock()
             if tracked.resolved.panorama is not None:
                 options = {}
+                if profile.follow_view_updates or tracked.resolved.panorama.framing is not None:
+                    options["observation_timeout_seconds"] = profile.follow_observation_timeout_seconds
                 if profile.follow_view_updates:
                     def latest_target():
                         current = runtime.events.get(tracked.intent.key)
@@ -1883,8 +1886,8 @@ class PtzAttentionController:
             if profile.follow_view_updates and not returning:
                 tracked = runtime.events.get(runtime.active_key)
                 if (tracked is None or tracked.resolved is None
-                        or tracked.resolved.panorama.model_dump(exclude={"ray"})
-                        != destination.panorama.model_dump(exclude={"ray"})):
+                        or tracked.resolved.panorama.model_dump(exclude={"ray", "framing"})
+                        != destination.panorama.model_dump(exclude={"ray", "framing"})):
                     raise ValueError("following reference changed")
                 tracked.resolved = destination
                 runtime.command_target_key = destination.target_key
@@ -1921,7 +1924,10 @@ class PtzAttentionController:
                 return None, "mapped_target_required"
             if not target_in_region(anchor, profile.attention_region, radius):
                 return None, "target_outside_attention_region"
-            return await self._resolve_panorama(profile, intent.target.service_payload())
+            target = intent.target.service_payload()
+            if intent.framing_observation and intent.framing_observation.panorama:
+                target["framing"] = intent.framing_observation.model_dump(mode="json")
+            return await self._resolve_panorama(profile, target)
         if not self.has_service("cameras.views.resolve_target"):
             return None, "target_resolver_unavailable"
         try:
@@ -1963,7 +1969,7 @@ class PtzAttentionController:
                 return None, "attention_physical_qualification_required"
             return ResolvedTarget(panorama={key: raw[key] for key in (
                 "camera_id", "source_id", "composition_id", "element_id", "job_id", "revision")}
-                | {"ray": raw["target"]["ray"]}, confidence=0, reason="panorama_mapped"), ""
+                | {"ray": raw["target"]["ray"], "framing": raw["target"].get("framing")}, confidence=0, reason="panorama_mapped"), ""
         except Exception:
             return None, "target_resolution_failed"
 

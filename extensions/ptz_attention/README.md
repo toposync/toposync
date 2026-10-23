@@ -14,7 +14,7 @@ to source, composition, element, job and revision.
 
 The operator also preserves a subject's image box as `framing_observation` when
 its source, capture and image transformation are known. Ground coordinates remain
-the navigation target. Status and decision details expose `observed_framing` with
+the region/routing anchor. Status and decision details expose `observed_framing` with
 the box in the original source, extent, margin, boundary contact, publication age
 and whether it belongs to the selected source. An update without this evidence
 clears the current observation. Contact with a crop boundary remains visible even
@@ -28,8 +28,15 @@ bound to mapping revision, source artifact and geometry digest. It uses the
 original image transformation and never substitutes current device pose or
 projects the subject's upper body onto the ground. Missing or incompatible
 geometry leaves the image observation available without panorama directions.
-These directions describe observed extent; they do not establish panorama
-coverage, motor qualification or framing acceptance on another lens.
+The navigator can aim at this observed center while retaining the ground anchor
+for region validation and the returned destination. It checks the exact optical
+reference, center/corner support and observation age before navigation and before
+subsequent pulses, using the profile's existing following observation timeout.
+Frame updates at an unchanged target refresh evidence without requesting another
+approach. Missing, expired or incompatible evidence during framed following stops
+that navigation; it never silently switches to aiming at the feet. Return uses
+only its own reference and rejects subject framing. These checks do not certify
+full subject visibility, group framing or association with another lens.
 
 `shadow` records decisions with zero motor commands. Optional following
 uses fresh `capture_evidence`, stable capture instance/generation and increasing

@@ -180,3 +180,42 @@ async def test_pipeline_preserves_box_alongside_world_anchor_in_status_and_decis
     assert controller.status()[0].observed_framing is None
     await controller.shutdown()
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_following_refreshes_same_subject_without_new_approach_or_corrupting_home():
+    import asyncio
+    from test_panorama_attention import event, panorama_profile
+
+    clock, _, _, state, calls, _, store, controller = environment(mode="live_panorama", qualified=True, blocked=True)
+    state["revision"] = 3
+    profile = panorama_profile(mode="live_panorama", follow_view_updates=True,
+        follow_observation_timeout_seconds=3, candidate_confirm_seconds=.25)
+    store.replace_profile(profile)
+    framed = observation(with_localization(observed_packet()))
+
+    async def submit(frame, lifecycle):
+        await controller.submit_intent(event(clock, lifecycle=lifecycle).model_copy(update={
+            "framing_observation": frame,
+            "capture_evidence": frame.model_dump(include={"capture_instance", "generation", "sequence", "published_at"})}))
+
+    await submit(framed, "open")
+    clock.advance(.3)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    assert len(calls) == 1
+    first = calls[0]["destination"]
+    assert first["framing"]["panorama"]["center_ray"] == pytest.approx(framed.panorama.center_ray)
+    assert first["ray"] != first["framing"]["panorama"]["center_ray"]
+    assert calls[0]["observation_timeout_seconds"] == 3
+    original_key = controller._runtime_for(profile).command_target_key
+    clock.advance(.5)
+    fresh = framed.model_copy(update={"sequence": 5, "published_at": clock()})
+    await submit(fresh, "update")
+    assert calls[0]["target_provider"]()["framing"]["sequence"] == 5
+    assert controller._runtime_for(profile).command_target_key == original_key
+    assert len(calls) == 1 and controller.status()[0].state == "ACQUIRING"
+    home = await controller._resolve_home(profile)
+    assert home.panorama.framing is None and list(home.panorama.ray) == [0, 0, 1]
+    await controller.shutdown()
+    store.close()

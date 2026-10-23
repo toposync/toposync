@@ -1508,6 +1508,18 @@ class VisualNavigator:
                         and pixel_delta < MINIMUM_QUALIFIED_RESPONSE_PIXELS):
                     # Subpixel drift must not replace a measured gain and amplify the next pulse.
                     continue
+                if (axis in missing and abs(amount) < .48
+                        and self.scanner.capabilities.get("velocity_supported")
+                        and getattr(self.scanner, "physical_state", None) == "stopped"
+                        and self.last_pulse_match.get("verified") is True
+                        and self.last_pulse_match.get("overlap", 0) >= .85
+                        and 0 < self.last_pulse_match.get("displacement", float("inf")) < MINIMUM_QUALIFIED_RESPONSE_PIXELS
+                        and 0 < pixel_delta < MINIMUM_QUALIFIED_RESPONSE_PIXELS):
+                    # A causal, stopped small effect can extend identification, not qualify a gain.
+                    self.probe_durations[axis] = min(.48, abs(amount) * 2)
+                    self.trace[-1].update(next_probe_seconds=self.probe_durations[axis],
+                                         small_effect_observed=True)
+                    continue
                 if (self.last_pulse_stationary and pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED
                         and self.scanner.capabilities.get("velocity_supported")):
                     self.stationary_durations[direction_key] = max(

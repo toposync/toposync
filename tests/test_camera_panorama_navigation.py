@@ -2348,6 +2348,55 @@ def test_live_navigation_prioritizes_arrival_error_over_motor_duration():
     assert navigator.pulses == ["tilt"]
 
 
+@pytest.mark.parametrize("evidence", ["observed", "unverified", "low_overlap", "unstopped", "contradictory", "persistent"])
+def test_small_observed_probe_can_identify_axis_without_learning_its_unqualified_gain(evidence):
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"velocity_supported": True, "axes": {"pan": True}},
+        checkpoint={}, physical_state="unknown" if evidence == "unstopped" else "stopped",
+        last_frame={"capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.error = np.array([.08, 0.])
+            self.pulses = []
+
+        async def locate(self):
+            return {**reference, "reference_id": "reference"}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            pixels = np.tan(self.error) * 560
+            return {"error_pixels": pixels.tolist(), "center_error_pixels": float(np.linalg.norm(pixels)), "analysis_width": 960}
+
+        async def _pulse(self, axis, amount):
+            assert axis not in self.response, "A subminimum response cannot become a motor gain"
+            self.commands += 1
+            self.pulses.append(amount)
+            self.trace.append({"axis": axis, "amount": amount})
+            self.last_pulse_match = {"verified": evidence != "unverified",
+                "overlap": .7 if evidence == "low_overlap" else .99,
+                "displacement": 10. if evidence == "contradictory" else 1.17}
+            self.error[0] -= .3 * amount if evidence == "observed" and self.commands > 1 else 1.17 / 560
+
+    navigator = Navigator()
+    if evidence == "observed":
+        result = asyncio.run(navigator.aim([1, 0, 0]))
+        assert result["verified"] and result["measurement"]["center_error_pixels"] <= 12
+        assert navigator.pulses == [.12, .24]
+    else:
+        with pytest.raises(PanoramaCaptureError, match="visual_response_unavailable"):
+            asyncio.run(navigator.aim([1, 0, 0]))
+        assert navigator.pulses == ([.12, .24, .48] if evidence == "persistent" else [.12])
+        assert not navigator.response
+    assert navigator.trace[0]["response_qualified"] is False
+
+
 @pytest.mark.parametrize('stationary_verified,effective_pulse,initial_response', [
     (True, 2, False), (True, 3, False), (True, None, False), (False, None, False), (True, 2, True),
 ])

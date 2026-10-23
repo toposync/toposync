@@ -400,6 +400,31 @@ def project_arrival_framing(framing: dict | None, evidence: dict) -> dict | None
         return result
 
 
+def _small_return_probe(entry: dict, return_epoch: str) -> bool:
+    """A stopped, improving small probe permits one equal probe, never a gain."""
+    if (not isinstance(entry, dict) or entry.get("return_epoch") != return_epoch or entry.get("kind") != "probe"
+            or entry.get("modality") != "visual_continuous" or entry.get("state") != "observed"
+            or entry.get("axis") not in {"pan", "tilt"}
+            or entry.get("response_qualified") is not False
+            or entry.get("reason") != "visual_response_unavailable"
+            or entry.get("verified") is not True or entry.get("before_match_verified") is not True
+            or entry.get("match_verified") is not True):
+        return False
+    try:
+        before, after = np.asarray(entry["before_shift"], dtype=float), np.asarray(entry["after_shift"], dtype=float)
+        values = [entry[key] for key in ("amount", "velocity", "before_pixels", "after_pixels", "before_overlap", "after_overlap")]
+        if before.shape != (2,) or after.shape != (2,) or not np.isfinite([*before, *after, *values]).all():
+            return False
+        amount, speed, before_pixels, after_pixels, before_overlap, after_overlap = values
+        return bool(abs(amount) == .08 and speed == DEFAULT_CONTINUOUS_PULSE_SPEED
+            and min(before_overlap, after_overlap) >= .85 and after_pixels > 3
+            and before_pixels - after_pixels >= max(.25, before_pixels * .01)
+            and .5 <= np.linalg.norm(after - before) < 2
+            and np.linalg.norm(after) < np.linalg.norm(before))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _persisted_return_responses(
     trace: list[dict[str, Any]],
     measurement: tuple[float, float, float, float],
@@ -418,6 +443,7 @@ def _persisted_return_responses(
     directions: dict[str, int] = {}
     speeds: dict[str, float] = {}
     latest_model: dict[str, Any] | None = None
+    small_probes = [entry for entry in trace if isinstance(entry, dict) and _small_return_probe(entry, return_epoch)]
     for entry in trace:
         if not isinstance(entry, dict):
             return responses, directions, speeds, "return_correction_trace_invalid"
@@ -428,6 +454,12 @@ def _persisted_return_responses(
             isinstance(entry.get("reason"), str)
             or entry.get("kind") in {"probe", "direction_probe", "correction"}
         ):
+            if len(small_probes) == 1 and entry is small_probes[0]:
+                # Preserve the rejected gain in the ledger; it grants no response model.
+                if entry is trace[-1] and np.linalg.norm(
+                        np.asarray(entry["after_shift"]) - np.asarray(measurement[2:])) > 1:
+                    return responses, directions, speeds, "return_response_view_changed"
+                continue
             return responses, directions, speeds, "return_correction_previously_rejected"
         vector_value = entry.get("response_vector")
         if entry.get("response_qualified") is True and vector_value is None:
@@ -1660,6 +1692,11 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
             terminal_state = "complete"
             break
         if not model_loaded:
+            small_probe = (trace[-1] if trace and _small_return_probe(trace[-1], return_epoch)
+                and sum(_small_return_probe(item, return_epoch) for item in trace) == 1
+                and getattr(scanner, "physical_state", None) == "stopped"
+                and np.linalg.norm(np.asarray(trace[-1]["after_shift"]) - np.asarray(measurement[2:])) <= 1
+                else None)
             (
                 responses,
                 response_directions,
@@ -1688,7 +1725,8 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
                 "axes": sorted(responses),
                 "return_epoch": return_epoch,
             }
-            if previous_state in {"failed", "rejected", "resume_unavailable"}:
+            if previous_state in {"failed", "rejected", "resume_unavailable"} and not (
+                    previous_state == "rejected" and small_probe is not None):
                 terminal_state = "resume_unavailable"
                 scanner.checkpoint["return_correction_resume"].update(
                     state="blocked",
@@ -1777,6 +1815,10 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
                 )
                 amount = 0.08
                 command_kind = "probe"
+        if (trace and _small_return_probe(trace[-1], return_epoch)
+                and sum(_small_return_probe(item, return_epoch) for item in trace) == 1
+                and trace[-1]["axis"] in missing):
+            axis, amount, command_kind = trace[-1]["axis"], trace[-1]["amount"], "probe"
         if axis is None:
             break
         direction = 1 if amount > 0 else -1
@@ -1918,6 +1960,11 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
             entry["reason"] = "visual_response_unavailable"
             if callable(persist):
                 await persist()
+            if (_small_return_probe(entry, return_epoch)
+                    and getattr(scanner, "physical_state", None) == "stopped"
+                    and sum(_small_return_probe(item, return_epoch) for item in trace) == 1):
+                # Repeat the same bounded identification pulse once; do not extrapolate its tiny effect.
+                continue
             terminal_state = "rejected"
             break
         if (

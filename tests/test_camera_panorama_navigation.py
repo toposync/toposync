@@ -3232,3 +3232,77 @@ def test_retarget_does_not_reuse_unqualified_or_changed_camera_observation(inval
     with pytest.raises(NeedsObservation):
         asyncio.run(navigator.aim(observed[0], target_provider=lambda: observed[0]))
     assert scanner.checkpoint.get("navigation_target_rebases", 0) == 0 and navigator.commands == 0
+
+
+@pytest.mark.parametrize('resume', [False, True])
+@pytest.mark.parametrize('outcome', ['stronger', 'weak_again', 'view_changed', 'not_stopped', 'uncertain'])
+def test_return_small_observed_probe_has_one_equal_retry_with_shared_budget(monkeypatch, resume, outcome):
+    from toposync_ext_cameras import panorama_navigation as navigation
+    state = np.array([.2, -26.86])
+    entry = {'kind': 'probe', 'axis': 'tilt', 'amount': .08, 'velocity': .1,
+        'before_pixels': 30.77, 'after_pixels': 27.48,
+        'before_shift': [.2, -26.86], 'after_shift': [.3, -25.51],
+        'before_overlap': .945, 'after_overlap': .945, 'before_match_verified': True,
+        'verified': True, 'match_verified': True, 'state': 'observed',
+        'response_qualified': False, 'reason': 'visual_response_unavailable',
+        'modality': 'visual_continuous', 'return_epoch': 'final', 'correction_command_index': 1}
+    checkpoint = {}
+    if resume:
+        state[:] = entry['after_shift']
+        checkpoint = {'return_correction_state': 'rejected',
+            'return_corrections': [entry], 'return_correction_commands': [entry]}
+        if outcome == 'view_changed':
+            state[1] -= 5
+        if outcome == 'uncertain':
+            entry['state'] = 'planned'
+    pulses = []
+    frame = {'image': np.zeros((1, 1), np.uint8)}
+
+    def match(*args):
+        # Match the recorded difference between p95 displacement and median shift.
+        pixels = float(np.linalg.norm(state)) + (3.91 if len(pulses) == 0 and not resume else 1.97)
+        return {'verified': True, 'overlap': .95, 'displacement': pixels,
+                'shift_x': float(state[0]), 'shift_y': float(state[1])}
+
+    async def pulse(axis, direction, amount, **kwargs):
+        pulses.append((axis, direction, amount))
+        small = (len(pulses) == 1 and not resume) or outcome == 'weak_again'
+        state[1] += 1.35 if small else 10
+        return {'frame': frame}
+
+    monkeypatch.setattr(navigation, '_match', match)
+    scanner = SimpleNamespace(checkpoint=checkpoint, physical_state='unknown' if outcome == 'not_stopped' else 'stopped',
+        capabilities={'velocity_supported': True, 'axes': {'tilt': True}}, _pulse=pulse)
+    asyncio.run(navigation.correct_reference(scanner, frame['image'], {'frame': frame}))
+    if resume and outcome in {'view_changed', 'not_stopped', 'uncertain'}:
+        assert not pulses
+    elif not resume and outcome == 'not_stopped':
+        assert len(pulses) == 1
+    elif outcome == 'weak_again':
+        assert len(pulses) == (1 if resume else 2)
+        assert checkpoint['return_correction_state'] == 'rejected'
+        assert all(not row['response_qualified'] for row in checkpoint['return_corrections'])
+    else:
+        assert pulses[:1 if resume else 2] == [('tilt', 1, .08)] * (1 if resume else 2)
+    assert len(checkpoint['return_correction_commands']) <= navigation.MAXIMUM_FINE_CORRECTIONS
+    if resume:
+        assert checkpoint['return_correction_commands'][0] is entry
+
+
+@pytest.mark.parametrize('change', [
+    {'before_match_verified': False}, {'match_verified': False}, {'state': 'failed'},
+    {'velocity': .05}, {'amount': .16}, {'after_overlap': .84}, {'return_epoch': 'other'},
+    {'before_shift': [0, -25.5]}, {'after_shift': [0, -30]}, {'after_pixels': 31},
+    {'after_shift': [float('nan'), 1]}, {'modality': 'visual_relative'},
+])
+def test_small_return_probe_rejects_unqualified_or_non_improving_evidence(change):
+    from toposync_ext_cameras.panorama_navigation import _small_return_probe
+    entry = {'kind': 'probe', 'axis': 'tilt', 'amount': .08, 'velocity': .1,
+        'before_pixels': 30.77, 'after_pixels': 27.48,
+        'before_shift': [.2, -26.86], 'after_shift': [.3, -25.51],
+        'before_overlap': .945, 'after_overlap': .945, 'before_match_verified': True,
+        'verified': True, 'match_verified': True, 'state': 'observed',
+        'response_qualified': False, 'reason': 'visual_response_unavailable',
+        'modality': 'visual_continuous', 'return_epoch': 'final'}
+    assert _small_return_probe(entry, 'final')
+    assert not _small_return_probe({**entry, **change}, 'final')

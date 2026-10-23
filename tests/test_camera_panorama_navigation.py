@@ -753,6 +753,19 @@ def test_continuous_micro_pulse_uses_legal_duration_and_bounded_velocity():
     ) == pytest.approx((0.08, 0.1, 0.08))
 
 
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_fine_pulse_quantization_does_not_plan_a_target_crossing(direction):
+    # Frente return: the 50 ms floor at default speed overshot the requested correction.
+    error = direction * np.array([3.1869606454823156, .07042337115018427])
+    response = np.array([-.12022948398630345, -.0013143753309662071]) * 573.3
+    requested = direction * .03695734173046558
+    plan = _continuous_pulse_plan(response, error, requested)
+    assert plan == pytest.approx((abs(requested) * 4, .025, requested))
+    predicted = error + response * plan[2]
+    assert error @ predicted >= 0
+    assert np.linalg.norm(predicted) < np.linalg.norm(error)
+
+
 def test_reference_return_qualifies_lower_velocity_from_the_resulting_image(monkeypatch):
     from toposync_ext_cameras import panorama_navigation as navigation
 

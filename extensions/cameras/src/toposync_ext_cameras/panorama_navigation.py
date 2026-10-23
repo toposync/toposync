@@ -532,8 +532,8 @@ def _continuous_pulse_plan(
     Response is measured in pixels per second at the default continuous
     velocity. ONVIF defines continuous displacement as velocity multiplied by
     time, up to acceleration and positional inaccuracies. For a sub-floor
-    correction, use one of a few bounded velocity levels for the legal minimum
-    duration. The resulting image is still required to qualify the device's
+    correction, use bounded velocity levels and legal durations up to 150 ms.
+    The resulting image is still required to qualify the device's
     actual response before another correction can use it.
     """
     if (
@@ -552,11 +552,13 @@ def _continuous_pulse_plan(
 
     current_error = float(np.linalg.norm(error))
     minimum_improvement = max(0.25, current_error * 0.05)
-    candidates: list[tuple[float, float, float, float]] = []
+    candidates: list[tuple[bool, float, float, float, float]] = []
     for speed in FINE_CONTINUOUS_SPEEDS:
+        duration = float(np.clip(abs(requested_amount) * DEFAULT_CONTINUOUS_PULSE_SPEED / speed,
+                                MINIMUM_CONTINUOUS_PULSE_SECONDS, .15))
         equivalent_amount = (
             direction
-            * MINIMUM_CONTINUOUS_PULSE_SECONDS
+            * duration
             * speed
             / DEFAULT_CONTINUOUS_PULSE_SPEED
         )
@@ -568,15 +570,17 @@ def _continuous_pulse_plan(
         ):
             candidates.append(
                 (
+                    float(error @ (error + predicted_delta)) < -1e-12,
                     predicted_error,
                     speed,
-                    MINIMUM_CONTINUOUS_PULSE_SECONDS,
+                    duration,
                     equivalent_amount,
                 )
             )
     if not candidates:
         return None
-    _, speed, duration, equivalent_amount = min(candidates, key=lambda item: item[0])
+    # Prefer an improving pulse that does not cross the target when one is observable.
+    _, _, speed, duration, equivalent_amount = min(candidates)
     return duration, speed, equivalent_amount
 
 

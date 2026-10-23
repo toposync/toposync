@@ -297,6 +297,14 @@ class FramingObservation(StrictModel):
     bbox01: tuple[float, float, float, float]
     boundary_contact: bool = Field(strict=True)
     panorama: PanoramaFraming | None = None
+    member_event_ids: tuple[str, ...] = ()
+
+    @field_validator("member_event_ids")
+    @classmethod
+    def _members(cls, value):
+        if len(set(value)) != len(value) or any(not item.strip() or len(item) > 512 for item in value):
+            raise ValueError("framing members must have unique nonempty event identifiers")
+        return value
 
     @field_validator("bbox01")
     @classmethod

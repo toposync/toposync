@@ -83,7 +83,7 @@ def test_invalid_observations_interrupt_without_reusing_the_old_frame(failure):
     assert measured["observed_span_seconds"] == 0
 
 
-@pytest.mark.parametrize("change", ["instance", "generation", "dimensions", "reference", "gap", "delivery_gap", "pose"])
+@pytest.mark.parametrize("change", ["instance", "generation", "dimensions", "reference", "members", "gap", "delivery_gap", "pose"])
 def test_continuity_restarts_on_capture_geometry_or_gap_but_not_camera_pose(change):
     profile = SimpleNamespace(camera_id="front", source_id="wide")
     run = FramingContinuity()
@@ -98,6 +98,8 @@ def test_continuity_restarts_on_capture_geometry_or_gap_but_not_camera_pose(chan
         changes["source_width"] = 401
     elif change == "reference":
         changes["panorama"] = first.panorama.model_copy(update={"revision": 4})
+    elif change == "members":
+        changes["member_event_ids"] = ("person", "vehicle")
     elif change == "gap":
         changes["published_at"] = 1001.2
     elif change == "delivery_gap":
@@ -237,6 +239,116 @@ def test_single_subject_box_is_not_promoted_to_group_extent():
     packet = observed_packet()
     target = AttentionTarget(world_envelope={"center": {"x": .5, "z": 0}, "radius_meters": 1, "member_count": 3})
     assert observe_framing(packet, packet.payload["subject"]["bbox01"], target) is None
+
+
+@pytest.mark.parametrize("members", [("one", "one"), (" ",), ("x" * 513,)])
+def test_framing_member_identifiers_are_validated_at_the_model_boundary(members):
+    framed = observation(observed_packet())
+    with pytest.raises(ValueError, match="framing members"):
+        type(framed).model_validate(framed.model_dump() | {"member_event_ids": members})
+
+
+async def observed_group(first_failure=None):
+    from toposync_ext_vision.processing.tasks.group_events import VisionGroupEventsRuntime
+
+    runtime = VisionGroupEventsRuntime({"mode": "session", "update_interval_seconds": 0.0, "minimum_members": 2})
+    packets = []
+    for name, box in [("person", [.1, .1, .3, .5]), ("vehicle", [.7, .2, .9, .8])]:
+        packet = with_localization(observed_packet())
+        packet.payload.update(event_id=name, camera_id="front", source_stream_id="front-wide")
+        packet.payload["subject"].update(type="event", id=name, category=name, confidence=.9, bbox01=box)
+        if name == "person":
+            if first_failure == "private":
+                artifact = packet.artifacts["main"]
+                packet = packet.with_artifact(Artifact("main", artifact.data, private=True, metadata=artifact.metadata))
+            elif first_failure == "unknown_geometry":
+                packet.artifacts["main"].metadata.clear()
+            elif first_failure == "older_frame":
+                packet.payload["capture_evidence"]["sequence"] = 3
+                packet.artifacts["main"].metadata["image_geometry"]["capture_evidence"]["sequence"] = 3
+                packet.payload["mapping"]["visual_localization"]["capture_evidence"]["sequence"] = 3
+        packets.append(packet)
+        result = await runtime.process_packet(packet, None)
+    return result[0], packets
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["private", "unknown_geometry", "older_frame"])
+async def test_group_producer_preserves_missing_or_older_member_evidence(failure):
+    packet, _ = await observed_group(failure)
+    person = next(item for item in packet.payload["subject"]["members"] if item["event_id"] == "person")
+    if failure == "older_frame":
+        assert person["image_observation"]["frame_reference"]["sequence"] == 3
+        assert packet.payload["capture_evidence"]["sequence"] == 4
+    else:
+        assert person["image_observation"] is None
+    assert packet.payload["subject"]["member_event_ids"] == ["person", "vehicle"]
+    assert observe_framing(packet, packet.payload["subject"]["bbox01"],
+        AttentionTarget(world_envelope=packet.payload["world_envelope"])) is None
+
+
+@pytest.mark.asyncio
+async def test_group_framing_requires_all_members_in_the_same_image_geometry():
+    packet, originals = await observed_group()
+    target = AttentionTarget(world_envelope=packet.payload["world_envelope"])
+    # The grouping operator may pad its display box; framing uses actual member extents.
+    packet.payload["subject"]["bbox01"] = [0, 0, 1, 1]
+    result = observe_framing(packet, packet.payload["subject"]["bbox01"], target)
+    assert result is not None
+    assert result.bbox01 == pytest.approx((.1, .1, .9, .8))
+    assert result.member_event_ids == ("person", "vehicle")
+    assert result.panorama is not None and not result.boundary_contact
+    originals[0].artifacts["main"].metadata["image_geometry"]["to_source"][0][0] = 99
+    member = packet.payload["subject"]["members"][0]
+    assert member["image_observation"]["geometry"]["to_source"][0][0] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["missing", "duplicate", "inactive", "active_list", "capture", "source", "geometry", "reference", "count", "unknown_provenance"])
+async def test_group_framing_never_drops_incompatible_members_to_claim_complete_extent(invalid):
+    packet, _ = await observed_group()
+    subject = packet.payload["subject"]
+    member = subject["members"][0]
+    if invalid == "missing":
+        subject["members"].pop()
+    elif invalid == "duplicate":
+        subject["members"][1] = dict(member)
+    elif invalid == "inactive":
+        member["active"] = False
+    elif invalid == "active_list":
+        subject["active_member_event_ids"].pop()
+    elif invalid == "capture":
+        member["capture_evidence"]["sequence"] = 3
+    elif invalid == "source":
+        member["image_observation"]["frame_reference"]["source_id"] = "zoom"
+    elif invalid == "geometry":
+        member["image_observation"]["geometry"]["to_source"][0][2] = 10
+    elif invalid == "reference":
+        member["mapping"]["visual_localization"]["revision"] += 1
+    elif invalid == "count":
+        packet.payload["world_envelope"]["member_count"] = 1
+    else:
+        member.pop("image_observation")
+    target = AttentionTarget(world_envelope=packet.payload["world_envelope"])
+    assert observe_framing(packet, subject["bbox01"], target) is None
+
+
+@pytest.mark.asyncio
+async def test_complete_group_reaches_attention_with_members_and_body_directions():
+    clock, _, services, _, _, _, store, controller = environment()
+    runtime = PtzAttentionRequestRuntime({"profile_id": "front_attention", "event_type": "low"},
+        PipelineRuntimeDependencies(services=services), controller)
+    packet, _ = await observed_group()
+    assert packet.lifecycle == Lifecycle.OPEN
+    await runtime.process_packet(packet, SimpleNamespace(pipeline_name="events", node_id="attention"))
+    status = controller.status()[0]
+    assert status.active_target["framing"]["member_event_ids"] == ["person", "vehicle"]
+    assert status.observed_framing["bbox01"] == pytest.approx([.1, .1, .9, .8])
+    assert status.observed_framing["member_event_ids"] == ["person", "vehicle"]
+    assert status.active_target["framing"]["panorama"]["center_ray"] != status.active_target["ray"]
+    assert packet.payload["world_envelope"]["member_count"] == 2
+    await controller.shutdown()
+    store.close()
 
 
 @pytest.mark.asyncio

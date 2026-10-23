@@ -43,9 +43,35 @@ def _panorama_framing(packet, reference, geometry, corners, center) -> PanoramaF
         return None
 
 
+def _group_box(packet, target, reference, geometry):
+    subject = packet.payload.get("subject") or {}
+    if not isinstance(subject, dict):
+        return None
+    expected, members = subject.get("member_event_ids"), subject.get("members")
+    if (subject.get("type") != "group_event" or not isinstance(expected, list) or not expected
+            or any(not isinstance(item, str) or not item.strip() for item in expected)
+            or len(set(expected)) != len(expected) or not isinstance(members, list)
+            or len(members) != len(expected) or target.world_envelope.member_count != len(expected)):
+        return None
+    try:
+        if (sorted(item["event_id"] for item in members) != sorted(expected)
+                or sorted(subject.get("active_member_event_ids", [])) != sorted(expected)):
+            return None
+        group_mapping = packet.payload.get("mapping") or {}
+        for item in members:
+            if (item.get("active") is not True or item.get("capture_evidence") != packet.payload.get("capture_evidence")
+                    or item.get("image_observation") != {"frame_reference": reference, "geometry": geometry}
+                    or (item.get("mapping") or {}).get("visual_localization") != group_mapping.get("visual_localization")):
+                return None
+        boxes = [AttentionTarget(bbox01=item["bbox01"]).bbox01 for item in members]
+        return tuple(sorted(expected)), (min(box[0] for box in boxes), min(box[1] for box in boxes),
+            max(box[2] for box in boxes), max(box[3] for box in boxes))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def observe_framing(packet, bbox, target: AttentionTarget | None) -> FramingObservation | None:
-    # A subject box does not establish the extent or membership of a group.
-    if target is None or target.world_envelope is not None:
+    if target is None:
         return None
     reference = frame_reference(packet)
     if (reference is None or not reference.get("device_id") or not reference.get("source_id")
@@ -62,6 +88,13 @@ def observe_framing(packet, bbox, target: AttentionTarget | None) -> FramingObse
     geometry = inspection_geometry(original_geometry, shape[1], shape[0], reference)
     if geometry is None:
         return None
+    member_event_ids = ()
+    if target.world_envelope is not None:
+        # A subject box does not establish the extent or membership of a group.
+        group = _group_box(packet, target, reference, geometry)
+        if group is None:
+            return None
+        member_event_ids, bbox = group
     try:
         import numpy as np
 
@@ -88,6 +121,7 @@ def observe_framing(packet, bbox, target: AttentionTarget | None) -> FramingObse
             sequence=reference["sequence"], published_at=reference["published_at"],
             source_width=geometry["source_size"][0], source_height=geometry["source_size"][1],
             bbox01=(*lower, *upper), boundary_contact=boundary_contact,
+            member_event_ids=member_event_ids,
             panorama=_panorama_framing(packet, reference, geometry, corners, center))
     except (ValueError, TypeError, KeyError, OverflowError):
         return None
@@ -109,7 +143,7 @@ def _assessment(observation: FramingObservation | None, profile, now: float) -> 
 def _continuity_identity(observation: FramingObservation) -> tuple:
     panorama = observation.panorama
     return (observation.camera_id, observation.source_id, observation.capture_instance,
-        observation.generation, observation.source_width, observation.source_height,
+        observation.generation, observation.source_width, observation.source_height, observation.member_event_ids,
         panorama.model_dump(exclude={"center_ray", "corner_rays"}) if panorama else None)
 
 

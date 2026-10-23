@@ -22,6 +22,17 @@ when the recovered box is inside the original image. This observation does not
 certify arrival, subject completeness or association with another lens. A single
 subject box is not used as evidence for a world-space group envelope.
 
+For `group_event`, an observed union is available only when every declared member
+is active and represented once, the world envelope count agrees, and all boxes
+have the same source, capture, pixel transform and visual localization. The group
+operator preserves each member's image provenance without storing extra pixels.
+Framing unions actual member boxes, not the padded display box, and carries
+`member_event_ids`; membership changes reset the sampled continuity. Missing,
+older, private or incompatible member evidence leaves the group observation
+unavailable instead of reducing the membership count. Groups observed across
+different frames or transforms still need temporal/geometric association; this
+synchronous path does not certify physical framing or independent identity.
+
 Per-event `observed_framing.continuity` counts distinct accepted observations and
 their publication-time span. It requires the selected source, publication age at
 most one second, no crop boundary contact and a diagnostic margin of five percent

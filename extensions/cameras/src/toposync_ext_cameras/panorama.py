@@ -2451,7 +2451,6 @@ class PanoramaService:
                 # Body directions are not ground positions; only the anchor is projected to the map.
                 return rays[0].tolist()
 
-            ray = destination_ray(reached)
             def current_ray() -> list[float]:
                 from .panorama_capture import PanoramaCaptureError
                 nonlocal reached
@@ -2500,6 +2499,7 @@ class PanoramaService:
                     or owned.get("owner_kind") != "automation" or snapshot.get("automation_ready") is not True):
                 raise _error("control_lost", "Attention no longer owns exclusive camera control")
             follows_observation = target_provider is not None or destination.get("framing") is not None or destination.get("group_framing") is not None
+            ray = current_ray()
             _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray},
                 borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12,
                 **({"target_provider": current_ray, "target_observation_provider": current_observation} if follows_observation else {}))

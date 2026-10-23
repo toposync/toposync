@@ -642,16 +642,17 @@ async def test_temporal_group_updates_keep_every_member_and_its_capture_order(mo
 
 
 @pytest.mark.anyio
-async def test_subject_center_drives_navigation_without_moving_world_anchor(monkeypatch):
+@pytest.mark.parametrize("initial_expired", [False, True])
+async def test_subject_center_drives_navigation_without_moving_world_anchor(monkeypatch, initial_expired):
     service, job, ground = framing_service(monkeypatch)
-    destination = subject_destination(job)
+    destination = subject_destination(job, published_at=995. if initial_expired else 1000.)
     resolved = await service.resolve_target(camera_id="camera", source_id="wide", composition_id="yard",
         element_id="element", target={"world_anchor": {"x": 0, "z": 0}, "framing": destination["framing"]})
     assert resolved["target"] == {"ray": [0, 0, 1], "framing": destination["framing"]}
     updated = subject_destination(job, sequence=2, published_at=1000.2, anchor=[.6, 0, .8], center=[.6, .8, 0])
 
     async def aim(request, current, target, **options):
-        assert target == {"ray": [0, 1, 0]}, "Aim above the ground anchor"
+        assert target == {"ray": [.6, .8, 0]}, "Start from the current subject center after preparation"
         assert options["target_provider"]() == [.6, .8, 0]
         observation = options["target_observation_provider"]()
         assert observation["scope"] == ["camera", "wide", "job", 2, "artifact", "geometry"]

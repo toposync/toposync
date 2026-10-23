@@ -2692,3 +2692,56 @@ def test_automatic_approach_requires_qualification_and_current_visual_arrival(re
     assert result["verified"] and result["measurement"]["center_error_pixels"] <= 12
     assert navigator.measurements > 1
     assert navigator.pulses[0] == (.5 if status == "qualified" else .12)
+
+
+@pytest.mark.parametrize("changed_during", ["correction_measurement", "arrival_measurement", "stationary_arrival", "continuous_updates"])
+def test_target_change_during_measurement_replans_without_old_pulse_or_arrival(changed_during):
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, last_frame={"capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    first = np.array([1., .1, 0.]); first /= np.linalg.norm(first)
+    latest = np.array([1., -.1, 0.]); latest /= np.linalg.norm(latest)
+    observed = [first]
+    measurements = []
+
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            if changed_during == "continuous_updates" and len(measurements) >= 12:
+                raise PanoramaCaptureError("capture_budget_exceeded")
+            return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
+
+        def _error(self, *_):
+            return np.array([.025 if changed_during == "continuous_updates" else .1, 0.])
+
+        async def _target_measurement(self, target, *_):
+            measurements.append(np.asarray(target).copy())
+            if changed_during == "continuous_updates":
+                observed[0] = latest if np.allclose(target, first) else first
+                return {"center_error_pixels": 14, "error_pixels": [14, 0], "analysis_width": 960}
+            if changed_during != "stationary_arrival" or self.commands:
+                observed[0] = latest  # New detection arrives while image matching yields.
+            error = 0 if np.allclose(target, latest) or changed_during == "arrival_measurement" or self.commands else 56
+            return {"center_error_pixels": error, "error_pixels": [error, 0], "analysis_width": 960}
+
+        async def _pulse(self, *args, **kwargs):
+            if changed_during != "stationary_arrival" or self.commands:
+                pytest.fail("The old direction must not dispatch a pulse")
+            self.commands += 1
+            self.last_pulse_stationary = True
+            self.trace.append({})
+
+    navigator = Navigator(scanner, localizer)
+    if changed_during == "continuous_updates":
+        with pytest.raises(PanoramaCaptureError, match="capture_budget_exceeded"):
+            asyncio.run(navigator.aim(first, target_provider=lambda: observed[0].tolist()))
+        assert len(measurements) == 12 and navigator.commands == 0 and not navigator.trace
+        assert scanner.checkpoint["navigation_target_replans"] == 12
+        return
+    result = asyncio.run(navigator.aim(first, target_provider=lambda: observed[0].tolist()))
+    assert result["target_ray"] == pytest.approx(latest)
+    pulses = int(changed_during == "stationary_arrival")
+    assert len(measurements) == 2 + pulses and np.allclose(measurements[-1], latest)
+    assert navigator.commands == pulses and len(navigator.trace) == pulses
+    assert scanner.checkpoint["navigation_target_replans"] == 1

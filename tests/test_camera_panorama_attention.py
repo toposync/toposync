@@ -151,6 +151,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         service.localize_frame.side_effect = localize
     job = bound_job()
     job["_attention_navigation_history"] = [{"trial": index} for index in range(8)]
+    scanner.checkpoint["navigation_target_replans"] = 2
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance)
     if reuse == "clock_jump_failure":
@@ -201,6 +202,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     assert len(history) == 8 and history[0] == {"trial": 1}
     trace = history[-1]
     assert trace == job["_attention_navigation_trace"]
+    assert trace["target_replans"] == 2
     assert trace["error_code"] is None
     assert trace["final_stop_reused"] is reuse_expected
     if reuse == "clock_jump":

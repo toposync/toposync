@@ -1790,6 +1790,7 @@ class PanoramaService:
                     job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
                         for key in ("navigation_commands", "navigation_observation_timings")}
                     job["_attention_navigation_trace"].update(preparation=preparation,
+                        target_replans=scanner.checkpoint.get("navigation_target_replans", 0),
                         preparation_elapsed_ms=preparation_elapsed_ms, timing_clock="process_monotonic",
                         discovery_reused=discovery_reused,
                         final_stop_reused=scanner.checkpoint.get("final_stop_reused") is True,

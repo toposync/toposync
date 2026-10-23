@@ -983,6 +983,13 @@ class VisualNavigator:
         expired_measurements = 0
         overshoot_recovered = False
         self.scanner.checkpoint["navigation_target_observations"] = observations
+
+        def target_is_current() -> bool:
+            if target_provider is None or np.allclose(target_provider(), ray, atol=1e-7, rtol=0):
+                return True
+            self.scanner.checkpoint["navigation_target_replans"] = self.scanner.checkpoint.get("navigation_target_replans", 0) + 1
+            return False
+
         while waypoints:
             located = await self.locate()
             if target_provider is not None:
@@ -1060,6 +1067,8 @@ class VisualNavigator:
                 and measured
                 and measured["center_error_pixels"] <= maximum_error_pixels
             ):
+                if not target_is_current():
+                    continue
                 final_measurement = measured
                 break
             if not final and not intermediate and np.linalg.norm(error) < 0.08:
@@ -1149,8 +1158,6 @@ class VisualNavigator:
                 axis, amount = axes[index], float(commands[index])
                 if abs(amount) < 0.001:
                     raise PanoramaCaptureError("visual_control_resolution_unverified")
-            if near:
-                fine += 1
             pulse_amount, pulse_speed = amount, DEFAULT_CONTINUOUS_PULSE_SPEED
             direction_key = (axis, 1 if amount > 0 else -1)
             directional = self.direction_responses.get(direction_key)
@@ -1192,6 +1199,10 @@ class VisualNavigator:
                 duration, pulse_speed, equivalent_amount = plan
                 pulse_amount = float(np.copysign(duration, amount))
                 amount = equivalent_amount
+            if not target_is_current():
+                continue
+            if near:
+                fine += 1
             before = self._error(target, located)
             self.scanner.checkpoint["navigation_step"] = {
                 "command": self.commands + 1,
@@ -1211,12 +1222,8 @@ class VisualNavigator:
                 "stationary_duration_seconds": self.stationary_durations.get(direction_key),
             }
             if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
-                if target_provider is not None:
-                    target_provider()  # Expiration or closure must stop before the next pulse.
                 await self._pulse(axis, pulse_amount)
             else:
-                if target_provider is not None:
-                    target_provider()
                 await self._pulse(axis, pulse_amount, speed=pulse_speed)
             self.trace[-1]["response_equivalent_amount"] = amount
             expired_measurements = 0
@@ -1247,6 +1254,8 @@ class VisualNavigator:
                         measured
                         and measured["center_error_pixels"] <= maximum_error_pixels
                     ):
+                        if not target_is_current():
+                            continue
                         final_measurement = measured
                         break
                 if (not self.last_pulse_stationary and axis in self.response

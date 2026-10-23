@@ -1777,7 +1777,8 @@ class PtzAttentionController:
             return
         await self._complete_move(profile, runtime, now)
 
-    async def _complete_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
+    async def _complete_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float,
+                             *, visual_evidence: dict | None = None) -> None:
         if runtime.state == "RETURNING":
             released = await self._stop_and_release(runtime, profile=profile, emergency=False)
             if not released:
@@ -1830,6 +1831,8 @@ class PtzAttentionController:
                 ),
                 "arrival_source_id": profile.source_id,
                 "arrival_evidence": "visual" if tracked.resolved.panorama else "preset_pose",
+                **({"framing_projection": visual_evidence.get("framing_projection"),
+                    "arrival_image_url": visual_evidence.get("image_url")} if visual_evidence is not None else {}),
             },
         )
 
@@ -1908,7 +1911,7 @@ class PtzAttentionController:
             await self._fault(profile, runtime, "panorama_arrival_unconfirmed")
             return
         runtime.navigation_task = None
-        await self._complete_move(profile, runtime, now)
+        await self._complete_move(profile, runtime, now, visual_evidence=evidence)
 
     async def _resolve(
         self, profile: AttentionProfile, intent: AttentionIntent

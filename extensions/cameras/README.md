@@ -157,6 +157,19 @@ ambiguous, and guarded continuous moves never fall back to a relative move.
 Stop remains exempt. Request transmission, device execution and physical exposure
 are still separate events; this check does not guarantee their latency or outcome.
 
+Arrival evidence includes a copied `frame_geometry` only when its capture identity,
+image dimensions, freshness and independent localization qualify. If final Stop
+requires newer video, the geometry and target direction are refreshed together.
+The saved `image_url` identifies that endpoint image. Attention decisions retain
+it as `arrival_image_url`, together with the separate `framing_projection`.
+This projects the four observed corner directions into the qualified arrival
+frame, reporting their bounds/margin or an outside/behind-frame result. Source or
+reference mismatch yields no projection. Existing boundary contact is preserved.
+Four corners do not prove the full silhouette fits, identify a subject anew or
+certify another lens: `subject_visibility_verified` remains false. Focus acquisition
+still reports pointing/settling; complete observed-subject framing is a separate
+acceptance requirement.
+
 ### Bounded PTZ control leases
 
 The internal `cameras.control.acquire` service accepts optional

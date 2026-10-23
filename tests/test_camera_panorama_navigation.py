@@ -562,9 +562,11 @@ def test_navigation_checks_fresh_image_arrival_before_rejecting_a_small_response
             return reference
 
         def locate(self, *_args):
+            angle = .001 * scanner.pulses
+            c, s = np.cos(angle), np.sin(angle)
             return {
                 "status": "localized",
-                "rotation_matrix": np.eye(3).tolist(),
+                "rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]],
                 "reference_id": "reference",
                 "analysis_width": 960,
                 "validation_matches": 24,
@@ -586,6 +588,8 @@ def test_navigation_checks_fresh_image_arrival_before_rejecting_a_small_response
     assert result["verified"] is True
     assert result["commands"] == 1
     assert result["measurement"]["method"] == "target_patch_correlation"
+    assert result["frame_geometry"]["capture_evidence"]["sequence"] == 2
+    assert result["frame_geometry"]["rotation_matrix"][0][2] == pytest.approx(np.sin(.001))
 
 
 def test_navigation_without_frame_identity_does_not_probe_a_motor():

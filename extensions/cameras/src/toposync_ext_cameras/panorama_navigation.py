@@ -247,6 +247,58 @@ def localized_axis_measurement(
     }
 
 
+def arrival_frame_geometry(frame: dict, located: dict, lens: dict, ray: Any) -> dict | None:
+    """Snapshot only qualified geometry bound to this stopped arrival image."""
+    capture = frame.get("capture_evidence") or {}
+    image = frame.get("image")
+    if (not isinstance(capture.get("capture_instance"), str) or not capture["capture_instance"]
+            or type(capture.get("generation")) is not int or capture["generation"] < 0
+            or type(capture.get("sequence")) is not int or capture["sequence"] < 1
+            or image is None or image.shape[:2] != (lens.get("height"), lens.get("width"))
+            or not 0 <= time.monotonic() - frame.get("received_monotonic", 0) <= 1
+            or localized_axis_measurement(ray, lens, located) is None):
+        return None
+    return deepcopy({"capture_evidence": capture, "lens": lens,
+        **{key: located.get(key) for key in ("rotation_matrix", "analysis_width", "validation_matches",
+            "validation_p95_pixels", "inlier_fraction", "reference_id")}})
+
+
+def project_arrival_framing(framing: dict | None, evidence: dict) -> dict | None:
+    """Project observed corner directions; this does not detect the subject again."""
+    if framing is None:
+        return None
+    geometry = evidence.get("frame_geometry")
+    result = {"kind": "projected_observed_corners", "subject_visibility_verified": False,
+        "physical_capture_verified": False, "status": "geometry_unavailable"}
+    if not isinstance(geometry, dict) or geometry.get("capture_evidence") != evidence.get("capture_evidence"):
+        return result
+    try:
+        lens = geometry["lens"]
+        panorama = framing["panorama"]
+        scope = {key: framing[key] for key in ("camera_id", "source_id")} | {
+            key: panorama[key] for key in ("job_id", "revision", "composition_id", "source_artifact_id", "geometry_digest")}
+        if geometry.get("source_scope") != scope:
+            return {**result, "status": "reference_mismatch"}
+        if localized_axis_measurement(panorama["center_ray"], lens, geometry) is None:
+            return result
+        corners = panorama["corner_rays"]
+        if len(corners) != 4:
+            return result
+        pixels = [ray_to_image_pixel(ray, lens, rotation_matrix=geometry["rotation_matrix"]) for ray in corners]
+        if any(pixel is None for pixel in pixels):
+            return {**result, "status": "corner_outside_or_behind_frame", "sampled_corners_inside": False}
+        points = np.asarray(pixels) / np.asarray([lens["width"], lens["height"]])
+        low, high = points.min(axis=0), points.max(axis=0)
+        same_capture = all(framing.get(key) == geometry["capture_evidence"].get(key)
+            for key in ("capture_instance", "generation", "sequence"))
+        return {**result, "status": "projected", "sampled_corners_inside": True,
+            "bbox01": [*low.tolist(), *high.tolist()], "minimum_margin01": float(min(*low, *(1 - high))),
+            "same_capture_as_observation": same_capture, "observation_boundary_contact": framing.get("boundary_contact"),
+            "capture_evidence": deepcopy(geometry["capture_evidence"])}
+    except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+        return result
+
+
 def _persisted_return_responses(
     trace: list[dict[str, Any]],
     measurement: tuple[float, float, float, float],
@@ -1121,6 +1173,7 @@ class VisualNavigator:
                 if not target_is_current():
                     continue
                 final_measurement = measured
+                final_geometry = arrival_frame_geometry(measured_frame, located, self.localizer.lens, ray)
                 break
             if not final and not intermediate and np.linalg.norm(error) < 0.08:
                 waypoints.pop(0)
@@ -1355,6 +1408,7 @@ class VisualNavigator:
                         if not target_is_current():
                             continue
                         final_measurement = measured
+                        final_geometry = arrival_frame_geometry(self.scanner.last_frame, after, self.localizer.lens, ray)
                         break
                 if (not self.last_pulse_stationary and axis in self.response
                         and pixel_delta < MINIMUM_QUALIFIED_RESPONSE_PIXELS):
@@ -1406,6 +1460,7 @@ class VisualNavigator:
             "physical_capture_verified": False,
             "capture_evidence": self.scanner.last_frame.get("capture_evidence", {}),
             "measurement": final_measurement,
+            "frame_geometry": final_geometry,
             "commands": self.commands,
             "target_ray": np.asarray(ray).tolist(),
         }

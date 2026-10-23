@@ -1767,14 +1767,24 @@ class PanoramaService:
                         try:
                             scanner.last_frame = await scanner.refresh_stopped_frame()
                             located = await navigator.locate()
-                            measured = await navigator._target_measurement(np.asarray(evidence["target_ray"]), located)
+                            arrival_ray = np.asarray(target_provider() if target_provider is not None else evidence["target_ray"])
+                            measured = await navigator._target_measurement(arrival_ray, located)
+                            from .panorama_navigation import arrival_frame_geometry, localized_axis_measurement
+                            if target_provider is not None:
+                                updated_ray = np.asarray(target_provider())
+                                if not np.allclose(updated_ray, arrival_ray, atol=1e-7, rtol=0):
+                                    measured = localized_axis_measurement(updated_ray, localizer.lens, located)
+                                    arrival_ray = updated_ray
                             if not measured or measured["center_error_pixels"] > maximum_error_pixels:
                                 raise PanoramaCaptureError("visual_arrival_unconfirmed")
-                            evidence = {**evidence, "measurement": measured,
+                            evidence = {**evidence, "measurement": measured, "target_ray": arrival_ray.tolist(),
+                                "frame_geometry": arrival_frame_geometry(scanner.last_frame, located, localizer.lens, arrival_ray),
                                 "capture_evidence": scanner.last_frame.get("capture_evidence", {}),
                                 "arrival_delivery": {"localized_at": time.time()}}
                         except PanoramaCaptureError as error:
                             failure_code = error.code
+                        except HTTPException as error:
+                            failure_code = error.detail.get("code", "capture_failed") if isinstance(error.detail, dict) else "capture_failed"
                 # Attention saves the same endpoint as JPEG below; encoding a
                 # second full-resolution PNG here can expire its arrival proof.
                 if scanner.last_frame is not None and borrowed_control is None:
@@ -1843,8 +1853,15 @@ class PanoramaService:
             raise _error("capture_write_failed", "The stopped camera image could not be saved")
         self._image_write(job, filename, encoded.tobytes())
         image_url = self._image_url(job, filename)
+        evidence["image_url"] = image_url
         if "arrival_delivery" in evidence:
             evidence["arrival_delivery"]["image_saved_at"] = time.time()
+        if isinstance(evidence.get("frame_geometry"), dict):
+            evidence["frame_geometry"]["source_scope"] = {
+                "camera_id": job["camera_id"], "source_id": job["source_id"], "job_id": job["id"],
+                "revision": job["revision"], "composition_id": job.get("composition_id"),
+                "source_artifact_id": job["source_panorama"]["id"],
+                "geometry_digest": job["source_panorama"]["geometry"]["model_digest"]}
         return image_url, evidence
 
     async def _attention_stopped_control(self, job: dict, borrowed_control: dict) -> bool:
@@ -2449,6 +2466,8 @@ class PanoramaService:
                 raise _error("control_lost", "The stopped attention result no longer owns control")
             if follows_observation and not np.allclose(destination_ray(reached), evidence.get("target_ray"), atol=1e-7, rtol=0):
                 raise _error("following_target_changed", "The verified direction no longer matches the subject")
+            from .panorama_navigation import project_arrival_framing
+            evidence["framing_projection"] = project_arrival_framing(reached.get("framing"), evidence)
             result = {"destination": reached, "command_id": command_id, "lease_id": lease_id,
                     "fence": fence, "motion_epoch": final.get("motion_epoch"), "stop_confirmed": True,
                     "returning": returning, "evidence": evidence}

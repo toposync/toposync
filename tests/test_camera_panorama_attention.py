@@ -58,7 +58,7 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "current_arrival", "current_return", "expired_during_status", "frame_aged_during_status",
     "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status",
     "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence",
-    "metadata_geometry", "metadata_refresh_failure"])
+    "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -72,8 +72,15 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     scanner = SimpleNamespace(acquired=False, physical_state="stopped", last_frame=frame,
         checkpoint={}, _stop=AsyncMock(return_value=True), _reference_window=AsyncMock(return_value=frame),
         _confirm_stop=AsyncMock(), refresh_stopped_frame=AsyncMock(return_value=fresh))
-    navigator = SimpleNamespace(aim=AsyncMock(return_value={"target_ray": [0, 0, 1]}),
-        locate=AsyncMock(return_value={}),
+    arrival_lens = {"width": 16, "height": 16, "fx": 10., "fy": 10., "cx": 7.5, "cy": 7.5}
+    arrival_location = {"rotation_matrix": np.eye(3).tolist(), "analysis_width": 960,
+        "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+    import time
+    frame.update(received_monotonic=time.monotonic(), capture_evidence={"capture_instance": "decoder", "generation": 1, "sequence": 1})
+    fresh.update(received_monotonic=frame["received_monotonic"], capture_evidence={"capture_instance": "decoder", "generation": 1, "sequence": 2})
+    navigator = SimpleNamespace(aim=AsyncMock(return_value={"target_ray": [1, 0, 0],
+        "frame_geometry": {"marker": "original-arrival"}}),
+        locate=AsyncMock(return_value=arrival_location),
         _target_measurement=AsyncMock(return_value={"center_error_pixels": .3}),
         response={"pan": np.array([.2, 0])}, response_rotations={"pan": np.eye(3)},
         pulse_limits={"pan": .3}, direction_responses={}, stationary_durations={}, commands=1)
@@ -108,7 +115,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     service._save = lambda job: None
     service._current = AsyncMock()
     service.localize_frame = AsyncMock(return_value={"status": "localized"})
-    service._localizers = {("artifact", "geometry"): SimpleNamespace(lens={})}
+    service._localizers = {("artifact", "geometry"): SimpleNamespace(lens=arrival_lens)}
     service._attention_stopped_control = AsyncMock(return_value=True)
     if reuse == "cancel_status":
         service._attention_stopped_control.side_effect = [module.asyncio.CancelledError(), True]
@@ -154,8 +161,26 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     scanner.checkpoint["navigation_target_replans"] = 2
     scanner.checkpoint["navigation_target_rebases"] = 3
     scanner.checkpoint["navigation_target_predictions"] = 4
+    current_direction = [[1., 0., 0.]]
+    def current_target():
+        if reuse == "lost_during_cleanup":
+            raise HTTPException(409, detail={"code": "following_target_missing"})
+        return current_direction[0]
+    if reuse == "moving_during_cleanup":
+        async def measured_after_update(*args):
+            current_direction[0] = [float(np.cos(.005)), float(np.sin(.005)), 0.]
+            return {"center_error_pixels": .3}
+        navigator._target_measurement.side_effect = measured_after_update
     operation = service._visual_operation_with_pinned_reference(None, job,
-        {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance)
+        {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
+        **({"target_provider": current_target} if reuse.endswith("during_cleanup") else {}))
+    if reuse == "lost_during_cleanup":
+        with pytest.raises(HTTPException) as failure:
+            await operation
+        assert failure.value.detail["code"] == "following_target_missing"
+        assert job["_attention_navigation_trace"]["error_code"] == "following_target_missing"
+        camera.close.assert_awaited_once()
+        return
     if reuse == "clock_jump_failure":
         with pytest.raises(HTTPException) as failure:
             await operation
@@ -191,7 +216,15 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         assert not images
         return
     _, evidence = await operation
+    if reuse == "moving_during_cleanup":
+        assert evidence["target_ray"] == current_direction[0]
+        assert evidence["measurement"]["center_error_pixels"] == pytest.approx(600 * np.tan(.005))
     assert evidence["capture_evidence"]["sequence"] == (1 if reuse_expected else 2)
+    if reuse == "same":
+        assert evidence["frame_geometry"]["capture_evidence"]["sequence"] == 2
+        assert evidence["frame_geometry"]["rotation_matrix"] == arrival_location["rotation_matrix"]
+        arrival_location["rotation_matrix"][0][0] = 99
+        assert evidence["frame_geometry"]["rotation_matrix"][0][0] == 1
     if reuse_expected:
         scanner.refresh_stopped_frame.assert_not_awaited()
         scanner._confirm_stop.assert_not_awaited()
@@ -471,6 +504,8 @@ async def test_subject_center_drives_navigation_without_moving_world_anchor(monk
         command_id="command", target_provider=lambda: updated)
     assert result["destination"] == updated
     assert result["destination"]["ray"] == [.6, 0, .8], "Keep the actual world anchor in returned destination"
+    assert result["evidence"]["framing_projection"] == {"kind": "projected_observed_corners",
+        "subject_visibility_verified": False, "physical_capture_verified": False, "status": "geometry_unavailable"}
     assert destination["ray"] == [0, 0, 1]
     assert all(list(call.args[1]) in [[0, 0, 1], [.6, 0, .8]] for call in ground.call_args_list)
     assert len(service.reference_localizer.return_value.target_reference.call_args_list) >= 10

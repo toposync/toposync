@@ -16,6 +16,10 @@ First-party extension focused on public task-oriented vision operators for the P
 - `vision.gesture_recognize` (experimental temporal body gestures)
 - `vision.visual_state` (experimental local comparison with private reference images)
 
+For visual sensors, see the [Portuguese configuration and recovery guide](../../docs/sensores-visuais/guia.md)
+and [installation validation protocol](../../docs/sensores-visuais/validacao-de-instalacao.md).
+They distinguish local software checks from authorized field observation and physical qualification.
+
 The public surface is task-based, not vendor-based. The official first-party runtime is ONNX Runtime, with CPU as the default execution path.
 
 For spatial relations, `dwell_seconds` accumulates intervals between consecutive positive observations. Loss of evidence pauses this duration; recovery preserves the occurrence within its grace period without adding the missing interval. Closing grace and source timeouts never extend the observed duration. This remains an estimate from observation cadence, not proof of continuous physical presence between frames.

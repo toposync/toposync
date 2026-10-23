@@ -70,6 +70,10 @@ is acceptable for that installation.
 
 ## Experimental visual state coordinator
 
+The [visual sensor guide](../../docs/sensores-visuais/guia.md) covers setup, mappings,
+compatibility and rollback. Use the [installation protocol](../../docs/sensores-visuais/validacao-de-instalacao.md)
+before claiming field qualification; the tests below do not establish it.
+
 Each configured Toposync connection owns a `ToposyncVisualStateCoordinator` in
 `hass.data[DOMAIN][entry_id][DATA_VISUAL_STATE_COORDINATOR]`. It reads
 `/api/vision/visual-state/states` once during setup and polls at a one-second

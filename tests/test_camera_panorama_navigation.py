@@ -350,6 +350,35 @@ def test_extended_navigation_pulse_uses_existing_fresh_image_precondition(durati
     assert calls == ([{'expected_frame': frame}] if duration > .6 else [{}])
 
 
+def test_target_guard_survives_persistence_wait_and_is_removed_after_rejection():
+    import time
+    current = [True]
+    dispatched = []
+    camera = SimpleNamespace(dispatch_guard=None)
+    frame = {"received_monotonic": time.monotonic()}
+
+    def guard():
+        if not current[0]:
+            raise PanoramaCaptureError("attention_target_lost")
+
+    async def persist():
+        current[0] = False
+
+    async def pulse(*args, **options):
+        if camera.dispatch_guard is not None:
+            camera.dispatch_guard()
+        dispatched.append(args)
+        return {"frame": frame}
+
+    scanner = SimpleNamespace(camera=camera, last_frame=frame, checkpoint={}, _check=lambda: None,
+        _persist=persist, _pulse=pulse, capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, None)
+    navigator.dispatch_guard = guard
+    with pytest.raises(PanoramaCaptureError, match="attention_target_lost"):
+        asyncio.run(navigator._pulse("pan", .1))
+    assert dispatched == [] and camera.dispatch_guard is None
+
+
 def test_navigation_consumes_confirmed_fresh_observation_without_renewing_ranked_frame():
     import time
     ranked = {'received_monotonic': time.monotonic(), 'sequence': 1}
@@ -2797,7 +2826,8 @@ def test_fresh_qualified_pose_retargets_a_moving_subject_without_waiting_for_a_q
 
 
 @pytest.mark.parametrize("velocity,trajectory", [(-.06, "constant"), (.03, "constant"), (.12, "constant"),
-    (.12, "stop"), (.12, "reverse"), (.12, "variable_delay")])
+    (.12, "stop"), (.12, "reverse"), (.12, "variable_delay"), (.12, "dispatch_delay"),
+    (.12, "dispatch_expired"), (.12, "dispatch_small_change")])
 @pytest.mark.parametrize("prediction_enabled,prediction_support", [(False, "none"), (True, "valid"),
     (True, "no_coverage"), (True, "velocity_disagreement")])
 def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monkeypatch, record_property, velocity, trajectory, prediction_enabled, prediction_support):
@@ -2851,6 +2881,7 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
             self.response = {"pan": np.array([-.5, 0.])}
             self.frames = 0
             self.command_samples = []
+            self.dispatch_delayed = False
 
         async def locate(self):
             if elapsed[0] >= 8:
@@ -2869,9 +2900,18 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
             return {"center_error_pixels": abs(error), "error_pixels": [error, 0], "analysis_width": 960}
 
         async def _pulse(self, axis, amount, **kwargs):
+            if trajectory.startswith("dispatch_") and not self.dispatch_delayed:
+                self.dispatch_delayed = True
+                elapsed[0] += {"dispatch_delay": .2, "dispatch_expired": 1.01, "dispatch_small_change": .02}[trajectory]
+            self.dispatch_guard()
             assert axis == "pan" and abs(amount) <= .6
             assert self.commands < self.maximum_commands
-            assert scanner.checkpoint["navigation_step"]["observed_target_ray"] == pytest.approx(direction())
+            planned = scanner.checkpoint["navigation_step"]["observed_target_ray"]
+            if trajectory == "dispatch_small_change":
+                assert abs(560 * (math.tan(target_angle() - camera_angle[0]) -
+                    math.tan(math.atan2(planned[1], planned[0]) - camera_angle[0]))) <= 6
+            else:
+                assert planned == pytest.approx(direction())
             self.command_samples.append({"time": elapsed[0], "observed_angle": target_angle(),
                 "prediction": scanner.checkpoint["navigation_step"]["prediction"]})
             camera_angle[0] += .5 * amount
@@ -2889,7 +2929,7 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
         assert abs(560 * math.tan(target_angle() - camera_angle[0])) > 12
         assert scanner.checkpoint.get("navigation_target_predictions", 0) == 0
         outcome = "rejected_replay_deadline"
-    elif velocity == .12 and trajectory == "constant" and prediction_support != "valid":
+    elif velocity == .12 and (trajectory == "constant" or trajectory.startswith("dispatch_")) and prediction_support != "valid":
         # This replay remains a known tracking failure; rejecting it is not mobile acceptance.
         with pytest.raises(PanoramaCaptureError, match="visual_arrival_unconfirmed"):
             asyncio.run(navigator.aim(direction(), target_provider=direction, **options))
@@ -2903,7 +2943,7 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
         assert abs(560 * math.tan(target_angle() - camera_angle[0])) <= 12
         assert 0 < navigator.commands <= 12
         outcome = "synthetic_arrival"
-        if velocity == .12 and trajectory == "constant":
+        if velocity == .12 and (trajectory == "constant" or trajectory.startswith("dispatch_")):
             assert scanner.checkpoint.get("navigation_target_predictions", 0) > 0
         if trajectory in ("stop", "reverse"):
             assert elapsed[0] > .62, "The replay must include the change, not finish before it"
@@ -2915,6 +2955,11 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
                     ray = sample["prediction"]["ray"]
                     assert math.atan2(ray[1], ray[0]) < sample["observed_angle"], "A new forecast must follow the reversed direction"
     assert scanner.checkpoint["navigation_target_rebases"] >= 1
+    if trajectory in ("dispatch_delay", "dispatch_expired"):
+        assert scanner.checkpoint["navigation_target_replans"] == 1
+        assert navigator.command_samples[0]["time"] > .28, "Reject the first delayed command before dispatch"
+    if trajectory == "dispatch_small_change":
+        assert scanner.checkpoint.get("navigation_target_replans", 0) == 0
     record_property("tracking_replay", json.dumps({"velocity_radians_per_second": velocity, "trajectory": trajectory,
         "elapsed_seconds": elapsed[0], "commands": navigator.commands,
         "final_error_pixels": abs(560 * math.tan(target_angle() - camera_angle[0])),

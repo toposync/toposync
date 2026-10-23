@@ -140,6 +140,16 @@ not physical commands. Timing uses source publication, not verified exposure, an
 the last cycle does not model latency variance. These bounds and synthetic replays
 do not qualify physical tracking, full subject framing or another optical source.
 
+Moving-subject navigation rechecks its observation after command queue and
+readiness waits through a synchronous, in-process `cameras.control.submit`
+dispatch guard. Lost observations abort; a planning frame older than one second
+or a direction change exceeding half the arrival tolerance discards the proposal
+and replans. Smaller changes require qualified projection on the same reference.
+The guard is temporary, is not persisted, and never applies to Stop or a later
+return. Rejected attempts remain bounded and visible in the navigation trace.
+This checks controller admission to transport; later ONVIF preparation and network
+waits still need their own timing/validity checks before physical qualification.
+
 ### Bounded PTZ control leases
 
 The internal `cameras.control.acquire` service accepts optional

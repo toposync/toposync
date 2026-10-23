@@ -389,6 +389,35 @@ class Services:
         return {"ok": True}
 
 
+def test_capture_passes_dispatch_guard_without_changing_rejection_or_guarding_stop():
+    async def run():
+        camera, _, _, services, _ = environment()
+        await camera.acquire()
+        original = services.call
+
+        def guard():
+            raise PanoramaCaptureError("attention_target_changed_before_dispatch")
+
+        async def call(name, **kwargs):
+            if name == "cameras.control.submit":
+                if kwargs["command"]["kind"] == "stop":
+                    assert "dispatch_guard" not in kwargs
+                else:
+                    assert kwargs["dispatch_guard"] is guard
+                    kwargs["dispatch_guard"]()
+            return await original(name, **kwargs)
+
+        services.call = call
+        camera.dispatch_guard = guard
+        try:
+            with pytest.raises(PanoramaCaptureError, match="attention_target_changed_before_dispatch"):
+                await camera.move_velocity(pan=.1, timeout_s=.1)
+            await camera.stop()
+        finally:
+            await camera.close()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("failure", [None, "capabilities", "cancel"])
 def test_discovery_overlaps_independent_reads_and_drains_them_before_return(failure):
     async def run():

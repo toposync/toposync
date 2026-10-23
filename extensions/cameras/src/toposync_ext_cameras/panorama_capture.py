@@ -150,6 +150,7 @@ class PanoramaCamera:
         self._return_may_change_zoom = False
         self._automation: dict[str, bool | None] = {"auto_tracking": None, "automatic_return": None}
         self._continuous_preparation: asyncio.Task | None = None
+        self.dispatch_guard: Callable[[], None] | None = None
 
     async def _configuration(self) -> None:
         settings = await self.dependencies.config_store.get_settings()
@@ -548,7 +549,10 @@ class PanoramaCamera:
             receipt = await self.services.call(
                 "cameras.control.submit", lease_id=lease["lease_id"], fence=lease["fence"],
                 command_id=command_id, command=command,
+                **({"dispatch_guard": self.dispatch_guard} if not stopping and self.dispatch_guard is not None else {}),
             )
+        except PanoramaCaptureError:
+            raise
         except PtzControlError as error:
             raise PanoramaCaptureError(
                 "movement_unconfirmed",

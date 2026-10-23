@@ -102,6 +102,65 @@ def _controller(
     )
 
 
+@pytest.mark.parametrize("wait_at", ["queue", "readiness", "none"])
+def test_dispatch_guard_rechecks_target_after_waits_without_faulting_or_blocking_stop(tmp_path, wait_at):
+    async def scenario():
+        controller, transport, _ = _controller(tmp_path)
+        lease = await controller.acquire(camera_id="front", owner_kind="automation", owner_id="tracking")
+        entered, release = asyncio.Event(), asyncio.Event()
+        current = [wait_at != "none"]
+
+        def guard():
+            if not current[0]:
+                raise PtzControlError("target observation expired")
+
+        async def readiness(_camera_id):
+            entered.set()
+            await release.wait()
+            return True
+
+        device = controller._devices[lease["ptz_device_id"]]
+        if wait_at == "queue":
+            await device.command_lock.acquire()
+        elif wait_at == "readiness":
+            controller._get_automation_readiness = readiness
+        pending = asyncio.create_task(controller.submit(lease_id=lease["lease_id"], fence=lease["fence"],
+            command_id="stale-subject", command={"kind": "continuous_move", "pan": .1, "tilt": 0., "timeout_s": .1},
+            dispatch_guard=guard))
+        if wait_at == "queue":
+            await asyncio.sleep(0)
+            assert not pending.done()
+            current[0] = False
+            device.command_lock.release()
+        elif wait_at == "readiness":
+            await asyncio.wait_for(entered.wait(), 1)
+            current[0] = False
+            release.set()
+        with pytest.raises(PtzControlError, match="target observation expired"):
+            await pending
+        assert transport.calls == [] and device.state == "acquired"
+        stopped = await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"], command_id="stop",
+            command={"kind": "stop", "pan_tilt": True, "zoom": True}, dispatch_guard=guard)
+        assert stopped["accepted"] and len(transport.calls) == 1
+        assert transport.calls[0]["command"]["kind"] == "stop"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("invalid", ["not_callable", "boolean", "async"])
+def test_dispatch_guard_rejects_invalid_contract_before_transport(tmp_path, invalid):
+    async def scenario():
+        controller, transport, _ = _controller(tmp_path)
+        lease = await controller.acquire(camera_id="front", owner_kind="automation", owner_id="tracking")
+        async def asynchronous_guard():
+            raise AssertionError("An asynchronous guard must not run under the controller lock")
+        guard = {"not_callable": True, "boolean": lambda: False, "async": asynchronous_guard}[invalid]
+        with pytest.raises(PtzControlError, match="dispatch guard must"):
+            await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"], command_id="bad-guard",
+                command={"kind": "goto_preset", "preset_token": "one"}, dispatch_guard=guard)
+        assert transport.calls == []
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('change', ['none', 'configuration_before', 'configuration_after', 'expired', 'cancelled'])
 def test_continuous_preparation_is_lease_bound_read_only_and_does_not_block_stop(tmp_path, change):
     async def scenario():

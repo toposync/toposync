@@ -657,6 +657,11 @@ class _ExpiredQualifiedFrame(PanoramaCaptureError):
         super().__init__("panorama_frame_not_recent")
 
 
+class _TargetDispatchChanged(PanoramaCaptureError):
+    def __init__(self):
+        super().__init__("attention_target_changed_before_dispatch")
+
+
 class VisualNavigator:
     def __init__(self, scanner: _Scan, localizer: Any, *, maximum_commands: int = MAXIMUM_NAVIGATION_COMMANDS,
                  stable_frame_observer: Callable[[dict], None] | None = None):
@@ -667,6 +672,7 @@ class VisualNavigator:
         self.response: dict[str, np.ndarray] = {}
         self.response_rotations: dict[str, np.ndarray] = {}
         self.trace: list[dict[str, Any]] = []
+        self.dispatch_guard: Callable[[], None] | None = None
         self.localization_replay = LocalizationReplay()
         self.probe_durations: dict[str, float] = {}
         self.last_pulse_stationary = False
@@ -903,28 +909,40 @@ class VisualNavigator:
         })
         self.scanner.checkpoint["navigation_commands"] = self.trace
         await self.scanner._persist()
-        capabilities = self.scanner.capabilities
-        if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
-            options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
-            if abs(amount) > MAXIMUM_NAVIGATION_PULSE_SECONDS:
-                # Reuse the scanner's fresh baseline comparison before spending
-                # an overlap-qualified larger pulse; external motion cancels it.
-                options["expected_frame"] = self.scanner.last_frame
-            result = await self.scanner._pulse(axis, 1 if amount >= 0 else -1, abs(amount), **options)
-        elif capabilities.get("absolute_supported"):
-            pose = await self.scanner.camera.position()
-            limits = capabilities.get("limits", {}).get(axis)
-            if not limits or any(
-                not isinstance(pose.get(name), (float, int)) for name in ("pan", "tilt")
-            ):
-                raise PanoramaCaptureError("visual_response_unavailable")
-            target = {name: pose[name] for name in ("pan", "tilt")}
-            target[axis] = float(np.clip(target[axis] + 0.1 * amount, limits["min"], limits["max"]))
-            if abs(target[axis] - pose[axis]) < 1e-8:
-                raise PanoramaCaptureError("visual_target_unreachable")
-            result = await self.scanner._absolute(target, allow_stationary=True)
-        else:
-            raise PanoramaCaptureError("visual_control_unavailable")
+        previous_guard = None
+        if self.dispatch_guard is not None:
+            previous_guard = self.scanner.camera.dispatch_guard
+            self.scanner.camera.dispatch_guard = self.dispatch_guard
+        try:
+            capabilities = self.scanner.capabilities
+            if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
+                options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
+                if abs(amount) > MAXIMUM_NAVIGATION_PULSE_SECONDS:
+                    # Reuse the scanner's fresh baseline comparison before spending
+                    # an overlap-qualified larger pulse; external motion cancels it.
+                    options["expected_frame"] = self.scanner.last_frame
+                result = await self.scanner._pulse(axis, 1 if amount >= 0 else -1, abs(amount), **options)
+            elif capabilities.get("absolute_supported"):
+                pose = await self.scanner.camera.position()
+                limits = capabilities.get("limits", {}).get(axis)
+                if not limits or any(
+                    not isinstance(pose.get(name), (float, int)) for name in ("pan", "tilt")
+                ):
+                    raise PanoramaCaptureError("visual_response_unavailable")
+                target = {name: pose[name] for name in ("pan", "tilt")}
+                target[axis] = float(np.clip(target[axis] + 0.1 * amount, limits["min"], limits["max"]))
+                if abs(target[axis] - pose[axis]) < 1e-8:
+                    raise PanoramaCaptureError("visual_target_unreachable")
+                result = await self.scanner._absolute(target, allow_stationary=True)
+            else:
+                raise PanoramaCaptureError("visual_control_unavailable")
+        except PanoramaCaptureError as error:
+            self.trace[-1].update(state="rejected_before_transport" if isinstance(error, _TargetDispatchChanged) else "failed",
+                failure_code=error.code)
+            raise
+        finally:
+            if self.dispatch_guard is not None:
+                self.scanner.camera.dispatch_guard = previous_guard
         self.scanner.last_frame = result.get("observation_frame", result["frame"])
         self.scanner.last_pose = result.get("pose", {})
         if (result.get("stable") is True and self.scanner.physical_state == "stopped"
@@ -1278,11 +1296,31 @@ class VisualNavigator:
                 "response_direction": direction_key[1],
                 "stationary_duration_seconds": self.stationary_durations.get(direction_key),
             }
+            planned_frame_received = measured_frame.get("received_monotonic", 0)
+            def guard_target_dispatch():
+                updated = np.asarray(read_target())
+                if not 0 <= time.monotonic() - planned_frame_received <= 1:
+                    raise _TargetDispatchChanged()
+                if not np.allclose(updated, ray, atol=1e-7, rtol=0):
+                    old = localized_axis_measurement(ray, self.localizer.lens, located)
+                    new = localized_axis_measurement(updated, self.localizer.lens, located)
+                    if (old is None or new is None or
+                            np.linalg.norm(np.asarray(new["error_pixels"]) - old["error_pixels"]) > maximum_error_pixels / 2):
+                        raise _TargetDispatchChanged()
+            self.dispatch_guard = guard_target_dispatch if target_provider is not None else None
             pulse_started = time.monotonic()
-            if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
-                await self._pulse(axis, pulse_amount)
-            else:
-                await self._pulse(axis, pulse_amount, speed=pulse_speed)
+            try:
+                if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
+                    await self._pulse(axis, pulse_amount)
+                else:
+                    await self._pulse(axis, pulse_amount, speed=pulse_speed)
+            except _TargetDispatchChanged:
+                if near:
+                    fine -= 1
+                self.scanner.checkpoint["navigation_target_replans"] = self.scanner.checkpoint.get("navigation_target_replans", 0) + 1
+                continue
+            finally:
+                self.dispatch_guard = None
             self.trace[-1]["response_equivalent_amount"] = amount
             expired_measurements = 0
             after = await self.locate()

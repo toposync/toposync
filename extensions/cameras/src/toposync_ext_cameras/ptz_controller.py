@@ -575,6 +575,7 @@ class PtzController:
         fence: int,
         command_id: str,
         command: dict[str, Any],
+        dispatch_guard: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         self._ensure_accepting_commands()
         lid = _required_text(lease_id, "lease_id")
@@ -679,6 +680,14 @@ class PtzController:
                     raise PtzControlError(
                         f"PTZ device '{device.ptz_device_id}' is faulted; use a full stop or emergency_stop"
                     )
+                if normalized_command["kind"] != "stop" and dispatch_guard is not None:
+                    if not callable(dispatch_guard):
+                        raise PtzControlError("Command dispatch guard must be synchronous")
+                    checked = dispatch_guard()
+                    if checked is not None:
+                        if inspect.iscoroutine(checked):
+                            checked.close()
+                        raise PtzControlError("Command dispatch guard must return None or raise")
                 self._record_command_intent_locked(
                     device,
                     command_id=command_key,

@@ -125,6 +125,21 @@ Semantic PTZ attention; panoramic mapping does not redefine those consumers.
 See [implementation and validation](../../docs/ptz-panorama-mapping.md) for the
 profile contract, geometry, recovery, automated tests and physical validation.
 
+For an already-associated subject with capture-bound panoramic directions, visual
+navigation can compensate briefly for movement during its last measured command,
+settling and localization cycle. Three distinct observations from the same source
+and reference are required; repeated polls do not add samples. The horizon cannot
+exceed one second or the observed history. Stops, reversals, discontinuities,
+unsupported directions and disagreement between recent derivatives disable the
+forecast. Each available axis must already have a measured response.
+
+The forecast guides correction only: arrival remains measured against the observed
+target. `navigation_step.prediction` separates the forecast from
+`observed_target_ray`; `target_predictions` counts accepted planning forecasts,
+not physical commands. Timing uses source publication, not verified exposure, and
+the last cycle does not model latency variance. These bounds and synthetic replays
+do not qualify physical tracking, full subject framing or another optical source.
+
 ### Bounded PTZ control leases
 
 The internal `cameras.control.acquire` service accepts optional

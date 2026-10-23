@@ -1562,6 +1562,7 @@ class PanoramaService:
         *, borrowed_control: dict | None = None, maximum_error_pixels: float = 12,
         qualification_home: dict[str, Any] | None = None,
         target_provider: Callable[[], list[float]] | None = None,
+        target_observation_provider: Callable[[], dict | None] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
@@ -1712,7 +1713,8 @@ class PanoramaService:
                 else:
                     evidence = await navigator.aim(target["ray"],
                         **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}),
-                        **({"target_provider": target_provider} if target_provider is not None else {}))
+                        **({"target_provider": target_provider} if target_provider is not None else {}),
+                        **({"target_observation_provider": target_observation_provider} if target_observation_provider is not None else {}))
                 evidence["lens"] = localizer.lens
             await self._current(job, request)
         except (PanoramaCaptureError, _Stopped) as error:
@@ -1792,6 +1794,7 @@ class PanoramaService:
                     job["_attention_navigation_trace"].update(preparation=preparation,
                         target_replans=scanner.checkpoint.get("navigation_target_replans", 0),
                         target_rebases=scanner.checkpoint.get("navigation_target_rebases", 0),
+                        target_predictions=scanner.checkpoint.get("navigation_target_predictions", 0),
                         preparation_elapsed_ms=preparation_elapsed_ms, timing_clock="process_monotonic",
                         discovery_reused=discovery_reused,
                         final_stop_reused=scanner.checkpoint.get("final_stop_reused") is True,
@@ -2418,6 +2421,16 @@ class PanoramaService:
                 vector = destination_ray(updated)
                 reached = copy.deepcopy(updated)
                 return vector
+
+            def current_observation() -> dict | None:
+                framing = reached.get("framing")
+                if framing is None:
+                    return None
+                geometry = framing["panorama"]
+                return {key: framing[key] for key in ("capture_instance", "generation", "sequence")} | {
+                    "observed_monotonic": started_monotonic + (framing["published_at"] - started_wall),
+                    "scope": [camera_id, source_id, geometry["job_id"], geometry["revision"],
+                        geometry["source_artifact_id"], geometry["geometry_digest"]]}
             snapshot = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)
             owned = snapshot.get("active_lease") or {}
@@ -2427,7 +2440,7 @@ class PanoramaService:
             follows_observation = target_provider is not None or destination.get("framing") is not None
             _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray},
                 borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12,
-                **({"target_provider": current_ray} if follows_observation else {}))
+                **({"target_provider": current_ray, "target_observation_provider": current_observation} if follows_observation else {}))
             final = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)
             owned = final.get("active_lease") or {}

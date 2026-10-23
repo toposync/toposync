@@ -153,6 +153,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     job["_attention_navigation_history"] = [{"trial": index} for index in range(8)]
     scanner.checkpoint["navigation_target_replans"] = 2
     scanner.checkpoint["navigation_target_rebases"] = 3
+    scanner.checkpoint["navigation_target_predictions"] = 4
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance)
     if reuse == "clock_jump_failure":
@@ -205,6 +206,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     assert trace == job["_attention_navigation_trace"]
     assert trace["target_replans"] == 2
     assert trace["target_rebases"] == 3
+    assert trace["target_predictions"] == 4
     assert trace["error_code"] is None
     assert trace["final_stop_reused"] is reuse_expected
     if reuse == "clock_jump":
@@ -459,6 +461,9 @@ async def test_subject_center_drives_navigation_without_moving_world_anchor(monk
     async def aim(request, current, target, **options):
         assert target == {"ray": [0, 1, 0]}, "Aim above the ground anchor"
         assert options["target_provider"]() == [.6, .8, 0]
+        observation = options["target_observation_provider"]()
+        assert observation["scope"] == ["camera", "wide", "job", 2, "artifact", "geometry"]
+        assert observation["sequence"] == 2 and observation["observed_monotonic"] == pytest.approx(49.7)
         return {}, {"target_ray": [.6, .8, 0], "verified": True}
 
     service._visual_operation_with_pinned_reference.side_effect = aim

@@ -27,7 +27,8 @@ from .panorama_scan import (
     _next_continuous_seek_duration,
     _return_correction_commands,
 )
-from .processing.panorama_mapping import _rotation_basis, ray_to_image_pixel
+from .processing.panorama_mapping import _rotation_basis, ray_to_image_pixel, ray_to_panorama_pixel
+from .panorama_target_motion import TargetMotion
 from .processing.panorama_localization import (
     ANALYSIS_WIDTH,
     MAXIMUM_ERROR_PIXELS as MAXIMUM_LOCALIZATION_ERROR_PIXELS,
@@ -954,6 +955,7 @@ class VisualNavigator:
     async def aim(
         self, ray: Any, *, maximum_error_pixels: float = MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
         target_provider: Callable[[], list[float]] | None = None,
+        target_observation_provider: Callable[[], dict | None] | None = None,
     ) -> dict[str, Any]:
         if type(maximum_error_pixels) not in (int, float) or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
             raise PanoramaCaptureError("invalid_arrival_limit")
@@ -983,9 +985,17 @@ class VisualNavigator:
         expired_measurements = 0
         overshoot_recovered = False
         self.scanner.checkpoint["navigation_target_observations"] = observations
+        motion = TargetMotion()
+        cycle_seconds = 0.
+
+        def read_target():
+            updated = target_provider()
+            if target_observation_provider is not None:
+                motion.observe(target_observation_provider(), updated, time.monotonic())
+            return updated
 
         def target_is_current() -> bool:
-            if target_provider is None or np.allclose(target_provider(), ray, atol=1e-7, rtol=0):
+            if target_provider is None or np.allclose(read_target(), ray, atol=1e-7, rtol=0):
                 return True
             self.scanner.checkpoint["navigation_target_replans"] = self.scanner.checkpoint.get("navigation_target_replans", 0) + 1
             return False
@@ -993,7 +1003,7 @@ class VisualNavigator:
         while waypoints:
             located = await self.locate()
             if target_provider is not None:
-                updated = np.asarray(target_provider())
+                updated = np.asarray(read_target())
                 if not np.allclose(updated, ray, atol=1e-7, rtol=0):
                     ray = updated
                     reference = self.localizer.target_reference(ray)
@@ -1050,7 +1060,7 @@ class VisualNavigator:
             try:
                 measured = await self._target_measurement(target, located) if final else None
                 if final and target_provider is not None:
-                    updated = np.asarray(target_provider())
+                    updated = np.asarray(read_target())
                     if not np.allclose(updated, ray, atol=1e-7, rtol=0):
                         rebased = localized_axis_measurement(updated, self.localizer.lens, located)
                         same_frame = (measured_frame is self.scanner.last_frame and measured_capture
@@ -1098,6 +1108,28 @@ class VisualNavigator:
                 waypoints.pop(0)
                 last_error = None
                 continue
+            prediction = None
+            supported_axes = [axis for axis in ("pan", "tilt") if self.scanner.capabilities.get("axes", {}).get(axis) is True]
+            if final and supported_axes and all(axis in self.response for axis in supported_axes):
+                candidate = motion.predict(time.monotonic(), cycle_seconds)
+                coverage = getattr(self.localizer, "coverage_mask", None)
+                if candidate is not None and getattr(coverage, "ndim", None) == 2 and coverage.size:
+                    estimates = [localized_axis_measurement(candidate[key], self.localizer.lens, located)
+                        for key in ("ray", "comparison_ray")]
+                    supported = True
+                    for key in ("ray", "comparison_ray"):
+                        u, v = ray_to_panorama_pixel(candidate[key])
+                        supported &= bool(coverage[min(coverage.shape[0] - 1, int(v * coverage.shape[0])),
+                            min(coverage.shape[1] - 1, int(u * coverage.shape[1]))])
+                        supported &= self.localizer.target_reference(candidate[key]) is not None
+                    if supported and all(item is not None for item in estimates):
+                        uncertainty = float(np.linalg.norm(np.asarray(estimates[0]["error_pixels"]) - estimates[1]["error_pixels"]))
+                        if uncertainty <= maximum_error_pixels / 2:
+                            prediction = {**candidate, "velocity_disagreement_pixels": uncertainty}
+                            target = np.asarray(candidate["ray"])
+                            measured = estimates[0]
+                            error = self._error(target, located)
+                            self.scanner.checkpoint["navigation_target_predictions"] = self.scanner.checkpoint.get("navigation_target_predictions", 0) + 1
             near = final and np.linalg.norm(error) < 0.04
             if near and fine >= MAXIMUM_LIVE_FINE_CORRECTIONS:
                 raise PanoramaCaptureError("visual_arrival_unconfirmed")
@@ -1231,6 +1263,8 @@ class VisualNavigator:
                 "command": self.commands + 1,
                 "target_kind": "final" if final else "intermediate",
                 "target_ray": np.asarray(target).tolist(),
+                "observed_target_ray": np.asarray(ray).tolist(),
+                "prediction": prediction,
                 "before_error_radians": before.tolist(),
                 "missing_response_axes": missing,
                 "deferred_response_axes": deferred_axes,
@@ -1244,6 +1278,7 @@ class VisualNavigator:
                 "response_direction": direction_key[1],
                 "stationary_duration_seconds": self.stationary_durations.get(direction_key),
             }
+            pulse_started = time.monotonic()
             if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
                 await self._pulse(axis, pulse_amount)
             else:
@@ -1251,6 +1286,7 @@ class VisualNavigator:
             self.trace[-1]["response_equivalent_amount"] = amount
             expired_measurements = 0
             after = await self.locate()
+            cycle_seconds = time.monotonic() - pulse_started
             updated = self._error(target, after)
             response = (updated - before) / amount
             pixel_delta = np.linalg.norm((np.tan(updated) - np.tan(before))
@@ -1276,6 +1312,7 @@ class VisualNavigator:
                     if (
                         measured
                         and measured["center_error_pixels"] <= maximum_error_pixels
+                        and prediction is None
                     ):
                         if not target_is_current():
                             continue

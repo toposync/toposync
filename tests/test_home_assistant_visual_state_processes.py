@@ -64,7 +64,7 @@ def producer_process(connection, port, selected):
     asyncio.run(run())
 
 
-def consumer_process(connection, directory, port):
+def consumer_process(connection, directory, url, token):
     async def run():
         def state_changed(event):
             if event.data["entity_id"] in {"sensor.door", "binary_sensor.gate"}:
@@ -79,7 +79,7 @@ def consumer_process(connection, directory, port):
             entries = hass.config_entries.async_entries("toposync")
             if not entries:
                 result = await hass.config_entries.flow.async_init("toposync", context={"source": "user"}, data={
-                    "url": f"http://127.0.0.1:{port}/ingress", "token": "synthetic-test-token",
+                    "url": url, "token": token,
                 })
                 assert result["type"] == "create_entry"
                 entry = result["result"]
@@ -151,7 +151,8 @@ def test_process_restart_and_abrupt_producer_death_do_not_restore_old_state(tmp_
         producer = start(producer_process, 0, "open")
         first_producer = receive(producer, lambda message: message["kind"] == "ready")
         port = first_producer["port"]
-        consumer = start(consumer_process, str(tmp_path / "home-assistant"), port)
+        consumer = start(consumer_process, str(tmp_path / "home-assistant"),
+                         f"http://127.0.0.1:{port}/ingress", "synthetic-test-token")
         first = receive(consumer, states({"sensor.door": "open", "binary_sensor.gate": "on"}))
         killed_at = time.monotonic()
         kill(producer)
@@ -164,7 +165,8 @@ def test_process_restart_and_abrupt_producer_death_do_not_restore_old_state(tmp_
         assert recovered["identities"] == first["identities"]
         stopped(consumer)
         kill(replacement)
-        restarted = start(consumer_process, str(tmp_path / "home-assistant"), port)
+        restarted = start(consumer_process, str(tmp_path / "home-assistant"),
+                          f"http://127.0.0.1:{port}/ingress", "synthetic-test-token")
         retry = receive(restarted, lambda message: message["kind"] == "snapshot" and message["entry_state"] == "setup_retry")
         assert retry["pid"] != first["pid"] and retry["entry_id"] == first["entry_id"]
         assert retry["identities"] == first["identities"]

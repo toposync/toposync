@@ -1,19 +1,28 @@
 """Real Toposync HTTP/runtime with generated pixels, for an isolated Docker consumer."""
 import argparse
 from dataclasses import replace
+import json
 import os
 from pathlib import Path
 import socket
+import subprocess
+import sys
 import time
 from typing import Literal
 import uuid
 
 
-def make_app(directory):
+def make_app(directory, *, resume=False, paused=False):
     if os.environ.get("TOPOSYNC_FULL_PRODUCER_TEST") != "1" or not Path("/.dockerenv").is_file():
         raise RuntimeError("This producer is restricted to the explicitly isolated Docker test")
     directory = directory.resolve()
-    if directory.is_relative_to(Path(__file__).resolve().parents[1]) or (directory.exists() and any(directory.iterdir())):
+    marker = directory / "synthetic-fixture.json"
+    if directory.is_relative_to(Path(__file__).resolve().parents[1]):
+        raise RuntimeError("Use a new external test data directory")
+    if resume:
+        if not marker.is_file() or json.loads(marker.read_text()) != {"fixture": "visual_state_producer", "version": 1}:
+            raise RuntimeError("Only this synthetic fixture's persisted data can be resumed")
+    elif directory.exists() and any(directory.iterdir()):
         raise RuntimeError("Use a new external test data directory")
     directory.mkdir(parents=True, exist_ok=True)
     os.environ.update(TOPOSYNC_DATA_DIR=str(directory), TOPOSYNC_AUTH_MODE="enforced",
@@ -33,15 +42,19 @@ def make_app(directory):
     from toposync_ext_streaming.plugin import StreamingExtension
     from toposync_ext_vision.plugin import VisionExtension
     from toposync_ext_vision.processing.runtime_backends.embedding import embedding_model_revision
+    from toposync_ext_vision.registry.manifests import ModelManifest
     from toposync_ext_vision.visual_state.schemas import ReferenceEvidence, VisualStateConfig
     from test_visual_state_runtime import color_model
     from test_visual_state_store import image_bytes
 
-    manifest = color_model(directory)
     manifest_directory = directory / "vision-manifests"
-    manifest_directory.mkdir()
-    (manifest_directory / "synthetic.json").write_text(manifest.model_dump_json())
-    state = {"color": "blue", "paused": False, "frames": 0, "outbound_attempts": 0}
+    if resume:
+        manifest = ModelManifest.model_validate_json((manifest_directory / "synthetic.json").read_text())
+    else:
+        manifest = color_model(directory)
+        manifest_directory.mkdir()
+        (manifest_directory / "synthetic.json").write_text(manifest.model_dump_json())
+    state = {"color": "blue", "paused": paused, "frames": 0, "outbound_attempts": 0}
     runtimes = []
 
     def forbid_connect(*args, **kwargs):
@@ -83,6 +96,8 @@ def make_app(directory):
                 runtimes.append(runtime)
                 return runtime
             registry._items["vision.visual_state"] = replace(original, runtime_factory=track)
+            if resume:
+                return
             references = await kwargs["services"].call("vision.visual_references")
             nodes = [{"id": "source", "operator": "camera.source",
                       "config": {"camera_id": "synthetic", "source_id": "video", "fps": 10}}]
@@ -112,6 +127,7 @@ def make_app(directory):
                         operation_id=f"{configuration.sensor_id}-{color}", expected_revision=draft.revision)
                 next(node for node in pipeline.graph["nodes"] if node["id"] == configuration.sensor_id)["config"] = draft.configuration.model_dump(mode="json")
             await app.state.config_store.create_pipeline(pipeline)
+            marker.write_text(json.dumps({"fixture": "visual_state_producer", "version": 1}))
 
     class Entry:
         def __init__(self, name, implementation):
@@ -135,15 +151,68 @@ def make_app(directory):
     @app.get("/fixture/stats")
     async def stats(request: Request):
         owner(request)
-        return {**state, "synthetic_pixels": True, "synthetic_model": True,
+        return {**state, "pid": os.getpid(), "synthetic_pixels": True, "synthetic_model": True,
                 "model_sha256": manifest.sha256,
                 "runtime_providers": [list(runtime._backend.providers) for runtime in runtimes if runtime._backend is not None]}
     return app
+
+
+def supervise(directory, control):
+    """Kill/restart only the owned producer; file commands stay on the isolated test mount."""
+    if os.environ.get("TOPOSYNC_FULL_PRODUCER_TEST") != "1" or not Path("/.dockerenv").is_file():
+        raise RuntimeError("Explicit isolated Docker test only")
+    control = control.resolve()
+    if control.is_relative_to(Path(__file__).resolve().parents[1]):
+        raise RuntimeError("Use an external control directory")
+    control.mkdir(parents=True, exist_ok=False)
+    process, sequence = None, 0
+    deadline = time.monotonic() + 180
+    (control / "ready").write_text(str(os.getpid()))
+    try:
+        while time.monotonic() < deadline:
+            request = control / f"request-{sequence + 1}.json"
+            if not request.is_file():
+                time.sleep(.02)
+                continue
+            command = json.loads(request.read_text())
+            action = command["action"]
+            assert action in {"start", "kill", "stop"}
+            if action == "start":
+                assert process is None
+                arguments = [sys.executable, str(Path(__file__).resolve()), "--data-dir", str(directory)]
+                if command.get("resume"):
+                    arguments += ["--resume", "--paused"]
+                process = subprocess.Popen(arguments)
+                result = {"pid": process.pid, "started": True}
+            else:
+                assert process is not None
+                process.kill() if action == "kill" else process.terminate()
+                code = process.wait(timeout=10)
+                result = {"pid": process.pid, "exitcode": code}
+                process = None
+            sequence += 1
+            temporary = control / "response.tmp"
+            temporary.write_text(json.dumps(result))
+            temporary.replace(control / f"response-{sequence}.json")
+            if action == "stop":
+                return
+        raise TimeoutError("Isolated producer supervisor exceeded 180 seconds")
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
 
 
 if __name__ == "__main__":
     import uvicorn
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--paused", action="store_true")
+    parser.add_argument("--control-dir", type=Path)
     arguments = parser.parse_args()
-    uvicorn.run(make_app(arguments.data_dir), host="0.0.0.0", port=8000, access_log=False)
+    if arguments.control_dir is not None:
+        supervise(arguments.data_dir, arguments.control_dir)
+    else:
+        uvicorn.run(make_app(arguments.data_dir, resume=arguments.resume, paused=arguments.paused),
+                    host="0.0.0.0", port=8000, access_log=False)

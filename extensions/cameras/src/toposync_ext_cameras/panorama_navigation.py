@@ -1526,8 +1526,8 @@ class VisualNavigator:
                         self.stationary_durations.get(direction_key, 0), abs(pulse_amount))
                     if directional is not None and directional[0] > abs(pulse_amount):
                         continue
-                    if directional is not None and abs(pulse_amount) < .48:
-                        # A verified dead zone invalidates the earlier directional response.
+                    if abs(pulse_amount) < .48 and any(key[0] == axis for key in self.direction_responses):
+                        # A verified dead zone needs identification in this direction, even if only the opposite was measured.
                         self.direction_responses.pop(direction_key, None)
                         continue
                 if ((axis in missing or direction_probe) and self.last_pulse_stationary

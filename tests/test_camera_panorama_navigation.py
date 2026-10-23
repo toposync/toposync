@@ -2398,7 +2398,8 @@ def test_small_observed_probe_can_identify_axis_without_learning_its_unqualified
 
 
 @pytest.mark.parametrize('stationary_verified,effective_pulse,initial_response', [
-    (True, 2, False), (True, 3, False), (True, None, False), (False, None, False), (True, 2, True),
+    (True, 2, False), (True, 3, False), (True, None, False), (False, None, False), (True, 2, True), (True, 2, "opposite"),
+    (True, None, "opposite"), (False, None, "opposite"),
 ])
 def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stationary_verified, effective_pulse, initial_response):
     from types import SimpleNamespace
@@ -2415,7 +2416,8 @@ def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stati
             self.pulses = []
             if initial_response:
                 self.response['tilt'] = np.array([0., .3])
-                self.direction_responses[('tilt', 1)] = (.05, np.array([0., .015]))
+                direction = -1 if initial_response == "opposite" else 1
+                self.direction_responses[('tilt', direction)] = (.05, np.array([0., .015 * direction]))
 
         async def locate(self):
             return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
@@ -2440,12 +2442,21 @@ def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stati
     if effective_pulse:
         assert asyncio.run(navigator.aim([1, 0, 0]))['measurement']['center_error_pixels'] <= 12
     else:
-        with pytest.raises(PanoramaCaptureError, match='visual_response_unavailable'):
+        code = 'visual_arrival_unconfirmed' if initial_response and not stationary_verified else 'visual_response_unavailable'
+        with pytest.raises(PanoramaCaptureError, match=code):
             asyncio.run(navigator.aim([1, 0, 0]))
     expected = [.12, .24] if effective_pulse == 2 else [.12, .24, .48]
     if initial_response:
-        assert len(navigator.pulses) == 2
-        assert .05 < navigator.pulses[0] < navigator.pulses[1] <= .48
+        if effective_pulse:
+            assert len(navigator.pulses) == 2
+        elif not stationary_verified:
+            assert len(navigator.pulses) <= 6
+            assert all(amount == navigator.pulses[0] for amount in navigator.pulses)
+        else:
+            assert navigator.pulses[-1] == .48
+        assert .05 < navigator.pulses[0] <= .48
+        if stationary_verified:
+            assert all(first < second <= .48 for first, second in zip(navigator.pulses, navigator.pulses[1:]))
     else:
         assert navigator.pulses == (expected if stationary_verified else [.12])
 

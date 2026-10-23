@@ -10,6 +10,7 @@ import math
 import struct
 import time
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, Literal
 
@@ -4700,11 +4701,12 @@ class CameraMappingRuntime(TransformOperatorRuntime):
             "quality": {"status": "ready"},
         }
         if visual and not planar:
-            payload["mapping"]["visual_localization"] = {
+            payload["mapping"]["visual_localization"] = deepcopy({
                 key: localization[key] for key in ("source_artifact_id", "geometry_digest", "capture_evidence",
+                    "source_id", "revision", "lens", "rotation_matrix",
                     "reference_id", "validation_matches", "validation_p95_pixels", "analysis_width")
                 if key in localization
-            }
+            })
         metadata = dict(result.metadata)
         if self._config.attach_mapping_metadata:
             metadata.update(

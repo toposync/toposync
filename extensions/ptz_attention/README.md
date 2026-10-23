@@ -22,6 +22,15 @@ when the recovered box is inside the original image. This observation does not
 certify arrival, subject completeness or association with another lens. A single
 subject box is not used as evidence for a world-space group envelope.
 
+When visual mapping supplies the same frame's calibrated lens and rotation,
+the observation also carries the center and corner directions in panorama space,
+bound to mapping revision, source artifact and geometry digest. It uses the
+original image transformation and never substitutes current device pose or
+projects the subject's upper body onto the ground. Missing or incompatible
+geometry leaves the image observation available without panorama directions.
+These directions describe observed extent; they do not establish panorama
+coverage, motor qualification or framing acceptance on another lens.
+
 `shadow` records decisions with zero motor commands. Optional following
 uses fresh `capture_evidence`, stable capture instance/generation and increasing
 sequence/publication time to confirm target changes. Minimum dwell, movement

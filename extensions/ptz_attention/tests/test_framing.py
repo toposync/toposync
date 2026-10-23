@@ -30,6 +30,57 @@ def observation(packet):
         AttentionTarget(world_anchor={"x": .5, "z": 0}))
 
 
+def with_localization(packet):
+    packet.payload["mapping"] = {"status": "mapped", "pose_evidence": "visual_frame_rotation",
+        "composition_id": "yard", "calibrated_view_id": "panorama", "panorama_revision": 3,
+        "visual_localization": {"source_id": "wide", "revision": 3,
+            "capture_evidence": dict(packet.payload["capture_evidence"]),
+            "source_artifact_id": "artifact", "geometry_digest": "geometry",
+            "lens": {"width": 201, "height": 101, "fx": 100, "fy": 50, "cx": 100, "cy": 50},
+            "rotation_matrix": np.eye(3).tolist()}}
+    return packet
+
+
+def test_framing_directions_use_observed_frame_pose_instead_of_ground_height_or_latest_pose():
+    packet = with_localization(observed_packet())
+    packet.payload["pan_tilt_zoom_state"] = {"pan": 2, "tilt": 1, "move_status": "MOVING"}
+    result = observation(packet)
+    expected = np.array([1, 0, .4])
+    expected /= np.linalg.norm(expected)
+    assert result.panorama.center_ray == pytest.approx(expected)
+    for ray, raw in zip(result.panorama.corner_rays, [[1, -.2, .8], [1, .2, .8], [1, .2, 0], [1, -.2, 0]]):
+        assert ray == pytest.approx(np.array(raw) / np.linalg.norm(raw))
+    assert result.panorama.model_dump(exclude={"center_ray", "corner_rays"}) == {
+        "job_id": "panorama", "revision": 3, "composition_id": "yard",
+        "source_artifact_id": "artifact", "geometry_digest": "geometry"}
+    assert packet.payload["world_anchor"] == {"x": .5, "z": 0}
+
+
+@pytest.mark.parametrize("failure", ["frame", "source", "revision", "null_rotation", "invalid_rotation", "dimensions", "numeric_pose", "missing_binding"])
+def test_unbound_geometry_preserves_image_extent_without_inventing_panorama_directions(failure):
+    packet = with_localization(observed_packet())
+    mapping = packet.payload["mapping"]
+    located = mapping["visual_localization"]
+    if failure == "frame":
+        located["capture_evidence"]["sequence"] = 5
+    elif failure == "source":
+        located["source_id"] = "zoom"
+    elif failure == "revision":
+        located["revision"] = 4
+    elif failure == "null_rotation":
+        located["rotation_matrix"] = None
+    elif failure == "invalid_rotation":
+        located["rotation_matrix"][0][0] = 2
+    elif failure == "dimensions":
+        located["lens"]["width"] = 101
+    elif failure == "numeric_pose":
+        mapping["pose_evidence"] = "numeric_pose"
+    else:
+        located.pop("source_artifact_id")
+    result = observation(packet)
+    assert result is not None and result.panorama is None
+
+
 def test_extent_and_age_are_independent_of_ground_anchor_and_selected_lens():
     result = observation(observed_packet())
     assert result.bbox01 == pytest.approx((.4, .1, .6, .5))
@@ -75,7 +126,7 @@ def test_unbound_or_invalid_extent_cannot_supply_framing(change):
 
 
 def test_crop_recovers_source_extent_without_hiding_contact_with_crop_boundary():
-    packet = observed_packet()
+    packet = with_localization(observed_packet())
     original = packet.artifacts["main"]
     forward = [[1, 0, -50], [0, 1, 0], [0, 0, 1]]
     packet = packet.with_artifact(Artifact("main", np.zeros((101, 101, 3), np.uint8),
@@ -84,16 +135,20 @@ def test_crop_recovers_source_extent_without_hiding_contact_with_crop_boundary()
     result = observation(packet)
     assert result.bbox01 == pytest.approx((.25, .1, .5, .5))
     assert result.boundary_contact, "A clipped subject may lie well inside the original source"
+    expected = np.array([1, -.25, .4])
+    assert result.panorama.center_ray == pytest.approx(expected / np.linalg.norm(expected))
 
 
 def test_resize_keeps_source_extent_and_original_capture_identity():
-    packet = observed_packet()
+    packet = with_localization(observed_packet())
     original = packet.artifacts["main"]
     packet = packet.with_artifact(Artifact("main", np.zeros((51, 101, 3), np.uint8),
         metadata=transformed_geometry(original, [[.5, 0, 0], [0, .5, 0], [0, 0, 1]], 101, 51)))
     result = observation(packet)
     assert result.bbox01 == pytest.approx((.4, .1, .6, .5))
     assert (result.capture_instance, result.generation, result.sequence) == ("decoder", 1, 4)
+    expected = np.array([1, 0, .4])
+    assert result.panorama.center_ray == pytest.approx(expected / np.linalg.norm(expected))
 
 
 def test_single_subject_box_is_not_promoted_to_group_extent():

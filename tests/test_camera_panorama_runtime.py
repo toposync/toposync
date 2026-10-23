@@ -343,6 +343,31 @@ def test_visual_mapping_localizes_exact_frame_once_for_all_detections_without_nu
         assert result.payload["vision"][kind][0]["world_anchor"] == pytest.approx({"x": 3, "z": 0})
 
 
+def test_mapping_delivers_same_frame_geometry_for_subject_extent_without_projecting_head_to_ground():
+    import numpy as np
+    from toposync_ext_ptz_attention.framing import observe_framing
+    from toposync_ext_ptz_attention.models import AttentionTarget
+
+    def change(packet):
+        packet.payload["capture_evidence"]["published_at"] = 1000.
+        packet.artifacts["main"].metadata["image_geometry"]["capture_evidence"] = dict(packet.payload["capture_evidence"])
+        packet.payload["subject"] = {"bbox01": [.4, .4, .6, .5]}
+        return packet
+
+    localizations = []
+    result, calls = _visual_runtime_case(change_packet=change, mutate=localizations.append)
+    assert len(calls) == 1, "Framing must not run another localization or consult current device pose"
+    localizations[0]["rotation_matrix"][0][0] = 2
+    assert result.payload["mapping"]["visual_localization"]["rotation_matrix"][0][0] == 1
+    observation = observe_framing(result, result.payload["subject"]["bbox01"],
+        AttentionTarget(world_anchor=result.payload["world_anchor"]))
+    expected = np.array([1.1, 0, -.9])
+    expected /= np.linalg.norm(expected)
+    assert observation.panorama.center_ray == pytest.approx(expected)
+    assert observation.panorama.job_id == "panorama-one" and observation.panorama.revision == 3
+    assert result.payload["world_anchor"] == pytest.approx({"x": 3, "z": 0})
+
+
 @pytest.mark.parametrize("field,value", [("capture_evidence", {}), ("source_artifact_id", "different"), ("geometry_digest", "different"), ("revision", 4), ("source_id", "different")])
 def test_visual_mapping_rejects_cross_frame_or_cross_geometry_evidence(field, value):
     result, _ = _visual_runtime_case(mutate=lambda response: response.update({field: value}))

@@ -265,6 +265,24 @@ class AttentionProfile(StrictModel):
         return self
 
 
+class PanoramaFraming(StrictModel):
+    job_id: str = Field(min_length=1, max_length=200)
+    revision: int = Field(strict=True, ge=1)
+    composition_id: str = Field(min_length=1, max_length=200)
+    source_artifact_id: str = Field(min_length=1, max_length=200)
+    geometry_digest: str = Field(min_length=1, max_length=200)
+    center_ray: tuple[float, float, float]
+    corner_rays: tuple[tuple[float, float, float], tuple[float, float, float],
+                       tuple[float, float, float], tuple[float, float, float]]
+
+    @model_validator(mode="after")
+    def _unit_directions(self):
+        for ray in (self.center_ray, *self.corner_rays):
+            if not all(math.isfinite(value) for value in ray) or abs(sum(value * value for value in ray) - 1) > 1e-6:
+                raise ValueError("framing directions must be finite and normalized")
+        return self
+
+
 class FramingObservation(StrictModel):
     """Observed image extent, independent of a ground target or arrival proof."""
 
@@ -278,6 +296,7 @@ class FramingObservation(StrictModel):
     source_height: int = Field(strict=True, ge=2)
     bbox01: tuple[float, float, float, float]
     boundary_contact: bool = Field(strict=True)
+    panorama: PanoramaFraming | None = None
 
     @field_validator("bbox01")
     @classmethod

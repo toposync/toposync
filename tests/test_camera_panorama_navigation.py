@@ -2796,10 +2796,11 @@ def test_fresh_qualified_pose_retargets_a_moving_subject_without_waiting_for_a_q
     assert scanner.checkpoint["navigation_target_rebases"] == 1
 
 
-@pytest.mark.parametrize("velocity", [-.06, .03, .12])
+@pytest.mark.parametrize("velocity,trajectory", [(-.06, "constant"), (.03, "constant"), (.12, "constant"),
+    (.12, "stop"), (.12, "reverse"), (.12, "variable_delay")])
 @pytest.mark.parametrize("prediction_enabled,prediction_support", [(False, "none"), (True, "valid"),
     (True, "no_coverage"), (True, "velocity_disagreement")])
-def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monkeypatch, record_property, velocity, prediction_enabled, prediction_support):
+def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monkeypatch, record_property, velocity, trajectory, prediction_enabled, prediction_support):
     """Ideal synthetic pan plant; no device, decoder or physical timing qualification."""
     import math
     import json
@@ -2819,11 +2820,14 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
         def uncertain_predict(self, *args):
             candidate = original_predict(self, *args)
             if candidate:
-                candidate["comparison_ray"] = [math.cos(.6), math.sin(.6), 0.]
+                angle = math.atan2(candidate["ray"][1], candidate["ray"][0]) + .2
+                candidate["comparison_ray"] = [math.cos(angle), math.sin(angle), 0.]
             return candidate
         monkeypatch.setattr(navigation.TargetMotion, "predict", uncertain_predict)
 
     def target_angle():
+        if trajectory in ("stop", "reverse"):
+            return .18 + velocity * min(elapsed[0], .62) - (velocity * max(0., elapsed[0] - .62) if trajectory == "reverse" else 0.)
         return .18 + velocity * elapsed[0]
 
     def direction():
@@ -2838,14 +2842,19 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
             "capture_instance": "target-replay", "generation": 1, "sequence": observation_sequence[0],
             "observed_monotonic": 100. + elapsed[0]}
 
+    class ReplayDeadline(Exception):
+        pass
+
     class Navigator(VisualNavigator):
         def __init__(self):
             super().__init__(scanner, localizer)
             self.response = {"pan": np.array([-.5, 0.])}
             self.frames = 0
+            self.command_samples = []
 
         async def locate(self):
-            assert elapsed[0] < 8, "Tracking must make progress within the replay window"
+            if elapsed[0] >= 8:
+                raise ReplayDeadline("Tracking did not arrive within the eight-second replay window")
             self.frames += 1
             scanner.last_frame = {"received_monotonic": 100. + elapsed[0],
                 "capture_evidence": {"capture_instance": "replay", "generation": 1, "sequence": self.frames}}
@@ -2856,22 +2865,31 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
         async def _target_measurement(self, target, located):
             # Independent image-space oracle for this ideal camera and world angle.
             error = 560 * math.tan(math.atan2(target[1], target[0]) - camera_angle[0])
-            elapsed[0] += .08
+            elapsed[0] += ([.04, .18, .06, .12][self.commands % 4] if trajectory == "variable_delay" else .08)
             return {"center_error_pixels": abs(error), "error_pixels": [error, 0], "analysis_width": 960}
 
         async def _pulse(self, axis, amount, **kwargs):
             assert axis == "pan" and abs(amount) <= .6
             assert self.commands < self.maximum_commands
             assert scanner.checkpoint["navigation_step"]["observed_target_ray"] == pytest.approx(direction())
+            self.command_samples.append({"time": elapsed[0], "observed_angle": target_angle(),
+                "prediction": scanner.checkpoint["navigation_step"]["prediction"]})
             camera_angle[0] += .5 * amount
-            elapsed[0] += abs(amount) + .1  # The subject keeps moving through actuation and settling.
+            # The subject keeps moving through actuation and settling.
+            elapsed[0] += abs(amount) + ([.1, .45, .05, .2][self.commands % 4] if trajectory == "variable_delay" else .1)
             self.commands += 1
             self.trace.append({"axis": axis, "amount": amount})
             self.last_pulse_stationary = False
 
     navigator = Navigator()
     options = {"target_observation_provider": observation} if prediction_enabled else {}
-    if velocity == .12 and prediction_support != "valid":
+    if trajectory == "variable_delay" and prediction_support != "valid":
+        with pytest.raises(ReplayDeadline):
+            asyncio.run(navigator.aim(direction(), target_provider=direction, **options))
+        assert abs(560 * math.tan(target_angle() - camera_angle[0])) > 12
+        assert scanner.checkpoint.get("navigation_target_predictions", 0) == 0
+        outcome = "rejected_replay_deadline"
+    elif velocity == .12 and trajectory == "constant" and prediction_support != "valid":
         # This replay remains a known tracking failure; rejecting it is not mobile acceptance.
         with pytest.raises(PanoramaCaptureError, match="visual_arrival_unconfirmed"):
             asyncio.run(navigator.aim(direction(), target_provider=direction, **options))
@@ -2885,15 +2903,25 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
         assert abs(560 * math.tan(target_angle() - camera_angle[0])) <= 12
         assert 0 < navigator.commands <= 12
         outcome = "synthetic_arrival"
-        if velocity == .12:
+        if velocity == .12 and trajectory == "constant":
             assert scanner.checkpoint.get("navigation_target_predictions", 0) > 0
+        if trajectory in ("stop", "reverse"):
+            assert elapsed[0] > .62, "The replay must include the change, not finish before it"
+        if trajectory == "reverse" and prediction_support == "valid":
+            after_reversal = [sample for sample in navigator.command_samples if sample["time"] > .62]
+            assert after_reversal and after_reversal[0]["prediction"] is None
+            for sample in after_reversal:
+                if sample["prediction"]:
+                    ray = sample["prediction"]["ray"]
+                    assert math.atan2(ray[1], ray[0]) < sample["observed_angle"], "A new forecast must follow the reversed direction"
     assert scanner.checkpoint["navigation_target_rebases"] >= 1
-    record_property("tracking_replay", json.dumps({"velocity_radians_per_second": velocity,
+    record_property("tracking_replay", json.dumps({"velocity_radians_per_second": velocity, "trajectory": trajectory,
         "elapsed_seconds": elapsed[0], "commands": navigator.commands,
         "final_error_pixels": abs(560 * math.tan(target_angle() - camera_angle[0])),
         "rebases": scanner.checkpoint["navigation_target_rebases"], "outcome": outcome,
         "prediction_enabled": prediction_enabled, "predictions": scanner.checkpoint.get("navigation_target_predictions", 0),
         "prediction_support": prediction_support,
+        "command_samples": navigator.command_samples,
         "physical_tracking_verified": False}))
 
 

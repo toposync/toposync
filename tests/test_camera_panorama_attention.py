@@ -552,6 +552,45 @@ def group_destination(job):
 
 
 @pytest.mark.anyio
+async def test_entry_timing_preserves_waits_when_target_expires_before_navigation(monkeypatch):
+    from copy import deepcopy
+    service, job, _ = framing_service(monkeypatch)
+    clock = [50.]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    @asynccontextmanager
+    async def delayed_hold(*args):
+        clock[0] += .1
+        yield
+    async def mapping(**kwargs):
+        clock[0] += .2
+        return {"job": job}
+    async def localizer(*args):
+        clock[0] += .3
+        return service.reference_localizer.return_value
+    async def control(*args, **kwargs):
+        clock[0] += .4
+        return service.services.call.return_value
+    service.reference_coordinator.hold = delayed_hold
+    service.get_active.side_effect = mapping
+    service.reference_localizer.side_effect = localizer
+    service.services.call.side_effect = control
+    saved = []
+    service._save = lambda value: saved.append(deepcopy(value))
+    job["_attention_entry_history"] = [{"old": index} for index in range(8)]
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        await service.navigate_attention(destination=subject_destination(job, published_at=995.),
+            lease_id="attention", fence=7, command_id="expired")
+    service._visual_operation_with_pinned_reference.assert_not_awaited()
+    history = saved[-1]["_attention_entry_history"]
+    assert len(history) == 8 and history[0] == {"old": 1}
+    assert history[-1]["command_id"] == "expired"
+    assert history[-1]["last_stage"] == "control_checked"
+    assert history[-1]["elapsed_ms"] == pytest.approx({
+        "reference_acquired": 100, "mapping_resolved": 300,
+        "localizer_ready": 600, "control_checked": 1000})
+
+
+@pytest.mark.anyio
 async def test_temporal_group_drives_angular_navigation_and_checks_oldest_member_between_pulses(monkeypatch):
     from copy import deepcopy
     from toposync_ext_cameras.panorama_navigation import group_framing_rays

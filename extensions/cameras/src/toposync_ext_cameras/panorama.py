@@ -2395,7 +2395,9 @@ class PanoramaService:
                 or type(destination.get("revision")) is not int or destination["revision"] < 1):
             raise _error("invalid_target", "The attention command binding is invalid", 422)
         camera_id, source_id = destination.get("camera_id"), destination.get("source_id")
+        entry_started, entry_wall = time.monotonic(), time.time()
         async with self.reference_coordinator.hold(camera_id, source_id):
+            reference_acquired_ms = (time.monotonic() - entry_started) * 1000
             active = await self.get_active(camera_id=camera_id, source_id=source_id,
                 composition_id=destination.get("composition_id"), element_id=destination.get("element_id"))
             public = active.get("job")
@@ -2403,6 +2405,17 @@ class PanoramaService:
                 ("revision", "camera_id", "source_id", "composition_id", "element_id")) or public.get("id") != destination.get("job_id"):
                 raise _error("panorama_reference_changed", "The attention mapping changed")
             job = self.jobs[public["id"]]
+            entry = {"command_id": command_id, "returning": returning,
+                "started_at": entry_wall, "timing_clock": "process_monotonic",
+                "elapsed_ms": {"reference_acquired": reference_acquired_ms}}
+            job["_attention_entry_history"] = [*job.get("_attention_entry_history", []), entry][-8:]
+
+            def entry_stage(stage: str) -> None:
+                entry["last_stage"] = stage
+                entry["elapsed_ms"][stage] = (time.monotonic() - entry_started) * 1000
+                self._save(job)
+
+            entry_stage("mapping_resolved")
             if not self._attention_qualified(job):
                 raise _error("attention_physical_qualification_required", "Physical attention qualification is required")
             if returning and (target_provider is not None or destination.get("framing") is not None or destination.get("group_framing") is not None):
@@ -2412,6 +2425,7 @@ class PanoramaService:
             localizer = None
             if destination.get("framing") is not None or destination.get("group_framing") is not None or target_provider is not None:
                 localizer = await self.reference_localizer(camera_id, source_id, job["source_panorama"])
+            entry_stage("localizer_ready")
             started_wall, started_monotonic = time.time(), time.monotonic()
             reached = copy.deepcopy(destination)
 
@@ -2499,7 +2513,9 @@ class PanoramaService:
                     or owned.get("owner_kind") != "automation" or snapshot.get("automation_ready") is not True):
                 raise _error("control_lost", "Attention no longer owns exclusive camera control")
             follows_observation = target_provider is not None or destination.get("framing") is not None or destination.get("group_framing") is not None
+            entry_stage("control_checked")
             ray = current_ray()
+            entry_stage("target_refreshed")
             _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray},
                 borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12,
                 **({"target_provider": current_ray, "target_observation_provider": current_observation} if follows_observation else {}))
@@ -2517,6 +2533,7 @@ class PanoramaService:
             result = {"destination": reached, "command_id": command_id, "lease_id": lease_id,
                     "fence": fence, "motion_epoch": final.get("motion_epoch"), "stop_confirmed": True,
                     "returning": returning, "evidence": evidence}
+            entry_stage("arrival_verified")
             job["_attention_navigation_result"] = {**result, "observed_at": time.time(),
                 "control": {key: final.get(key) for key in ("geometry_safe", "motion_state", "physical_updated_at")}}
             self._save(job)

@@ -1127,6 +1127,7 @@ class VisualNavigator:
                 raise PanoramaCaptureError("visual_route_unavailable")
             measured_frame = self.scanner.last_frame
             measured_capture = deepcopy((measured_frame or {}).get("capture_evidence", {}))
+            measurement_started = time.monotonic()
             try:
                 measured = await self._target_measurement(target, located) if final else None
                 if final and target_provider is not None:
@@ -1158,6 +1159,7 @@ class VisualNavigator:
                     raise
                 self.scanner.last_frame = await self._renew_localization_frame(error)
                 continue
+            measurement_seconds = time.monotonic() - measurement_started
             if final:
                 observations.append({
                     "commands": self.commands,
@@ -1181,8 +1183,9 @@ class VisualNavigator:
                 continue
             prediction = None
             supported_axes = [axis for axis in ("pan", "tilt") if self.scanner.capabilities.get("axes", {}).get(axis) is True]
-            if final and supported_axes and all(axis in self.response for axis in supported_axes):
-                candidate = motion.predict(time.monotonic(), cycle_seconds)
+            if final and cycle_seconds > 0 and supported_axes and all(axis in self.response for axis in supported_axes):
+                # Arrival also waits for target measurement after the motor/localization cycle.
+                candidate = motion.predict(time.monotonic(), cycle_seconds + measurement_seconds)
                 coverage = getattr(self.localizer, "coverage_mask", None)
                 if candidate is not None and getattr(coverage, "ndim", None) == 2 and coverage.size:
                     estimates = [localized_axis_measurement(candidate[key], self.localizer.lens, located)
@@ -1196,7 +1199,8 @@ class VisualNavigator:
                     if supported and all(item is not None for item in estimates):
                         uncertainty = float(np.linalg.norm(np.asarray(estimates[0]["error_pixels"]) - estimates[1]["error_pixels"]))
                         if uncertainty <= maximum_error_pixels / 2:
-                            prediction = {**candidate, "velocity_disagreement_pixels": uncertainty}
+                            prediction = {**candidate, "velocity_disagreement_pixels": uncertainty,
+                                "motion_cycle_seconds": cycle_seconds, "measurement_seconds": measurement_seconds}
                             target = np.asarray(candidate["ray"])
                             measured = estimates[0]
                             error = self._error(target, located)

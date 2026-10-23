@@ -118,7 +118,8 @@ async def test_live_follow_uses_latest_target_and_stops_on_loss(finish):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stopped", [True, False])
-async def test_navigator_observation_expiry_between_ticks_enters_grace_only_after_stop(stopped):
+@pytest.mark.parametrize("service_error", [False, True])
+async def test_navigator_observation_expiry_between_ticks_enters_grace_only_after_stop(stopped, service_error):
     from fastapi import HTTPException
     clock, camera, services, _, calls, _, store, controller = environment(
         mode="live_panorama", qualified=True)
@@ -126,6 +127,9 @@ async def test_navigator_observation_expiry_between_ticks_enters_grace_only_afte
         candidate_confirm_seconds=.25, close_grace_seconds=5))
 
     async def expired(**kwargs):
+        if service_error:
+            from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
+            raise PanoramaCaptureError("following_observation_expired")
         raise HTTPException(409, detail={"code": "following_observation_expired"})
 
     services.register("cameras.panorama.navigate_attention", expired)

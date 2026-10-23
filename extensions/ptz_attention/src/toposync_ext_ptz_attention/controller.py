@@ -1978,15 +1978,16 @@ class PtzAttentionController:
             return
         except Exception as failure:
             detail = getattr(failure, "detail", None)
-            if (isinstance(detail, dict) and detail.get("code") == "following_observation_expired"
+            code = detail.get("code") if isinstance(detail, dict) else getattr(failure, "code", None)
+            if (code == "following_observation_expired"
                     and profile.follow_view_updates and runtime.state == "ACQUIRING"):
                 # The navigator can observe expiry between controller ticks.
                 if await self._stop_following_move(profile, runtime, now):
                     await self._expire_following_observation(profile, runtime, now)
                 return
-            if isinstance(detail, dict) and isinstance(detail.get("code"), str):
+            if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code):
                 self._record(profile, runtime, action="arrival_rejected",
-                    reason=detail["code"])
+                    reason=code)
             await self._fault(profile, runtime, "panorama_arrival_unconfirmed")
             return
         runtime.navigation_task = None

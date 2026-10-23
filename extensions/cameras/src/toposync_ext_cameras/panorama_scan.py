@@ -3870,6 +3870,11 @@ class _Scan:
                 while buffer_bytes + terminal_bytes + diagnostic.replay_bytes > FRAME_BUFFER_BYTES:
                     if len(frames) > 1 or (frames and len(terminal_frames) <= 1):
                         buffer_bytes -= frames.popleft()["image"].nbytes
+                    elif diagnostic.replay:
+                        # Keep control evidence before optional replay, preserving its initial anchor.
+                        encoded, _ = diagnostic.replay.pop(1 if len(diagnostic.replay) > 1 else 0)
+                        diagnostic.replay_bytes -= encoded.nbytes
+                        diagnostic.value["replay_truncated"] = True
                     elif terminal_frames:
                         terminal_bytes -= terminal_frames.popleft()["image"].nbytes
                     else:

@@ -5754,8 +5754,9 @@ def test_relocalization_keeps_early_pilot_evidence_as_the_scan_grows_without_rel
     assert not set(_event_names(camera)) & {"absolute", "velocity", "return"}
 
 
+@pytest.mark.parametrize("size,fps,noise_level", [((2880, 1620), 12, .5), ((3840, 2160), 24, 32)])
 def test_high_resolution_timeout_keeps_a_full_terminal_window_inside_shared_memory_budget(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size, fps, noise_level
 ):
     class HighResolutionWall(SimulatedCamera):
         async def move_absolute(self, **target):
@@ -5766,12 +5767,12 @@ def test_high_resolution_timeout_keeps_a_full_terminal_window_inside_shared_memo
             frame = await super().frame(**options)
             # 12 fps and 2880x1620 reproduce the real buffer pressure. Seven
             # integral RGB frames fit in96MiB, but span only half a second.
-            self.now -= 0.1 - 1 / 12
+            self.now -= 0.1 - 1 / fps
             frame["received_monotonic"] = self.now
-            frame["media_time"] = frame["sequence"] / 12
-            noise = np.random.default_rng(frame["sequence"]).normal(0, 0.5, (540, 960))
+            frame["media_time"] = frame["sequence"] / fps
+            noise = np.random.default_rng(frame["sequence"]).normal(0, noise_level, (540, 960))
             gray = np.clip(127 + noise, 0, 255).astype(np.uint8)
-            frame["image"] = cv2.cvtColor(cv2.resize(gray, (2880, 1620)), cv2.COLOR_GRAY2BGR)
+            frame["image"] = cv2.cvtColor(cv2.resize(gray, size), cv2.COLOR_GRAY2BGR)
             return frame
 
     camera = HighResolutionWall()
@@ -5780,16 +5781,19 @@ def test_high_resolution_timeout_keeps_a_full_terminal_window_inside_shared_memo
         camera, tmp_path, _progress, lambda: False, {"plan": [{"pan": 0.1, "tilt": 0.05, "row": 0}]}
     )
     scanner.last_pose = camera._position()
-    asyncio.run(scanner._absolute_scan(camera.capabilities["limits"]))
+    with pytest.raises(PanoramaCaptureError):
+        asyncio.run(scanner._absolute({"pan": 0.1, "tilt": 0.05}))
     assert _event_names(camera).count("absolute") == 1
     attempt = scanner.checkpoint["diagnostics"]["attempts"][-1]
     assert attempt["terminal_frame_count"] >= 10
     assert attempt["terminal_window_seconds"] >= 0.8
     assert attempt["frame_buffer_peak_bytes"] <= 96 * 1024**2
-    assert attempt["terminal_scene"]["classification"] == "scene_texture_insufficient"
+    assert attempt["terminal_scene"]["transport_window_verified"] is True
+    if noise_level < 1:
+        assert attempt["terminal_scene"]["classification"] == "scene_texture_insufficient"
     rejected = scanner.checkpoint["rejected_observations"][-1]
     assert (rejected["image_width"], rejected["image_height"]) == (960, 540)
-    assert (rejected["source_width"], rejected["source_height"]) == (2880, 1620)
+    assert (rejected["source_width"], rejected["source_height"]) == size
     assert rejected["image_representation"] == "analysis" and rejected["qualified_capture"] is False
     assert cv2.imread(rejected["path"]).shape[:2] == (540, 960)
     assert not scanner.captures and not scanner.boundaries

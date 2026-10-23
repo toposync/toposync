@@ -730,6 +730,56 @@ def test_navigation_converges_or_refuses_unattainable_motor_precision(target_yaw
     )
 
 
+@pytest.mark.parametrize("response_ratio", [1., 3.08, -1.])
+def test_navigation_checks_low_velocity_response_before_another_correction(response_ratio):
+    lens = {"width": 960, "height": 540, "fx": 573.3, "fy": 573.3,
+            "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"velocity_supported": True, "axes": {"pan": True}},
+                              checkpoint={}, last_frame={"capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+                                target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            # Recorded planning error/gain before the failed fine return.
+            self.error = np.array([-.005886505, 0.])
+            self.response = {"pan": np.array([-.28619564, 0.])}
+            self.speeds = []
+
+        async def locate(self):
+            return {**reference, "reference_id": "reference"}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            pixels = np.tan(self.error) * lens["fx"]
+            return {"error_pixels": pixels.tolist(), "center_error_pixels": float(np.linalg.norm(pixels)),
+                    "analysis_width": 960}
+
+        async def _pulse(self, axis, amount, *, speed=.1):
+            assert self.commands == 0, "A contradicted speed model must not authorize another pulse"
+            self.commands += 1
+            self.speeds.append(speed)
+            self.trace.append({"axis": axis, "amount": amount, "speed": speed, "state": "observed"})
+            self.error += self.response[axis] * amount * speed / .1 * response_ratio
+
+    navigator = Navigator()
+    if response_ratio == 1.:
+        result = asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=3))
+        assert result["verified"] and result["measurement"]["center_error_pixels"] <= 3
+    else:
+        with pytest.raises(PanoramaCaptureError, match="visual_response_inconsistent"):
+            asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=3))
+        assert navigator.trace[-1]["response_qualified"] is False
+        assert navigator.trace[-1]["failure_code"] == "visual_response_inconsistent"
+    assert navigator.speeds == [.025]
+    assert navigator.trace[-1]["response_ratio"] == pytest.approx(abs(response_ratio))
+    assert navigator.response["pan"] == pytest.approx([-.28619564, 0.])
+
+
 def test_minimum_pulse_is_used_only_when_observed_response_predicts_improvement():
     # Ideal correction is 22 ms, but a 50 ms pulse still improves this error.
     response = np.array([[.28], [0]])
@@ -2074,10 +2124,11 @@ def test_live_navigation_uses_existing_fine_pulses_before_acceleration_can_overs
 
 
 @pytest.mark.parametrize("outcome", ["corrected", "repeated", "same_direction", "outside_envelope"])
-def test_live_return_allows_only_one_small_observed_target_crossing(outcome):
+@pytest.mark.parametrize("continuous", [False, True])
+def test_live_return_allows_only_one_small_observed_target_crossing(outcome, continuous):
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
-    scanner = SimpleNamespace(capabilities={"velocity_supported": True, "axes": {"pan": True}},
+    scanner = SimpleNamespace(capabilities={"velocity_supported": continuous, "axes": {"pan": True}},
         checkpoint={}, last_frame={"capture_evidence": {}})
     localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
         target_reference=lambda _: reference)
@@ -2107,6 +2158,14 @@ def test_live_return_allows_only_one_small_observed_target_crossing(outcome):
 
     navigator = Navigator()
     operation = navigator.aim([1, 0, 0], maximum_error_pixels=3)
+    if continuous:
+        # These fixed endpoints contradict the scaled low-speed prediction.
+        # A bounded crossing cannot authorize reuse of that contradicted model.
+        with pytest.raises(PanoramaCaptureError, match="visual_response_inconsistent"):
+            asyncio.run(operation)
+        assert navigator.commands == 2 and navigator.trace[-1]["speed"] < .1
+        assert not any(item.get("bounded_overshoot_recovery") for item in navigator.trace)
+        return
     if outcome == "corrected":
         result = asyncio.run(operation)
         assert result["measurement"]["center_error_pixels"] <= 3

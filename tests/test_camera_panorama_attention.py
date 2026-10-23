@@ -59,7 +59,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status",
     "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence",
     "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup",
-    "parallel_reference", "parallel_reference_failure"])
+    "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
+    "metadata_expired", "metadata_control_failure", "metadata_stop_failure"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -296,8 +297,32 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         if reuse == "metadata_refresh_failure":
             following.refresh_discovery_observations.side_effect = PanoramaCaptureError("camera_configuration_changed")
             scanner.acquired = False
+        interrupted = reuse in {"metadata_cancelled", "metadata_expired", "metadata_control_failure", "metadata_stop_failure"}
+        if interrupted:
+            navigator.aim.side_effect = (module.asyncio.CancelledError() if reuse == "metadata_cancelled"
+                else PanoramaCaptureError("control_lease_lost" if reuse == "metadata_control_failure"
+                                          else "following_observation_expired"))
+            if reuse == "metadata_stop_failure":
+                service._attention_stopped_control.return_value = False
         operation = service._visual_operation_with_pinned_reference(None, job, {"ray": [0, 0, 1]},
             borrowed_control={"lease_id": "attention", "fence": 8 if reuse == "metadata_fence" else 7})
+        if interrupted:
+            with pytest.raises(module.asyncio.CancelledError if reuse == "metadata_cancelled" else HTTPException):
+                await operation
+            retained = reuse in {"metadata_cancelled", "metadata_expired"}
+            assert ("camera" in service._attention_metadata) is retained
+            following.close.assert_awaited_once()
+            if retained:
+                assert service._attention_metadata["camera"]["camera"] is following
+                navigator.aim.side_effect = None
+                await service._visual_operation_with_pinned_reference(None, job, {"ray": [0, 0, 1]},
+                    borrowed_control={"lease_id": "attention", "fence": 7})
+                assert job["_attention_navigation_trace"]["discovery_reused"] is True
+                following.discover.assert_not_awaited()
+                assert following.refresh_discovery_observations.await_count == 2
+                assert following.acquire.await_count == 2
+            assert not service._navigation_scanners and not service.busy
+            return
         if reuse == "metadata_refresh_failure":
             with pytest.raises(HTTPException) as failure:
                 await operation

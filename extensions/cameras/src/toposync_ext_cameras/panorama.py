@@ -1838,7 +1838,8 @@ class PanoramaService:
             finally:
                 try:
                     await camera.close()
-                    if (borrowed_control is not None and not failure_code and job.get("stop_confirmed")
+                    if (borrowed_control is not None and job.get("stop_confirmed")
+                            and failure_code in {None, "capture_cancelled", "following_observation_expired"}
                             and callable(getattr(camera, "reuse_discovery_from", None))):
                         self._attention_metadata[job["camera_id"]] = {
                             "binding": copy.deepcopy(metadata_binding), "camera": camera}

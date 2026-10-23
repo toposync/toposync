@@ -348,3 +348,53 @@ async def test_framing_continuity_is_per_event_and_close_interrupts_it(following
     assert decision.details["observed_framing"]["continuity"]["observed_span_seconds"] == 0
     await controller.shutdown()
     store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enlarged", [[.125, .0625, .875, .9375], [0., 0., 1., 1.]])
+async def test_extent_change_refreshes_framing_without_repeating_same_center_movement(enlarged):
+    import asyncio
+    from test_panorama_attention import event, panorama_profile
+
+    clock, _, _, state, calls, _, store, controller = environment(mode="live_panorama", qualified=True)
+    state["revision"] = 3
+    profile = panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.1, follow_interval_seconds=.2)
+    store.replace_profile(profile)
+
+    async def observe(sequence, bbox, lifecycle="update"):
+        packet = observed_packet()
+        packet.payload["capture_evidence"].update(sequence=sequence, published_at=clock())
+        packet.artifacts["main"].metadata["image_geometry"] = image_geometry(201, 101, packet.payload["capture_evidence"])
+        packet.payload["subject"]["bbox01"] = bbox
+        framed = observation(with_localization(packet))
+        await controller.submit_intent(event(clock, lifecycle=lifecycle).model_copy(update={
+            "framing_observation": framed, "capture_evidence": packet.payload["capture_evidence"]}))
+        return framed
+
+    await observe(4, [.375, .25, .625, .75], "open")
+    clock.advance(.2)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    assert len(calls) == 1 and controller.status()[0].state == "FOCUSED"
+    original_center = calls[0]["destination"]["framing"]["panorama"]["center_ray"]
+    for sequence in (5, 6):
+        clock.advance(.2)
+        updated = await observe(sequence, enlarged)
+        await asyncio.sleep(0)
+        await controller.tick_once()
+    assert updated.panorama.center_ray == pytest.approx(original_center)
+    assert len(calls) == 1, "Size alone cannot be corrected by aiming at the same center again"
+    assert controller.status()[0].active_target["framing"]["sequence"] == 6
+    assert controller.status()[0].observed_framing["bbox01"] == pytest.approx(enlarged)
+    assert controller.status()[0].observed_framing["boundary_contact"] is (enlarged[0] == 0.)
+    assert controller.status()[0].observed_framing["box_with_margin"] is (enlarged[0] > 0.)
+    for sequence in (7, 8):
+        clock.advance(.2)
+        await observe(sequence, [.25, .0625, 1., .9375])
+        await asyncio.sleep(0)
+        await controller.tick_once()
+    assert len(calls) == 2, "A new observed center must still trigger following"
+    await controller.shutdown()
+    store.close()

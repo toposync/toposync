@@ -43,7 +43,11 @@ for region validation and the returned destination. It checks the exact optical
 reference, center/corner support and observation age before navigation and before
 subsequent pulses, using the profile's existing following observation timeout.
 Frame updates at an unchanged target refresh evidence without requesting another
-approach. Missing, expired or incompatible evidence during framed following stops
+approach. For fixed-lens navigation, changing only the observed extent also
+refreshes evidence without another approach to the same center. Crop contact
+remains reported; coalescing commands does not certify coverage or that the subject
+fits. Navigation still validates the current reference and corner coverage. A different center
+still requires following. Missing, expired or incompatible evidence during framed following stops
 that navigation; it never silently switches to aiming at the feet. Return uses
 only its own reference and rejects subject framing. These checks do not certify
 full subject visibility, group framing or association with another lens.

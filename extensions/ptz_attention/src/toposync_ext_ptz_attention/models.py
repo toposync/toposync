@@ -412,7 +412,8 @@ class ResolvedTarget(StrictModel):
         import json
         target = self.panorama.model_dump(mode="json", exclude={"framing"})
         if self.panorama.framing and self.panorama.framing.panorama:
-            target["framing"] = self.panorama.framing.panorama.model_dump(mode="json")
+            # Fixed-lens navigation aims at the center; extent-only changes refresh evidence.
+            target["framing"] = self.panorama.framing.panorama.model_dump(mode="json", exclude={"corner_rays"})
         return json.dumps(target, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 

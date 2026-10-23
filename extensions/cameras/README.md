@@ -147,8 +147,15 @@ or a direction change exceeding half the arrival tolerance discards the proposal
 and replans. Smaller changes require qualified projection on the same reference.
 The guard is temporary, is not persisted, and never applies to Stop or a later
 return. Rejected attempts remain bounded and visible in the navigation trace.
-This checks controller admission to transport; later ONVIF preparation and network
-waits still need their own timing/validity checks before physical qualification.
+The same guard runs again after ONVIF preparation, immediately before the mutation
+request, for absolute, relative, continuous and preset moves. The guard also
+rechecks control expiry and fencing. A refusal preserves its original reason,
+records a failed command without dispatch, and
+permits replanning under the existing lease; it does not certify a stable pose.
+The same command identifier cannot dispatch again. Failures after dispatch remain
+ambiguous, and guarded continuous moves never fall back to a relative move.
+Stop remains exempt. Request transmission, device execution and physical exposure
+are still separate events; this check does not guarantee their latency or outcome.
 
 ### Bounded PTZ control leases
 

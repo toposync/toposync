@@ -1299,7 +1299,8 @@ class OnvifClient:
         )
         _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
-    async def goto_preset(self, ptz_xaddr: str, *, profile_token: str, preset_token: str) -> None:
+    async def goto_preset(self, ptz_xaddr: str, *, profile_token: str, preset_token: str,
+                          dispatch_guard: Callable[[], None] | None = None) -> None:
         url = str(ptz_xaddr or "").strip()
         profile = str(profile_token or "").strip()
         preset = str(preset_token or "").strip()
@@ -1318,6 +1319,7 @@ class OnvifClient:
             body_xml=body_xml,
             soap_action=soap_action,
             operation="GotoPreset",
+            on_dispatch=dispatch_guard,
         )
         _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
@@ -1346,6 +1348,7 @@ class OnvifClient:
         pan: float | None,
         tilt: float | None,
         zoom: float | None,
+        dispatch_guard: Callable[[], None] | None = None,
     ) -> None:
         url = str(ptz_xaddr or "").strip()
         token = str(profile_token or "").strip()
@@ -1366,6 +1369,7 @@ class OnvifClient:
             body_xml=body_xml,
             soap_action=soap_action,
             operation="AbsoluteMove",
+            on_dispatch=dispatch_guard,
         )
         _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
@@ -1378,6 +1382,7 @@ class OnvifClient:
         tilt: float,
         zoom: float,
         timeout_s: float | None = None,
+        dispatch_guard: Callable[[], None] | None = None,
     ) -> dict[str, float]:
         url = str(ptz_xaddr or "").strip()
         token = str(profile_token or "").strip()
@@ -1392,6 +1397,8 @@ class OnvifClient:
 
         def dispatched() -> None:
             nonlocal dispatched_at
+            if dispatch_guard is not None:
+                dispatch_guard()
             dispatched_at = time.monotonic()
 
         payload, soap_ns = await self._call_ptz_mutation_once(
@@ -1416,6 +1423,7 @@ class OnvifClient:
         pan: float,
         tilt: float,
         zoom: float,
+        dispatch_guard: Callable[[], None] | None = None,
     ) -> None:
         url = str(ptz_xaddr or "").strip()
         token = str(profile_token or "").strip()
@@ -1432,6 +1440,7 @@ class OnvifClient:
             body_xml=body_xml,
             soap_action=soap_action,
             operation="RelativeMove",
+            on_dispatch=dispatch_guard,
         )
         _parse_ptz_mutation_response(payload, soap_ns=soap_ns)
 
@@ -1615,9 +1624,10 @@ class OnvifClient:
             profile_token=profile_token,
             preflight=preflight,
         )
+        # A rejected precondition sent nothing; only failures after dispatch are ambiguous.
+        if on_dispatch is not None:
+            on_dispatch()
         try:
-            if on_dispatch is not None:
-                on_dispatch()
             payload = await self._call(
                 url=url,
                 body_xml=body_xml,

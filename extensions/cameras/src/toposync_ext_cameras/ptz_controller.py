@@ -590,6 +590,31 @@ class PtzController:
         )
         now_monotonic = self._monotonic()
 
+        guard_error: Exception | None = None
+        execution_pending = False
+        def check_dispatch():
+            nonlocal guard_error
+            guard_error = None
+            try:
+                if execution_pending:
+                    self._ensure_accepting_commands()
+                    current = device.lease
+                    if (current is None or current.lease_id != lid or current.fence != fence
+                            or device.fence != fence or current.expires_at_monotonic <= self._monotonic()
+                            or device.state != "executing" or device.last_command_id != command_key
+                            or device.motion_epoch != command_motion_epoch):
+                        raise PtzControlError("PTZ control changed before dispatch")
+                if not callable(dispatch_guard):
+                    raise PtzControlError("Command dispatch guard must be synchronous")
+                checked = dispatch_guard()
+                if checked is not None:
+                    if inspect.iscoroutine(checked):
+                        checked.close()
+                    raise PtzControlError("Command dispatch guard must return None or raise")
+            except Exception as error:
+                guard_error = error
+                raise
+
         async with self._lock:
             self._ensure_accepting_commands()
             device, lease = self._lease_locked(
@@ -681,13 +706,7 @@ class PtzController:
                         f"PTZ device '{device.ptz_device_id}' is faulted; use a full stop or emergency_stop"
                     )
                 if normalized_command["kind"] != "stop" and dispatch_guard is not None:
-                    if not callable(dispatch_guard):
-                        raise PtzControlError("Command dispatch guard must be synchronous")
-                    checked = dispatch_guard()
-                    if checked is not None:
-                        if inspect.iscoroutine(checked):
-                            checked.close()
-                        raise PtzControlError("Command dispatch guard must return None or raise")
+                    check_dispatch()
                 self._record_command_intent_locked(
                     device,
                     command_id=command_key,
@@ -713,6 +732,7 @@ class PtzController:
                 command_motion_epoch = int(device.motion_epoch)
 
             failed = False
+            rejected_before_dispatch = False
             error_text = ""
             failure_code: PtzFailureCode | None = None
             failure_stage: PtzFailureStage | None = None
@@ -725,6 +745,9 @@ class PtzController:
                 }
                 if lease.transport_binding is not None:
                     execute_kwargs["transport_context"] = lease.transport_binding.context
+                if normalized_command["kind"] != "stop" and dispatch_guard is not None:
+                    execute_kwargs["dispatch_guard"] = check_dispatch
+                execution_pending = True
                 raw = self._execute_command(
                     **execute_kwargs,
                 )
@@ -756,9 +779,12 @@ class PtzController:
                 raise
             except Exception as exc:  # noqa: BLE001
                 failed = True
+                rejected_before_dispatch = exc is guard_error
                 error_text = str(exc).strip() or exc.__class__.__name__
                 failure_code, failure_stage = _classify_execution_failure(exc)
                 command_payload = {"ok": False, "error": error_text}
+                if rejected_before_dispatch:
+                    command_payload["dispatched"] = False
 
             async with self._lock:
                 command_elapsed = max(0.0, self._monotonic() - command_started)
@@ -826,7 +852,9 @@ class PtzController:
                 )
                 if still_current:
                     if failed:
-                        device.state = "fault"
+                        device.state = (
+                            "manual_override" if lease.owner_kind == "manual" else "holding"
+                        ) if rejected_before_dispatch else "fault"
                         device.last_error = error_text
                     else:
                         device.state = (
@@ -845,6 +873,9 @@ class PtzController:
                             timeout_s=pulse_remaining,
                         )
 
+            if rejected_before_dispatch:
+                assert guard_error is not None
+                raise guard_error
             if failed:
                 raise PtzControlError(
                     error_text,

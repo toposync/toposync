@@ -17,7 +17,7 @@ import urllib.parse
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
@@ -2950,6 +2950,7 @@ class CamerasExtension(BaseExtension):
             preset_token: str,
             camera_source_id: str | None = None,
             transport_context: Any | None = None,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
             cid = str(camera_id or "").strip()
             token = str(preset_token or "").strip()
@@ -2976,6 +2977,7 @@ class CamerasExtension(BaseExtension):
                         ptz_xaddr,
                         profile_token=profile_token,
                         preset_token=token,
+                        **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                     )
                 except OnvifError as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -3039,6 +3041,7 @@ class CamerasExtension(BaseExtension):
             tilt: float | None = None,
             zoom: float | None = None,
             transport_context: Any | None = None,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
             def _safe_optional_float(value: float | None) -> float | None:
                 if value is None:
@@ -3080,6 +3083,7 @@ class CamerasExtension(BaseExtension):
                         pan=safe_pan,
                         tilt=safe_tilt,
                         zoom=safe_zoom,
+                        **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                     )
                 except OnvifError as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -3089,6 +3093,7 @@ class CamerasExtension(BaseExtension):
             *, camera_id: str, camera_source_id: str | None = None,
             pan: float = 0.0, tilt: float = 0.0, zoom: float = 0.0,
             transport_context: Any | None = None,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
             client, endpoint, token, source_id, _ = await _resolve_ptz_operation_context(
                 camera_id=camera_id, camera_source_id=camera_source_id,
@@ -3098,7 +3103,8 @@ class CamerasExtension(BaseExtension):
             async with _get_onvif_ptz_lock(key):
                 _clear_ptz_preset_tracking(key)
                 try:
-                    await client.relative_move(endpoint, profile_token=token, pan=pan, tilt=tilt, zoom=zoom)
+                    await client.relative_move(endpoint, profile_token=token, pan=pan, tilt=tilt, zoom=zoom,
+                        **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}))
                 except OnvifError as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
             return {"ok": True}
@@ -3113,7 +3119,10 @@ class CamerasExtension(BaseExtension):
             timeout_s: float | None = None,
             transport_context: Any | None = None,
             allow_relative_fallback: bool = True,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
+            # A guarded proposal must not become a different movement after an uncertain reply.
+            allow_relative_fallback = allow_relative_fallback and dispatch_guard is None
             cid = str(camera_id or "").strip()
             (
                 client,
@@ -3196,6 +3205,7 @@ class CamerasExtension(BaseExtension):
                         tilt=safe_tilt,
                         zoom=safe_zoom,
                         timeout_s=device_timeout,
+                        **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                     )
                 except OnvifError as exc:
                     # Some devices reject ContinuousMove (HTTP 400) but support RelativeMove.
@@ -3456,6 +3466,7 @@ class CamerasExtension(BaseExtension):
             camera_source_id: str | None,
             command: dict[str, Any],
             transport_context: Any | None = None,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
             kind = str(command.get("kind") or "").strip()
             if kind == "goto_preset":
@@ -3464,6 +3475,7 @@ class CamerasExtension(BaseExtension):
                     camera_source_id=camera_source_id,
                     preset_token=str(command.get("preset_token") or "").strip(),
                     transport_context=transport_context,
+                    **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                 )
             if kind == "absolute_move":
                 return await _svc_ptz_absolute_move(
@@ -3473,6 +3485,7 @@ class CamerasExtension(BaseExtension):
                     tilt=command.get("tilt"),
                     zoom=command.get("zoom"),
                     transport_context=transport_context,
+                    **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                 )
             if kind == "continuous_move":
                 return await _svc_ptz_continuous_move(
@@ -3483,6 +3496,7 @@ class CamerasExtension(BaseExtension):
                     zoom=float(command.get("zoom") or 0.0),
                     timeout_s=float(command.get("timeout_s") or 0.5),
                     transport_context=transport_context,
+                    **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                     allow_relative_fallback=command.get("allow_relative_fallback", True),
                 )
             if kind == "relative_move":
@@ -3492,6 +3506,7 @@ class CamerasExtension(BaseExtension):
                     tilt=float(command.get("tilt") or 0.0),
                     zoom=float(command.get("zoom") or 0.0),
                     transport_context=transport_context,
+                    **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                 )
             if kind == "stop":
                 return await _svc_ptz_stop(

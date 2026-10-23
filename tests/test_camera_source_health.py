@@ -708,7 +708,7 @@ def test_onvif_ptz_control_rejects_ambiguous_source_profile_binding(
 
 @pytest.mark.parametrize(
     "movement_mode",
-    ["continuous_move", "relative_move", "strict_continuous", "strict_missing_timeout"],
+    ["continuous_move", "relative_move", "strict_continuous", "strict_missing_timeout", "guarded_rejection", "guarded_network"],
 )
 def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
     tmp_path: Path,
@@ -718,6 +718,10 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
     from toposync_ext_cameras.onvif import OnvifError, OnvifPtzPreset, OnvifPtzStatus
 
     device_state = {"move_status": "IDLE", "continuous_unsupported": False}
+    target_valid = [True]
+    def dispatch_guard():
+        if not target_valid[0]:
+            raise RuntimeError("target expired during timeout preparation")
     calls: list[str] = []
     preset_records = {"home": "Home"}
 
@@ -763,11 +767,13 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
             return "temporary-42"
 
         async def goto_preset(
-            self, ptz_xaddr: str, *, profile_token: str, preset_token: str
+            self, ptz_xaddr: str, *, profile_token: str, preset_token: str, dispatch_guard=None
         ) -> None:
             assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
             assert profile_token == "ptz-token"
             assert preset_token == "home"
+            if dispatch_guard is not None:
+                dispatch_guard()
             calls.append("goto")
 
         async def remove_preset(
@@ -787,14 +793,19 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
             pan: float | None,
             tilt: float | None,
             zoom: float | None,
+            dispatch_guard=None,
         ) -> None:
             assert ptz_xaddr == "http://192.168.0.10/onvif/ptz_service"
             assert profile_token == "ptz-token"
             assert (pan, tilt, zoom) == (0.1, 0.2, 0.3)
+            if dispatch_guard is not None:
+                dispatch_guard()
             calls.append("absolute")
 
         async def continuous_move_timeout(self, ptz_xaddr, *, profile_token, requested_s, media_xaddr=None):
             assert profile_token == "ptz-token"
+            if movement_mode == "guarded_rejection":
+                target_valid[0] = False
             return None if movement_mode == "strict_missing_timeout" else 1.0
 
         async def continuous_move(
@@ -806,9 +817,12 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
             tilt: float,
             zoom: float,
             timeout_s: float | None,
+            dispatch_guard=None,
         ) -> None:
             _ = ptz_xaddr, profile_token, pan, tilt, zoom
             assert timeout_s == 1.0
+            if dispatch_guard is not None:
+                dispatch_guard()
             calls.append("continuous")
             if bool(device_state["continuous_unsupported"]):
                 raise OnvifError("ONVIF HTTP error (400)")
@@ -905,6 +919,7 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
                     fence=lease["fence"],
                     command_id=f"source-health-{command_sequence}",
                     command=command,
+                    **({"dispatch_guard": dispatch_guard} if movement_mode.startswith("guarded_") else {}),
                 )
 
             cold_start = await services.call("cameras.ptz.get_status", **common)
@@ -954,13 +969,15 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
             from toposync_ext_cameras.ptz_controller import PtzControlError
             strict_error = (
                 "400"
-                if movement_mode == "strict_continuous"
+                if movement_mode in {"strict_continuous", "guarded_network"}
                 else "timeout"
                 if movement_mode == "strict_missing_timeout"
                 else None
             )
             with (
-                pytest.raises(PtzControlError, match=strict_error)
+                pytest.raises(RuntimeError, match="target expired during timeout preparation")
+                if movement_mode == "guarded_rejection"
+                else pytest.raises(PtzControlError, match=strict_error)
                 if strict_error is not None
                 else nullcontext()
             ):
@@ -979,6 +996,9 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
                     }
                 )
                 assert movement_result["accepted"] is True
+            if movement_mode.startswith("guarded_"):
+                await submit_control({"kind": "stop", "pan_tilt": True, "zoom": True})
+                return {"guarded_rejected": True}
             if movement_mode in {"strict_continuous", "strict_missing_timeout"}:
                 return {"strict_rejected": True}
             after_relative_fallback = await services.call("cameras.ptz.get_status", **common)
@@ -1019,6 +1039,12 @@ def test_onvif_ptz_service_uses_onvif_credentials_and_ptz_profile_token(
 
         result = client.portal.call(exercise_tracking)
 
+    if movement_mode.startswith("guarded_"):
+        assert result == {"guarded_rejected": True}
+        assert "relative" not in calls
+        assert ("continuous" in calls) is (movement_mode == "guarded_network")
+        assert calls[-1] == "stop"
+        return
     if movement_mode in {"strict_continuous", "strict_missing_timeout"}:
         assert result == {"strict_rejected": True}
         assert "relative" not in calls

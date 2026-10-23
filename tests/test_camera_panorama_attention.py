@@ -832,3 +832,105 @@ async def test_following_subject_is_rechecked_before_commands_and_arrival(monkey
         await service.navigate_attention(destination=destination, lease_id="attention", fence=7,
             command_id="command", target_provider=lambda: updated)
     assert "_attention_navigation_result" not in job
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('outcome', ['native', 'visual', 'arrival_failure', 'restore_failure', 'cleanup_failure', 'visual_mismatch', 'cancel'])
+async def test_qualification_preserves_starting_view_until_verified_recovery(monkeypatch, tmp_path, outcome):
+    import asyncio
+    import copy
+    import numpy as np
+    from toposync_ext_cameras import panorama_scan, panorama_navigation
+
+    job = bound_job()
+    frame = {'image': np.zeros((16, 16, 3), dtype=np.uint8), 'capture_evidence': {'sequence': 1}}
+    camera = SimpleNamespace(discover=AsyncMock(return_value={}), acquire=AsyncMock(),
+        position=AsyncMock(return_value={}), close=AsyncMock(), remove_return=AsyncMock())
+    scanner = SimpleNamespace(acquired=False, physical_state='stopped', last_frame=frame,
+        saved_return=None, checkpoint={}, _stop=AsyncMock(return_value=True),
+        _reference_window=AsyncMock(return_value=frame), _private_image=lambda path: frame['image'])
+    persisted = []
+
+    async def persist():
+        scanner.checkpoint['return'] = copy.deepcopy(scanner.saved_return)
+        persisted.append(copy.deepcopy(scanner.checkpoint))
+
+    async def save_original():
+        assert scanner.checkpoint['initial_path']
+        if outcome in {'visual', 'visual_mismatch'}:
+            return False
+        scanner.saved_return = {'kind': 'preset', 'token': 'owned'}
+        await persist()
+        return True
+
+    async def restore():
+        if outcome == 'restore_failure':
+            raise PanoramaCaptureError('return_framing_unconfirmed')
+        scanner.physical_state = 'restored'
+
+    async def stop():
+        scanner.physical_state = 'stopped'
+
+    scanner._persist = AsyncMock(side_effect=persist)
+    scanner._save_original_destination = AsyncMock(side_effect=save_original)
+    scanner._restore = AsyncMock(side_effect=restore)
+    scanner._confirm_stop = AsyncMock(side_effect=stop)
+    navigator = SimpleNamespace(commands=0, response={})
+    destinations = []
+
+    async def aim(ray, **kwargs):
+        # Recovery is durable before even the first qualification movement.
+        assert any(item.get('initial_path') and item.get('visual_original_ray') for item in persisted)
+        destinations.append(ray)
+        navigator.commands += 1
+        if len(destinations) == 2:
+            if outcome == 'arrival_failure':
+                raise PanoramaCaptureError('visual_response_unavailable')
+            if outcome == 'cancel':
+                raise asyncio.CancelledError()
+        return {'verified': True, 'kind': 'visual_aim_verified', 'commands': navigator.commands,
+            'measurement': {'center_error_pixels': 1}}
+
+    navigator.aim = AsyncMock(side_effect=aim)
+    if outcome == 'cleanup_failure':
+        camera.remove_return.side_effect = PanoramaCaptureError('return_cleanup_unconfirmed')
+    monkeypatch.setattr(panorama_scan, '_Scan', lambda *args: scanner)
+    monkeypatch.setattr(panorama_scan, '_write_image', lambda *args: None)
+    monkeypatch.setattr(panorama_scan, '_match', lambda *args: {
+        'verified': True, 'overlap': .99, 'displacement': 4 if outcome == 'visual_mismatch' else 1})
+    monkeypatch.setattr(panorama_navigation, 'VisualNavigator', lambda *args: navigator)
+    service = object.__new__(PanoramaService)
+    service.root, service.services = tmp_path, SimpleNamespace()
+    service.camera_factory = lambda **kwargs: camera
+    service._reserve = AsyncMock()
+    service._navigation_scanners, service.busy, service.cancelled = {}, {}, set()
+    service._attention_responses, service._attention_metadata = {}, {}
+    service._save = lambda job: None
+    service._current = AsyncMock()
+    service.localize_frame = AsyncMock(return_value={'status': 'localized', 'rotation_matrix': np.eye(3).tolist()})
+    service._localizers = {('artifact', 'geometry'): SimpleNamespace(lens={})}
+    service._image_write = lambda *args: None
+    service._image_url = lambda job, name: name
+    operation = service._visual_operation_with_pinned_reference(None, job,
+        {'ray': [0, 0, 1]}, qualification_home={'ray': [0, 1, 0]})
+    if outcome in {'native', 'visual'}:
+        _, evidence = await operation
+        assert [stage['stage'] for stage in evidence['stages']] == ['home', 'arrival', 'return']
+        assert job['navigation']['physical_state'] == 'restored'
+        assert not job['navigation']['can_return']
+        assert not scanner.saved_return and 'initial_path' not in scanner.checkpoint
+        if outcome == 'visual':
+            assert destinations[-1] == [1, 0, 0]
+            camera.remove_return.assert_not_awaited()
+        else:
+            camera.remove_return.assert_awaited_once_with({'kind': 'preset', 'token': 'owned'})
+    else:
+        with pytest.raises(asyncio.CancelledError if outcome == 'cancel' else HTTPException):
+            await operation
+        assert job['navigation']['can_return']
+        assert scanner.checkpoint['initial_path']
+        assert scanner.checkpoint['visual_original_ray'] == [1, 0, 0]
+        if outcome != 'visual_mismatch':
+            assert scanner.checkpoint['return'] == {'kind': 'preset', 'token': 'owned'}
+    assert job['stop_confirmed'] is True
+    camera.close.assert_awaited_once()

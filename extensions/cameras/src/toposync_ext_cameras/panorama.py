@@ -1668,13 +1668,13 @@ class PanoramaService:
                     scanner.checkpoint.pop("visual_original_ray", None)
                     scanner.checkpoint.pop("initial_path", None)
             else:
-                if qualification_home is None and borrowed_control is None and not scanner.saved_return and not scanner.checkpoint.get("visual_original_ray"):
+                if borrowed_control is None and not scanner.saved_return and not scanner.checkpoint.get("visual_original_ray"):
                     path = directory / "initial-reference.jpg"
                     await asyncio.to_thread(_write_image, path, scanner.last_frame["image"])
                     scanner.checkpoint.update(initial_path=str(path), initial_zoom=scanner.last_pose.get("zoom"),
                                               initial_reference_evidence=scanner.last_frame.get("return_reference_evidence"))
                     await scanner._persist()
-                    if not await scanner._save_original_destination():
+                    if not await scanner._save_original_destination() and qualification_home is None:
                         raise PanoramaCaptureError("return_reference_unavailable")
                 located = await self.localize_frame(
                     camera_id=job["camera_id"], source_id=job["source_id"], job_id=job["id"], revision=job["revision"],
@@ -1683,7 +1683,7 @@ class PanoramaService:
                 prepared("localized")
                 if located.get("status") != "localized":
                     raise PanoramaCaptureError(located.get("reason", "panorama_visual_localization_failed"))
-                if qualification_home is None and borrowed_control is None and not scanner.checkpoint.get("visual_original_ray"):
+                if borrowed_control is None and not scanner.checkpoint.get("visual_original_ray"):
                     scanner.checkpoint["visual_original_ray"] = _rotation_basis(located["rotation_matrix"])[:, 2].tolist()
                     await scanner._persist()
                 binding = job["source_panorama"]
@@ -1722,6 +1722,25 @@ class PanoramaService:
                         job["_attention_trial"] = {"status": "running", "stages": stages}
                         self._save(job)
                     evidence = {"verified": True, "kind": "attention_round_trip_verified", "stages": stages}
+                    # Qualification must also restore its starting view; its home may differ.
+                    if scanner.saved_return:
+                        await scanner._restore()
+                    else:
+                        await navigator.aim(scanner.checkpoint["visual_original_ray"], maximum_error_pixels=3)
+                        comparison = await asyncio.to_thread(_match,
+                            scanner._private_image(scanner.checkpoint["initial_path"]), scanner.last_frame["image"])
+                        if (comparison.get("verified") and comparison.get("overlap", 0) >= .85
+                                and comparison.get("displacement", math.inf) <= 3):
+                            scanner.physical_state = "restored"
+                    if scanner.physical_state != "restored":
+                        raise PanoramaCaptureError("return_framing_unconfirmed")
+                    if scanner.saved_return:
+                        await camera.remove_return(scanner.saved_return)
+                        scanner.saved_return = None
+                        scanner.checkpoint["return"] = None
+                    scanner.checkpoint.pop("visual_original_ray", None)
+                    scanner.checkpoint.pop("initial_path", None)
+                    await scanner._persist()
                 else:
                     evidence = await navigator.aim(target["ray"],
                         **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}),

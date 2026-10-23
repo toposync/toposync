@@ -1812,7 +1812,7 @@ class PanoramaService:
                     job["_navigation_checkpoint"] = scanner.checkpoint
                 else:
                     job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
-                        for key in ("navigation_commands", "navigation_observation_timings")}
+                        for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations")}
                     job["_attention_navigation_trace"].update(preparation=preparation,
                         target_replans=scanner.checkpoint.get("navigation_target_replans", 0),
                         target_rebases=scanner.checkpoint.get("navigation_target_rebases", 0),

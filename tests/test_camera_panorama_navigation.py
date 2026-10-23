@@ -2486,6 +2486,10 @@ def test_navigation_defers_unknown_axis_while_known_response_makes_progress(init
 
         async def _pulse(self, axis, amount):
             assert self.commands < self.maximum_commands
+            planning = scanner.checkpoint["navigation_step"]
+            assert planning["planning_error_radians"] == pytest.approx(self.error)
+            assert planning["planning_response"] == (self.response[axis].tolist() if axis in self.response else None)
+            assert planning["fine_control"] is False
             self.commands += 1
             self.trace.append({'axis': axis, 'amount': amount})
             self.error += np.array([-.2, 0.] if axis == 'pan' else [0., .24]) * amount

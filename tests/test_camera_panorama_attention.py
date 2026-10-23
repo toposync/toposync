@@ -72,7 +72,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     if reuse.startswith("metadata_"):
         camera.reuse_discovery_from = Mock(return_value=True)
     scanner = SimpleNamespace(acquired=False, physical_state="stopped", last_frame=frame,
-        checkpoint={}, _stop=AsyncMock(return_value=True), _reference_window=AsyncMock(return_value=frame),
+        checkpoint={"navigation_target_observations": [{"commands": 0, "measurement": {"center_error_pixels": 4.2}}]}, _stop=AsyncMock(return_value=True), _reference_window=AsyncMock(return_value=frame),
         _confirm_stop=AsyncMock(), refresh_stopped_frame=AsyncMock(return_value=fresh))
     arrival_lens = {"width": 16, "height": 16, "fx": 10., "fy": 10., "cx": 7.5, "cy": 7.5}
     arrival_location = {"rotation_matrix": np.eye(3).tolist(), "analysis_width": 960,
@@ -267,6 +267,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     assert len(history) == 8 and history[0] == {"trial": 1}
     trace = history[-1]
     assert trace == job["_attention_navigation_trace"]
+    assert trace["navigation_target_observations"] == [{"commands": 0, "measurement": {"center_error_pixels": 4.2}}]
     assert trace["target_replans"] == 2
     assert trace["target_rebases"] == 3
     assert trace["target_predictions"] == 4

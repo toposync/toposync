@@ -648,6 +648,16 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             payload["world_envelope"] = world_envelope
         members = [member for member in group.members.values() if member.active] or list(group.members.values())
         mappings = [member.mapping for member in members if member.mapping]
+        image_observation = _member_image_observation(source_packet)
+        source_mapping = source_packet.payload.get("mapping")
+        visual_localization = source_mapping.get("visual_localization") if isinstance(source_mapping, dict) else None
+        image_coherent = not terminal and image_observation is not None and all(
+            member.active and member.image_observation == image_observation
+            and member.capture_evidence == payload.get("capture_evidence")
+            and (member.mapping or {}).get("visual_localization") == visual_localization
+            for member in group.members.values()
+        )
+        payload["group_observation"]["image_coherent"] = image_coherent
         if mappings:
             mapped = sum(member.world_anchor is not None for member in members)
             reasons = sorted({str(item.get("reason") or "object_position_unavailable")
@@ -659,6 +669,10 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 "reasons": reasons,
             }
             payload["mapping"].pop("reason", None)
+            if not image_coherent:
+                # Independent member poses cannot certify the triggering image or the whole group.
+                payload["mapping"].pop("visual_localization", None)
+                payload["mapping"].pop("pose_evidence", None)
             if reasons:
                 payload["mapping"]["reason"] = reasons[0]
             subject["mapping"] = deepcopy(payload["mapping"])

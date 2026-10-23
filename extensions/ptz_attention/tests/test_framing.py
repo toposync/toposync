@@ -264,12 +264,52 @@ async def observed_group(first_failure=None):
             elif first_failure == "unknown_geometry":
                 packet.artifacts["main"].metadata.clear()
             elif first_failure == "older_frame":
-                packet.payload["capture_evidence"]["sequence"] = 3
-                packet.artifacts["main"].metadata["image_geometry"]["capture_evidence"]["sequence"] = 3
-                packet.payload["mapping"]["visual_localization"]["capture_evidence"]["sequence"] = 3
+                for capture in (packet.payload["capture_evidence"],
+                        packet.artifacts["main"].metadata["image_geometry"]["capture_evidence"],
+                        packet.payload["mapping"]["visual_localization"]["capture_evidence"]):
+                    capture.update(sequence=3, published_at=999.92)
+            elif first_failure == "different_pose":
+                angle = .2
+                packet.payload["mapping"]["visual_localization"]["rotation_matrix"] = [
+                    [np.cos(angle), -np.sin(angle), 0.],
+                    [np.sin(angle), np.cos(angle), 0.], [0., 0., 1.]]
+            elif first_failure == "resized":
+                artifact = packet.artifacts["main"]
+                metadata = transformed_geometry(artifact, np.diag([.5, .5, 1.]), 101, 51)
+                packet = packet.with_artifact(Artifact("main", np.zeros((51, 101, 3), np.uint8), metadata=metadata))
         packets.append(packet)
         result = await runtime.process_packet(packet, None)
     return result[0], packets
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("difference", [None, "older_frame", "different_pose", "resized", "private", "unknown_geometry"])
+async def test_group_summary_never_borrows_one_members_pose_for_incompatible_images(difference):
+    packet, originals = await observed_group(difference)
+    coherent = difference is None
+    mapping = packet.payload["mapping"]
+    assert mapping["status"] == "mapped"
+    assert mapping["mapped_members"] == packet.payload["world_envelope"]["member_count"] == 2
+    if coherent:
+        assert mapping["visual_localization"]["capture_evidence"] == packet.payload["capture_evidence"]
+        assert mapping["pose_evidence"] == "visual_frame_rotation"
+    else:
+        assert "visual_localization" not in mapping
+        assert "pose_evidence" not in mapping
+    assert packet.payload["group_observation"]["image_coherent"] is coherent
+    assert packet.payload["subject"]["mapping"] == mapping
+    members = packet.payload["subject"]["members"]
+    assert [item["event_id"] for item in members] == ["person", "vehicle"]
+    for member, original in zip(members, originals):
+        assert member["mapping"] == original.payload["mapping"]
+        assert member["capture_evidence"] == original.payload["capture_evidence"]
+    if difference == "different_pose":
+        first = observation(originals[0]).panorama.center_ray
+        original_pose = originals[0].payload["mapping"]["visual_localization"]["rotation_matrix"]
+        originals[0].payload["mapping"]["visual_localization"]["rotation_matrix"] = np.eye(3).tolist()
+        borrowed = observation(originals[0]).panorama.center_ray
+        assert np.arccos(np.clip(np.dot(first, borrowed), -1., 1.)) > .1
+        assert members[0]["mapping"]["visual_localization"]["rotation_matrix"] == original_pose
 
 
 @pytest.mark.asyncio

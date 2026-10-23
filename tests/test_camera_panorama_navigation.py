@@ -12,6 +12,7 @@ import pytest
 from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
 from toposync_ext_cameras.panorama_navigation import (
     _continuous_pulse_plan,
+    _matched_target_displacement,
     _fine_correction_has_measured_response,
     _qualified_navigation_pulse_limit,
     correction_step,
@@ -25,6 +26,36 @@ from toposync_ext_cameras.panorama_navigation import (
 )
 from toposync_ext_cameras.processing.panorama_localization import PanoramaLocalizer
 from toposync_ext_cameras.processing.panorama_mapping import _rotation_basis
+
+
+@pytest.mark.parametrize("case", ["rotation", "unverified", "local_support", "missing", "singular", "nan", "outside", "wrong_size"])
+@pytest.mark.parametrize("scale", [1, 4])
+def test_target_displacement_uses_valid_same_position_geometry(case, scale):
+    lens = {"width": 960 * scale, "height": 540 * scale, "fx": 560 * scale,
+            "fy": 560 * scale, "cx": 479.5 * scale, "cy": 269.5 * scale, "distortion": []}
+    matrix = np.array([[560., 0, 479.5], [0, 560., 269.5], [0, 0, 1.]])
+    angle = .0034
+    rotation = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
+    homography = matrix @ rotation @ np.linalg.inv(matrix)
+    point = np.array([361.717903, 297.450046])
+    target = _rotation_basis(np.eye(3)) @ np.linalg.solve(matrix, np.r_[point, 1.])
+    matching = {"verified": True, "support_scope": "distributed_scene", "analysis_size": [960, 540],
+                "homography": homography.tolist()}
+    if case == "unverified": matching["verified"] = False
+    if case == "local_support": matching["support_scope"] = "banded_command_transition"
+    if case == "missing": matching.pop("homography")
+    if case == "singular": matching["homography"] = np.zeros((3, 3)).tolist()
+    if case == "nan": matching["homography"][0][0] = float("nan")
+    if case == "outside": matching["homography"][0][2] = 2000
+    if case == "wrong_size": matching["analysis_size"] = [0, 540]
+    result = _matched_target_displacement(matching, target, lens, {"rotation_matrix": np.eye(3)})
+    if case != "rotation":
+        assert result is None
+        return
+    grid = np.float64([[960*x, 540*y] for y in (.2, .5, .8) for x in (.2, .5, .8)])
+    displacement = cv2.perspectiveTransform(grid[None], homography)[0] - grid
+    assert result == pytest.approx(1.9869122838459596)
+    assert result < 2 < np.percentile(np.linalg.norm(displacement, axis=1), 95)
 
 
 @pytest.mark.parametrize("case", ["useful", "nearby", "behind", "minor_gain", "nan", "wrong_rotation", "unsupported"])
@@ -2348,7 +2379,7 @@ def test_live_navigation_prioritizes_arrival_error_over_motor_duration():
     assert navigator.pulses == ["tilt"]
 
 
-@pytest.mark.parametrize("evidence", ["observed", "unverified", "low_overlap", "unstopped", "contradictory", "persistent", "method_disagreement"])
+@pytest.mark.parametrize("evidence", ["observed", "unverified", "low_overlap", "unstopped", "contradictory", "persistent", "method_disagreement", "projected"])
 def test_small_observed_probe_can_identify_axis_without_learning_its_unqualified_gain(evidence):
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
@@ -2382,11 +2413,17 @@ def test_small_observed_probe_can_identify_axis_without_learning_its_unqualified
             self.last_pulse_match = {"verified": evidence != "unverified",
                 "overlap": .7 if evidence == "low_overlap" else .99,
                 "displacement": 2.581331 if evidence == "method_disagreement" else (10. if evidence == "contradictory" else 1.17)}
-            self.error[0] -= .3 * amount if evidence == "observed" and self.commands > 1 else (1.866488 if evidence == "method_disagreement" else 1.17) / 560
+            if evidence == "projected":
+                self.last_pulse_match.update(displacement=2.430388, support_scope="distributed_scene",
+                    analysis_size=[960, 540], homography=[[.9970829756, 0, 3.2999380171],
+                        [-.0016362468, 1, .7830226549], [-.00000607141687, 0, 1.0029054644]])
+            self.error[0] -= .3 * amount if evidence in {"observed", "projected"} and self.commands > 1 else (1.866488 if evidence == "method_disagreement" else 1.17) / 560
 
     navigator = Navigator()
-    if evidence == "observed":
-        result = asyncio.run(navigator.aim([1, 0, 0]))
+    if evidence in {"observed", "projected"}:
+        target = (_rotation_basis(np.eye(3)) @ np.array([-117.782097 / 560, 27.950046 / 560, 1.])
+                  if evidence == "projected" else [1, 0, 0])
+        result = asyncio.run(navigator.aim(target))
         assert result["verified"] and result["measurement"]["center_error_pixels"] <= 12
         assert navigator.pulses == [.12, .24]
     else:

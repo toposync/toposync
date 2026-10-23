@@ -47,6 +47,34 @@ MAXIMUM_PROBE_ERROR_GROWTH_RATIO = 1.2
 MAXIMUM_RESPONSE_VIEW_CHANGE_DEGREES = 15.0
 
 
+def _matched_target_displacement(matching: dict, target: Any, lens: dict, located: dict) -> float | None:
+    """Compare the same target position instead of a scene-wide displacement percentile."""
+    if matching.get("verified") is not True or matching.get("support_scope") != "distributed_scene":
+        return None
+    try:
+        size = np.asarray(matching["analysis_size"], dtype=float)
+        source_size = np.asarray([lens["width"], lens["height"]], dtype=float)
+        matrix = np.asarray(matching["homography"], dtype=float)
+        if (size.shape != (2,) or matrix.shape != (3, 3)
+                or not np.isfinite(np.r_[size, source_size, matrix.ravel()]).all()
+                or np.any(size <= 0) or np.any(source_size <= 0)
+                or abs(np.linalg.det(matrix)) < 1e-12):
+            return None
+        pixel = ray_to_image_pixel(target, lens, rotation_matrix=located["rotation_matrix"])
+        if pixel is None:
+            return None
+        point = np.asarray(pixel) * size / source_size
+        projected = matrix @ np.r_[point, 1.]
+        if not np.isfinite(projected).all() or abs(projected[2]) < 1e-9:
+            return None
+        endpoint = projected[:2] / projected[2]
+        if np.any(point < 0) or np.any(point >= size) or np.any(endpoint < 0) or np.any(endpoint >= size):
+            return None
+        return float(np.linalg.norm(endpoint - point) * ANALYSIS_WIDTH / size[0])
+    except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+        return None
+
+
 async def _arrival_stop_is_current(
     scanner: Any, camera: Any, result: Any, *, maximum_error_pixels: float = MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
 ) -> bool:
@@ -1514,12 +1542,19 @@ class VisualNavigator:
                         and pixel_delta < MINIMUM_QUALIFIED_RESPONSE_PIXELS):
                     # Subpixel drift must not replace a measured gain and amplify the next pulse.
                     continue
+                matched_displacement = self.last_pulse_match.get("displacement", float("inf"))
+                if matched_displacement >= MINIMUM_QUALIFIED_RESPONSE_PIXELS:
+                    target_displacement = _matched_target_displacement(
+                        self.last_pulse_match, target, self.localizer.lens, located)
+                    self.trace[-1]["matched_target_displacement_pixels"] = target_displacement
+                    if target_displacement is not None:
+                        matched_displacement = target_displacement
                 if (axis in missing and abs(amount) < .48
                         and self.scanner.capabilities.get("velocity_supported")
                         and getattr(self.scanner, "physical_state", None) == "stopped"
                         and self.last_pulse_match.get("verified") is True
                         and self.last_pulse_match.get("overlap", 0) >= .85
-                        and 0 < self.last_pulse_match.get("displacement", float("inf")) < MINIMUM_QUALIFIED_RESPONSE_PIXELS
+                        and 0 < matched_displacement < MINIMUM_QUALIFIED_RESPONSE_PIXELS
                         and 0 < pixel_delta < MINIMUM_QUALIFIED_RESPONSE_PIXELS):
                     # A causal, stopped small effect can extend identification, not qualify a gain.
                     self.probe_durations[axis] = min(.48, abs(amount) * 2)

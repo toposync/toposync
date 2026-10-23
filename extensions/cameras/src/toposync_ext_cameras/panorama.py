@@ -1624,10 +1624,17 @@ class PanoramaService:
             if not await scanner._stop():
                 raise PanoramaCaptureError("stop_unconfirmed")
             prepared("stopped")
-            scanner.last_frame = await scanner._reference_window()
-            prepared("reference")
-            scanner.last_pose = await camera.position()
-            prepared("position")
+            # Both observations follow the confirmed Stop and precede any movement.
+            position_read = asyncio.create_task(camera.position())
+            try:
+                scanner.last_frame = await scanner._reference_window()
+                prepared("reference")
+                scanner.last_pose = await position_read
+                prepared("position")
+            finally:
+                if not position_read.done():
+                    position_read.cancel()
+                await asyncio.gather(position_read, return_exceptions=True)
             scanner.physical_state = "stopped"
             if target is None:
                 if scanner.saved_return:

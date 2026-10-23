@@ -58,7 +58,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "current_arrival", "current_return", "expired_during_status", "frame_aged_during_status",
     "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status",
     "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence",
-    "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup"])
+    "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup",
+    "parallel_reference", "parallel_reference_failure"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -156,6 +157,25 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         camera.discover.side_effect, camera.acquire.side_effect = discover, acquire
         scanner._reference_window.side_effect, camera.position.side_effect = reference, position
         service.localize_frame.side_effect = localize
+    if reuse.startswith("parallel_reference"):
+        import asyncio
+        position_started, position_finished = asyncio.Event(), asyncio.Event()
+        async def position():
+            scanner._stop.assert_awaited()
+            position_started.set()
+            try:
+                if reuse.endswith("failure"):
+                    await asyncio.Event().wait()
+                return {}
+            finally:
+                position_finished.set()
+        async def reference():
+            await asyncio.wait_for(position_started.wait(), 1)
+            if reuse.endswith("failure"):
+                raise PanoramaCaptureError("capture_timeout")
+            return frame
+        camera.position.side_effect = position
+        scanner._reference_window.side_effect = reference
     job = bound_job()
     job["_attention_navigation_history"] = [{"trial": index} for index in range(8)]
     scanner.checkpoint["navigation_target_replans"] = 2
@@ -174,6 +194,15 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
         **({"target_provider": current_target} if reuse.endswith("during_cleanup") else {}))
+    if reuse == "parallel_reference_failure":
+        with pytest.raises(HTTPException) as failure:
+            await operation
+        assert failure.value.detail["code"] == "capture_timeout"
+        assert position_finished.is_set()
+        navigator.aim.assert_not_awaited()
+        camera.close.assert_awaited_once()
+        assert not service._navigation_scanners and not service.busy
+        return
     if reuse == "lost_during_cleanup":
         with pytest.raises(HTTPException) as failure:
             await operation

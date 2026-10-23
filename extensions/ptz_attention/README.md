@@ -22,6 +22,16 @@ when the recovered box is inside the original image. This observation does not
 certify arrival, subject completeness or association with another lens. A single
 subject box is not used as evidence for a world-space group envelope.
 
+Per-event `observed_framing.continuity` counts distinct accepted observations and
+their publication-time span. It requires the selected source, publication age at
+most one second, no crop boundary contact and a diagnostic margin of five percent
+on each side. Missing/rejected evidence, closure, sample/delivery gaps over one
+second, or capture/geometry changes interrupt the span. Polling does not extend it;
+expired evidence reports zero. Ordinary camera pose changes do not reset it.
+This is a sampled box diagnostic, not continuous visibility, a verified identity,
+physical exposure timing or a campaign success percentage. It does not change
+movement admission or promote a projected box into a new observation.
+
 When visual mapping supplies the same frame's calibrated lens and rotation,
 the observation also carries the center and corner directions in panorama space,
 bound to mapping revision, source artifact and geometry digest. It uses the
@@ -44,8 +54,9 @@ quality and capture identity still qualify it. This avoids waiting for the subje
 to stop updating. The measurement is labeled `projected_with_same_stopped_frame`;
 it is not a new detection in that frame. Invalid or changed camera observations
 require reobservation. Navigation reports `target_rebases` and `target_replans`.
-This does not yet compensate subject motion during motor actuation and settling;
-a faster synthetic trajectory remains rejected by the unchanged arrival limit.
+Bounded motion prediction can guide corrections from recent directions and
+observed cycle timing; arrival still uses the observed target. Synthetic reversals
+show a recovery cost, and physical moving-target acceptance remains pending.
 
 `shadow` records decisions with zero motor commands. Optional following
 uses fresh `capture_evidence`, stable capture instance/generation and increasing

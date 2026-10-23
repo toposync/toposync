@@ -9,7 +9,7 @@ import pytest
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.image_geometry import image_geometry, transformed_geometry
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
-from toposync_ext_ptz_attention.framing import framing_status, observe_framing
+from toposync_ext_ptz_attention.framing import FramingContinuity, framing_status, observe_framing
 from toposync_ext_ptz_attention.models import AttentionTarget
 from toposync_ext_ptz_attention.pipelines import PtzAttentionRequestRuntime
 from test_panorama_attention import environment
@@ -28,6 +28,88 @@ def observed_packet():
 def observation(packet):
     return observe_framing(packet, packet.payload["subject"]["bbox01"],
         AttentionTarget(world_anchor={"x": .5, "z": 0}))
+
+
+def test_framing_span_counts_distinct_samples_and_never_polling_time():
+    profile = SimpleNamespace(camera_id="front", source_id="wide")
+    run = FramingContinuity()
+    first = observation(observed_packet())
+    second = first.model_copy(update={"sequence": 5, "published_at": 1000.4})
+    run.observe(first, profile, 1000.)
+    run.observe(second, profile, 1000.4)
+    run.observe(second, profile, 1000.7)
+    for now in [1000.4, 1000.8, 1001.]:
+        measured = framing_status(second, profile, now, continuity=run)["continuity"]
+        assert measured["consecutive_observations"] == 2
+        assert measured["observed_span_seconds"] == pytest.approx(.4)
+        assert measured["timing_basis"] == "source_publication"
+        assert not measured["physical_capture_verified"]
+    expired = framing_status(second, profile, 1001.5, continuity=run)["continuity"]
+    assert expired["consecutive_observations"] == 0
+    assert expired["observed_span_seconds"] == 0
+    assert expired["reason"] == "publication_not_recent"
+
+
+@pytest.mark.parametrize("failure", ["missing", "boundary", "margin", "source", "stale", "future", "sequence", "timestamp", "conflicting_repeat"])
+def test_invalid_observations_interrupt_without_reusing_the_old_frame(failure):
+    profile = SimpleNamespace(camera_id="front", source_id="wide")
+    run = FramingContinuity()
+    first = observation(observed_packet())
+    run.observe(first, profile, 1000.)
+    changes = {"sequence": 5, "published_at": 1000.2}
+    if failure == "boundary":
+        changes["boundary_contact"] = True
+    elif failure == "margin":
+        changes["bbox01"] = (.02, .1, .6, .5)
+    elif failure == "source":
+        changes["source_id"] = "zoom"
+    elif failure in {"stale", "future", "timestamp"}:
+        changes["published_at"] = {"stale": 998., "future": 1002., "timestamp": 1000.}[failure]
+    elif failure == "sequence":
+        changes["sequence"] = 3
+    elif failure == "conflicting_repeat":
+        changes = {"bbox01": (.3, .1, .6, .5)}
+    invalid = None if failure == "missing" else first.model_copy(update=changes)
+    run.observe(invalid, profile, 1000.2)
+    assert run.status(first, profile, 1000.2)["consecutive_observations"] == 0
+    # Even missing evidence cannot let this same frame begin a new span.
+    if failure in {"missing", "sequence", "timestamp", "conflicting_repeat"}:
+        run.observe(first, profile, 1000.3)
+        assert run.status(first, profile, 1000.3)["consecutive_observations"] == 0
+    fresh = first.model_copy(update={"sequence": 6, "published_at": 1000.4})
+    run.observe(fresh, profile, 1000.4)
+    measured = run.status(fresh, profile, 1000.4)
+    assert measured["consecutive_observations"] == 1
+    assert measured["observed_span_seconds"] == 0
+
+
+@pytest.mark.parametrize("change", ["instance", "generation", "dimensions", "reference", "gap", "delivery_gap", "pose"])
+def test_continuity_restarts_on_capture_geometry_or_gap_but_not_camera_pose(change):
+    profile = SimpleNamespace(camera_id="front", source_id="wide")
+    run = FramingContinuity()
+    first = observation(with_localization(observed_packet()))
+    run.observe(first, profile, 1000.)
+    changes = {"sequence": 5, "published_at": 1000.2}
+    if change == "instance":
+        changes["capture_instance"] = "new"
+    elif change == "generation":
+        changes["generation"] = 2
+    elif change == "dimensions":
+        changes["source_width"] = 401
+    elif change == "reference":
+        changes["panorama"] = first.panorama.model_copy(update={"revision": 4})
+    elif change == "gap":
+        changes["published_at"] = 1001.2
+    elif change == "delivery_gap":
+        changes["published_at"] = 1000.5
+    else:
+        changes["panorama"] = first.panorama.model_copy(update={"center_ray": (1., 0., 0.)})
+    fresh = first.model_copy(update=changes)
+    now = 1001.2 if change == "delivery_gap" else fresh.published_at
+    run.observe(fresh, profile, now)
+    measured = run.status(fresh, profile, now)
+    assert measured["consecutive_observations"] == (2 if change == "pose" else 1)
+    assert measured["observed_span_seconds"] == pytest.approx(.2 if change == "pose" else 0.)
 
 
 def with_localization(packet):
@@ -172,12 +254,15 @@ async def test_pipeline_preserves_box_alongside_world_anchor_in_status_and_decis
     measured = next(item.details for item in decisions if "observed_framing" in item.details)
     assert measured["requested_target"] == {"world_anchor": {"x": .5, "z": 0}}
     assert measured["observed_framing"]["sequence"] == 4
+    assert measured["observed_framing"]["continuity"]["consecutive_observations"] == 1
     clock.advance(1.5)
     assert not controller.status()[0].observed_framing["publication_recent"]
     packet = replace(packet, lifecycle=Lifecycle.UPDATE)
     packet.payload["subject"].pop("bbox01")
     await runtime.process_packet(packet, context)
     assert controller.status()[0].observed_framing is None
+    tracked = next(iter(controller._runtime_for(store.list_profiles()[0]).events.values()))
+    assert tracked.framing_continuity.count == 0
     await controller.shutdown()
     store.close()
 
@@ -215,7 +300,51 @@ async def test_following_refreshes_same_subject_without_new_approach_or_corrupti
     assert calls[0]["target_provider"]()["framing"]["sequence"] == 5
     assert controller._runtime_for(profile).command_target_key == original_key
     assert len(calls) == 1 and controller.status()[0].state == "ACQUIRING"
+    continuity = controller.status()[0].observed_framing["continuity"]
+    assert continuity["consecutive_observations"] == 2
+    assert continuity["observed_span_seconds"] == pytest.approx(.8)
+    await submit(fresh, "update")
+    assert controller.status()[0].observed_framing["continuity"]["consecutive_observations"] == 0
+    clock.advance(.1)
+    fresh = fresh.model_copy(update={"sequence": 6, "published_at": clock()})
+    await submit(fresh, "update")
+    assert controller.status()[0].observed_framing["continuity"]["consecutive_observations"] == 1
     home = await controller._resolve_home(profile)
     assert home.panorama.framing is None and list(home.panorama.ray) == [0, 0, 1]
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("following", [False, True])
+async def test_framing_continuity_is_per_event_and_close_interrupts_it(following):
+    from test_panorama_attention import event, panorama_profile
+
+    clock, _, _, _, _, _, store, controller = environment()
+    profile = panorama_profile(mode="shadow", follow_view_updates=following, candidate_confirm_seconds=.1)
+    store.replace_profile(profile)
+    frame = observation(observed_packet())
+
+    async def submit(name, lifecycle):
+        intent = event(clock, name=name, lifecycle=lifecycle).model_copy(update={
+            "framing_observation": frame,
+            "capture_evidence": frame.model_dump(include={"capture_instance", "generation", "sequence", "published_at"})})
+        await controller.submit_intent(intent)
+        return intent
+
+    first = await submit("one", "open")
+    clock.advance(.2)
+    frame = frame.model_copy(update={"sequence": 5, "published_at": clock()})
+    await submit("one", "update")
+    other = await submit("two", "open")
+    tracked = controller._runtime_for(profile).events
+    assert tracked[first.key].framing_continuity.count == 2
+    assert tracked[other.key].framing_continuity.count == 1
+    await submit("one", "close")
+    assert tracked[first.key].framing_continuity.count == 0
+    assert tracked[other.key].framing_continuity.count == 1
+    decision = next(item for item in store.list_decisions()[0] if item.action == "event_closed")
+    assert decision.details["observed_framing"]["continuity"]["reason"] == "event_closed"
+    assert decision.details["observed_framing"]["continuity"]["observed_span_seconds"] == 0
     await controller.shutdown()
     store.close()

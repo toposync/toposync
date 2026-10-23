@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from toposync.runtime.pipelines.image_geometry import inspection_geometry, source_pixels
 from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
@@ -92,16 +93,98 @@ def observe_framing(packet, bbox, target: AttentionTarget | None) -> FramingObse
         return None
 
 
-def framing_status(observation: FramingObservation | None, profile, now: float) -> dict | None:
+def _assessment(observation: FramingObservation | None, profile, now: float) -> str:
+    if observation is None:
+        return "observation_missing"
+    if observation.camera_id != profile.camera_id or observation.source_id != profile.source_id:
+        return "source_mismatch"
+    if not 0 <= now - observation.published_at <= 1:
+        return "publication_not_recent"
+    if observation.boundary_contact:
+        return "boundary_contact"
+    x1, y1, x2, y2 = observation.bbox01
+    return "within_margin" if min(x1, y1, 1 - x2, 1 - y2) >= .05 else "insufficient_margin"
+
+
+def _continuity_identity(observation: FramingObservation) -> tuple:
+    panorama = observation.panorama
+    return (observation.camera_id, observation.source_id, observation.capture_instance,
+        observation.generation, observation.source_width, observation.source_height,
+        panorama.model_dump(exclude={"center_ray", "corner_rays"}) if panorama else None)
+
+
+@dataclass(slots=True)
+class FramingContinuity:
+    """A span of accepted associated boxes, not visibility between sampled frames."""
+
+    last: FramingObservation | None = None
+    started_at: float = 0.
+    received_at: float = 0.
+    count: int = 0
+    reason: str = "observation_missing"
+
+    def interrupt(self, reason: str) -> None:
+        self.started_at = 0.
+        self.count = 0
+        self.reason = reason
+
+    def observe(self, observation: FramingObservation | None, profile, now: float) -> None:
+        reason = _assessment(observation, profile, now)
+        if observation is None:
+            self.interrupt(reason)
+            return
+        if reason == "publication_not_recent":
+            self.interrupt(reason)
+            return
+        previous = self.last
+        same_identity = previous is not None and _continuity_identity(previous) == _continuity_identity(observation)
+        if same_identity:
+            if observation == previous:
+                if reason != "within_margin":
+                    self.interrupt(reason)
+                return
+            if observation.sequence <= previous.sequence or observation.published_at <= previous.published_at:
+                self.interrupt("non_increasing_observation")
+                return
+        self.last = observation.model_copy(deep=True)
+        if reason != "within_margin":
+            self.interrupt(reason)
+            return
+        if (not same_identity or observation.published_at - previous.published_at > 1
+                or now - self.received_at > 1):
+            self.interrupt("capture_or_geometry_changed" if not same_identity else "sample_gap")
+        if self.count == 0:
+            self.started_at = observation.published_at
+        else:
+            self.reason = "consecutive_observations"
+        self.count += 1
+        self.received_at = now
+
+    def status(self, observation: FramingObservation | None, profile, now: float) -> dict:
+        assessment = _assessment(observation, profile, now)
+        count = self.count if assessment == "within_margin" and observation == self.last else 0
+        return {"consecutive_observations": count,
+            "observed_span_seconds": observation.published_at - self.started_at if count else 0.,
+            "reason": self.reason if assessment == "within_margin" else assessment,
+            "timing_basis": "source_publication", "physical_capture_verified": False}
+
+
+def framing_status(observation: FramingObservation | None, profile, now: float,
+                   *, continuity: FramingContinuity | None = None) -> dict | None:
     if observation is None:
         return None
     x1, y1, x2, y2 = observation.bbox01
     age = now - observation.published_at
-    return {**observation.model_dump(mode="json"),
+    result = {**observation.model_dump(mode="json"),
         "publication_age_seconds": age if math.isfinite(age) else None,
         "publication_recent": math.isfinite(age) and 0 <= age <= 1,
         "on_selected_source": observation.camera_id == profile.camera_id and observation.source_id == profile.source_id,
         "center01": [(x1 + x2) / 2, (y1 + y2) / 2],
         "extent01": [x2 - x1, y2 - y1],
         "minimum_margin01": min(x1, y1, 1 - x2, 1 - y2),
-        "kind": "observed_image_extent"}
+        "kind": "observed_image_extent",
+        "assessment_margin01": .05,
+        "box_with_margin": _assessment(observation, profile, now) == "within_margin"}
+    if continuity is not None:
+        result["continuity"] = continuity.status(observation, profile, now)
+    return result

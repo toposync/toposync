@@ -28,7 +28,7 @@ from .models import (
     target_in_region,
 )
 from .store import AttentionStore, ProfileNotFoundError
-from .framing import framing_status
+from .framing import FramingContinuity, framing_status
 
 
 _LIVE_SERVICES = (
@@ -70,6 +70,7 @@ class _TrackedEvent:
     following_confirmed: bool = False
     resolution_reason: str = ""
     observation_expired: bool = False
+    framing_continuity: FramingContinuity = field(default_factory=FramingContinuity)
 
     @property
     def open(self) -> bool:
@@ -447,6 +448,7 @@ class PtzAttentionController:
                     if existing:
                         existing.following_view = None
                         existing.following_confirmed = False
+                        existing.framing_continuity.interrupt(reason)
                     self._record(profile, runtime, action="intent_ignored", reason=reason, intent=governed)
                     return
                 observation_age = max(observation_age, freshness.age_seconds)
@@ -455,6 +457,8 @@ class PtzAttentionController:
                 if profile.follow_view_updates and effective_mode(profile) == "live_panorama"
                 else profile.stale_timeout_seconds)
             if governed.lifecycle != "close" and observation_age >= observation_timeout:
+                if existing:
+                    existing.framing_continuity.interrupt("observation_expired")
                 if existing and profile.follow_view_updates:
                     existing.following_view = None
                     existing.following_confirmed = False
@@ -497,6 +501,7 @@ class PtzAttentionController:
                 elif not recovering_observation:
                     existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
                     existing.intent = governed.model_copy(update={"target": existing.intent.target})
+                    existing.framing_continuity.observe(governed.framing_observation, profile, self._clock())
                     return
 
             if governed.lifecycle == "close":
@@ -513,6 +518,7 @@ class PtzAttentionController:
                     return
                 existing.last_seen_monotonic = now
                 existing.closed_monotonic = now
+                existing.framing_continuity.interrupt("event_closed")
                 self._record(
                     profile,
                     runtime,
@@ -588,6 +594,7 @@ class PtzAttentionController:
                 last_seen_monotonic=observed_monotonic,
                 candidate_received_monotonic=now,
             )
+            runtime.events[governed.key].framing_continuity.observe(governed.framing_observation, profile, self._clock())
             if existing and existing.observation_expired and runtime.active_key == governed.key and runtime.state == "GRACE":
                 # Fresh reacquisition must pass confirmation again; being held
                 # after a lost observation is not a verified arrival.
@@ -754,7 +761,8 @@ class PtzAttentionController:
                     ),
                     active_view_id=(active.resolved.view_id if active and active.resolved else ""),
                     active_target=(active.resolved.panorama.model_dump(mode="json") if active and active.resolved and active.resolved.panorama else None),
-                    observed_framing=framing_status(active.intent.framing_observation if active else None, profile, wall_now),
+                    observed_framing=framing_status(active.intent.framing_observation if active else None, profile, wall_now,
+                        continuity=active.framing_continuity if active else None),
                     active_priority=(active.intent.priority if active else None),
                     candidate_event_key=runtime.candidate_key,
                     candidate_preset_token=(
@@ -1159,6 +1167,7 @@ class PtzAttentionController:
             if tracked.open and now - tracked.last_seen_monotonic >= timeout:
                 tracked.closed_monotonic = now
                 tracked.observation_expired = True
+                tracked.framing_continuity.interrupt("observation_expired")
                 self._record(
                     profile,
                     runtime,
@@ -1319,12 +1328,14 @@ class PtzAttentionController:
         ):
             tracked.following_view = None
             tracked.following_confirmed = False
+            tracked.framing_continuity.interrupt("following_target_unqualified")
             self._record(profile, runtime,
                          action="intent_rejected" if effective_mode(profile) == "live_panorama" else "shadow_blocked",
                          reason=resolution_reason or "following_target_unqualified", intent=intent)
             return
         tracked.last_seen_monotonic = max(tracked.last_seen_monotonic, observed_monotonic)
         tracked.intent = intent
+        tracked.framing_continuity.observe(intent.framing_observation, profile, self._clock())
 
         def same_reference(previous: ResolvedTarget | None) -> bool:
             return bool(
@@ -1388,6 +1399,7 @@ class PtzAttentionController:
         if active is not None and active.open:
             active.closed_monotonic = now
             active.observation_expired = True
+            active.framing_continuity.interrupt("observation_expired")
             self._record(profile, runtime, action="event_stale", reason="following_observation_expired",
                          intent=active.intent)
         # Enter grace from a verified stopped position without claiming arrival.
@@ -2861,7 +2873,8 @@ class PtzAttentionController:
         if intent is not None:
             payload.setdefault("event_type", intent.event_type)
             if intent.framing_observation is not None:
-                payload.setdefault("observed_framing", framing_status(intent.framing_observation, profile, self._clock()))
+                payload.setdefault("observed_framing", framing_status(intent.framing_observation, profile, self._clock(),
+                    continuity=tracked.framing_continuity if tracked and tracked.intent.framing_observation == intent.framing_observation else None))
             if intent.target is not None:
                 payload.setdefault("requested_target", intent.target.service_payload())
             payload.setdefault("event_at", intent.event_at)

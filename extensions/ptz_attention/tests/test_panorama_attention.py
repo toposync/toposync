@@ -23,6 +23,56 @@ def event(clock, name="one", kind="low", lifecycle="open", x=.5):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["live_panorama", "shadow", "paused"])
+@pytest.mark.parametrize("finish", ["shutdown", "pause"])
+async def test_passive_preparation_is_idle_bounded_and_cancelled(mode, finish):
+    clock, camera, services, _, _, _, store, controller = environment(
+        mode="live_panorama" if mode == "paused" else mode, qualified=True)
+    if mode == "paused":
+        store.replace_profile(panorama_profile(mode="paused", resume_mode="live_panorama"))
+    calls, finished = [], asyncio.Event()
+    release = asyncio.Event()
+    async def prepare(**kwargs):
+        calls.append(kwargs)
+        try:
+            await release.wait()
+        finally:
+            finished.set()
+    services.register("cameras.panorama.prepare_attention", prepare)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    if mode != "live_panorama":
+        assert not calls
+    else:
+        assert len(calls) == 1 and camera.acquires == 0
+        clock.advance(20)
+        await controller.tick_once()
+        assert len(calls) == 1, "Never duplicate an active discovery"
+        release.set()
+        await asyncio.sleep(0)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        assert len(calls) == 2
+        await controller.tick_once()
+        assert len(calls) == 2, "Completed discovery is refreshed at most every 15 seconds"
+        release.clear()
+        clock.advance(16)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        finished.clear()
+        if finish == "pause":
+            await controller.pause(store.list_profiles()[0].id)
+            await controller.tick_once()
+            assert finished.is_set()
+            assert not controller._preparations
+    await controller.shutdown()
+    if mode == "live_panorama":
+        assert finished.is_set()
+    assert not controller._preparations
+    store.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["intent", "pause", "resume", "return"])
 async def test_recovery_keeps_original_failure_until_return_is_verified(operation):
     clock, _, _, _, _, _, store, controller = environment(mode="live_panorama", qualified=True)

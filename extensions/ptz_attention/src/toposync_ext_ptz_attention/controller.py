@@ -158,6 +158,7 @@ class PtzAttentionController:
         self._operator_bindings: dict[tuple[str, str, str], _OperatorBinding] = {}
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+        self._preparations: dict[str, tuple[asyncio.Task, float]] = {}
         self._clock_scope = uuid.uuid4().hex
 
     def service_status(self, profile: AttentionProfile | None = None) -> dict[str, bool]:
@@ -225,6 +226,10 @@ class PtzAttentionController:
 
     async def shutdown(self) -> None:
         self._closed = True
+        for task, _ in self._preparations.values():
+            task.cancel()
+        await asyncio.gather(*(task for task, _ in self._preparations.values()), return_exceptions=True)
+        self._preparations.clear()
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -278,6 +283,7 @@ class PtzAttentionController:
                 profile, runtime = current, self._runtime_for(current)
                 try:
                     await self._evaluate(profile, runtime, self._monotonic_clock())
+                    await self._prepare_idle_camera(profile, runtime)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -287,6 +293,27 @@ class PtzAttentionController:
                         exc_info=True,
                     )
                     await self._fault(profile, runtime, "controller_tick_failed")
+
+    async def _prepare_idle_camera(self, profile: AttentionProfile, runtime: _DeviceRuntime) -> None:
+        previous = self._preparations.get(profile.ptz_device_id)
+        eligible = (not self._closed and profile.mode == "live_panorama" and runtime.state == "IDLE"
+            and not runtime.lease_id and not runtime.campaign_finishing
+            and bool(profile.panorama_element_id) and self.has_service("cameras.panorama.prepare_attention"))
+        if not eligible:
+            if previous is not None:
+                previous[0].cancel()
+                await asyncio.gather(previous[0], return_exceptions=True)
+                self._preparations.pop(profile.ptz_device_id, None)
+            return
+        now = self._monotonic_clock()
+        if previous is not None and (not previous[0].done() or now < previous[1]):
+            return
+        task = asyncio.create_task(self.services.call("cameras.panorama.prepare_attention",
+            camera_id=profile.camera_id, source_id=profile.source_id,
+            composition_id=profile.composition_id, element_id=profile.panorama_element_id))
+        task.add_done_callback(lambda result: None if result.cancelled() else result.exception())
+        # Refresh before the adapter's 30-second metadata validity expires.
+        self._preparations[profile.ptz_device_id] = (task, now + 15)
 
     async def submit_intent(self, intent: AttentionIntent) -> None:
         profile = self.store.get_profile(intent.profile_id)

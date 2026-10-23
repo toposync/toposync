@@ -1612,7 +1612,8 @@ class PanoramaService:
         job["stop_confirmed"] = False
         try:
             discovery_reused = bool(borrowed_control is not None and metadata
-                and metadata["binding"] == metadata_binding
+                and metadata["binding"] == (dict(metadata_binding, control=None)
+                    if metadata.get("passive") is True else metadata_binding)
                 and callable(getattr(camera, "reuse_discovery_from", None))
                 and camera.reuse_discovery_from(metadata["camera"]))
             scanner.capabilities = (await camera.refresh_discovery_observations()
@@ -2217,6 +2218,33 @@ class PanoramaService:
         return {**located, "source_artifact_id": binding["id"],
                 "geometry_digest": binding["geometry"]["model_digest"], "source_id": source_id, "revision": revision,
                 "_coverage_mask": localizer.coverage_mask}
+
+    async def prepare_attention(self, *, camera_id: str, source_id: str, composition_id: str,
+                                element_id: str) -> dict[str, bool]:
+        """Discover protocol metadata without capture, control ownership or movement."""
+        if self.camera_factory is None or camera_id in self.busy:
+            return {"prepared": False}
+        active = await self.get_active(camera_id=camera_id, source_id=source_id,
+            composition_id=composition_id, element_id=element_id)
+        if not active.get("job"):
+            return {"prepared": False}
+        job = self.jobs[active["job"]["id"]]
+        if not self._attention_qualified(job):
+            return {"prepared": False}
+        binding = copy.deepcopy({key: job.get(key) for key in
+            ("id", "revision", "source_id", "_source_digest", "_composition_digest", "source_panorama")})
+        camera = self.camera_factory(services=self.services, camera_id=camera_id, source_id=source_id,
+            settings={}, job_id=job["id"], output_dir=self.root / job["id"] / "navigation")
+        try:
+            await camera.discover()
+            await self._current(job)
+        finally:
+            await camera.close()
+        if camera_id in self.busy or any(job.get(key) != value for key, value in binding.items()):
+            return {"prepared": False}
+        self._attention_metadata[camera_id] = {
+            "binding": {**binding, "control": None}, "camera": camera, "passive": True}
+        return {"prepared": True}
 
     async def resolve_target(self, *, camera_id: str, source_id: str, composition_id: str,
                              target: dict[str, Any], element_id: str = "") -> dict[str, Any]:
@@ -2899,6 +2927,7 @@ def register_panorama_routes(
     services.register("cameras.panorama.get_active", service.get_active)
     services.register("cameras.panorama.localize_frame", service.localize_frame)
     services.register("cameras.panorama.resolve_target", service.resolve_target)
+    services.register("cameras.panorama.prepare_attention", service.prepare_attention)
     services.register("cameras.panorama.navigate_attention", service.navigate_attention)
 
     @app.get(_PREFIX)

@@ -60,7 +60,7 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence",
     "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup",
     "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
-    "metadata_expired", "metadata_control_failure", "metadata_stop_failure"])
+    "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -285,6 +285,9 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     if reuse.startswith("metadata_"):
         assert service._attention_metadata["camera"]["camera"] is camera
         assert trace["discovery_reused"] is False
+        if reuse == "metadata_passive":
+            service._attention_metadata["camera"]["passive"] = True
+            service._attention_metadata["camera"]["binding"]["control"] = None
         following = SimpleNamespace(discover=AsyncMock(return_value={}), acquire=AsyncMock(),
             position=AsyncMock(return_value={}), close=AsyncMock(),
             reuse_discovery_from=Mock(return_value=True), refresh_discovery_observations=AsyncMock(return_value={}))
@@ -331,7 +334,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
             assert "camera" not in service._attention_metadata
         else:
             await operation
-            expected = reuse == "metadata_same"
+            expected = reuse in {"metadata_same", "metadata_passive"}
             assert job["_attention_navigation_trace"]["discovery_reused"] is expected
             assert following.discover.await_count == int(not expected)
             assert following.refresh_discovery_observations.await_count == int(expected)
@@ -549,6 +552,47 @@ def group_destination(job):
     second["panorama"]["center_ray"] = (rotation @ second["panorama"]["center_ray"]).tolist()
     destination["group_framing"] = {"members": {"person": first, "vehicle": second}}
     return destination
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", [None, "busy", "unqualified", "discovery", "cancel", "changed", "became_busy"])
+async def test_passive_attention_preparation_never_acquires_or_captures(monkeypatch, tmp_path, failure):
+    service, job, _ = framing_service(monkeypatch)
+    camera = SimpleNamespace(discover=AsyncMock(), close=AsyncMock(), acquire=AsyncMock(), frame=AsyncMock())
+    service.camera_factory = Mock(return_value=camera)
+    service.root, service.busy, service._attention_metadata = tmp_path, {}, {}
+    service._current = AsyncMock()
+    if failure == "busy":
+        service.busy["camera"] = "navigation"
+    if failure == "unqualified":
+        job.pop("_attention_qualification")
+    async def discover():
+        if failure == "cancel":
+            raise module.asyncio.CancelledError()
+        if failure == "discovery":
+            raise PanoramaCaptureError("camera_discovery_failed")
+        if failure == "changed":
+            job["revision"] += 1
+        if failure == "became_busy":
+            service.busy["camera"] = "navigation"
+    camera.discover.side_effect = discover
+    operation = service.prepare_attention(camera_id="camera", source_id="wide",
+        composition_id="yard", element_id="element")
+    if failure in {"cancel", "discovery"}:
+        with pytest.raises(module.asyncio.CancelledError if failure == "cancel" else PanoramaCaptureError):
+            await operation
+    else:
+        assert (await operation)["prepared"] is (failure is None)
+    camera.acquire.assert_not_awaited()
+    camera.frame.assert_not_awaited()
+    if failure in {"busy", "unqualified"}:
+        service.camera_factory.assert_not_called()
+    else:
+        camera.close.assert_awaited_once()
+    assert bool(service._attention_metadata) is (failure is None)
+    if failure is None:
+        assert service._attention_metadata["camera"]["binding"]["control"] is None
+        assert service._attention_metadata["camera"]["passive"] is True
 
 
 @pytest.mark.anyio

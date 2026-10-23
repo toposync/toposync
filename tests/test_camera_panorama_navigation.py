@@ -761,13 +761,15 @@ def test_navigation_converges_or_refuses_unattainable_motor_precision(target_yaw
     )
 
 
-@pytest.mark.parametrize("response_ratio", [1., 3.08, -1., .0871122299])
-def test_navigation_checks_low_velocity_response_before_another_correction(response_ratio):
+@pytest.mark.parametrize("response_ratio", [1., 3.08, -1., .0871122299, .2])
+@pytest.mark.parametrize("stopped", [True, False])
+def test_navigation_checks_low_velocity_response_before_another_correction(response_ratio, stopped):
     lens = {"width": 960, "height": 540, "fx": 573.3, "fy": 573.3,
             "cx": 479.5, "cy": 269.5}
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
     scanner = SimpleNamespace(capabilities={"velocity_supported": True, "axes": {"pan": True}},
-                              checkpoint={}, last_frame={"capture_evidence": {}})
+                              checkpoint={}, last_frame={"capture_evidence": {}},
+                              physical_state="stopped" if stopped else "unknown")
     localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
                                 target_reference=lambda _: reference)
 
@@ -798,7 +800,7 @@ def test_navigation_checks_low_velocity_response_before_another_correction(respo
             self.error += self.response[axis] * amount * speed / .1 * response_ratio
 
     navigator = Navigator()
-    if response_ratio == 1.:
+    if response_ratio == 1. or response_ratio == .2 and stopped:
         result = asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=3))
         assert result["verified"] and result["measurement"]["center_error_pixels"] <= 3
     else:
@@ -811,7 +813,12 @@ def test_navigation_checks_low_velocity_response_before_another_correction(respo
     assert navigator.trace[-1]["response_pixel_delta"] >= 0
     assert navigator.speeds == [.025]
     assert navigator.trace[-1]["response_ratio"] == pytest.approx(abs(response_ratio))
-    assert navigator.response["pan"] == pytest.approx([-.28619564, 0.])
+    if response_ratio == .2 and stopped:
+        assert not navigator.response
+        assert navigator.trace[-1]["arrival_after_unmodeled_velocity"] is True
+        assert navigator.trace[-1]["response_qualified"] is False
+    else:
+        assert navigator.response["pan"] == pytest.approx([-.28619564, 0.])
 
 
 def test_minimum_pulse_is_used_only_when_observed_response_predicts_improvement():

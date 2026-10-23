@@ -1541,6 +1541,20 @@ class VisualNavigator:
                 ratio = float(np.linalg.norm(observed_delta) / max(np.linalg.norm(expected_delta), 1e-6))
                 self.trace[-1].update(response_ratio=ratio, response=response.tolist(), response_qualified=False)
                 if np.dot(observed_delta, expected_delta) <= 0 or not 0.4 <= ratio <= 2.5:
+                    if final and prediction is None and getattr(self.scanner, "physical_state", None) == "stopped":
+                        measured = await self._target_measurement(target, after)
+                        if measured and measured["center_error_pixels"] <= maximum_error_pixels and target_is_current():
+                            # Pixels can prove arrival even when the actuator model failed; never retain that model.
+                            self.response.pop(axis, None)
+                            self.response_rotations.pop(axis, None)
+                            self.pulse_limits.pop(axis, None)
+                            for direction in (-1, 1):
+                                self.direction_responses.pop((axis, direction), None)
+                                self.stationary_durations.pop((axis, direction), None)
+                            self.trace[-1]["arrival_after_unmodeled_velocity"] = True
+                            final_measurement = measured
+                            final_geometry = arrival_frame_geometry(self.scanner.last_frame, after, self.localizer.lens, ray)
+                            break
                     self.trace[-1]["failure_code"] = "visual_response_inconsistent"
                     raise PanoramaCaptureError("visual_response_inconsistent")
             if (self.last_pulse_stationary or np.linalg.norm(response) < 0.01

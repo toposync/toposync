@@ -1616,10 +1616,14 @@ class PanoramaService:
                     if metadata.get("passive") is True else metadata_binding)
                 and callable(getattr(camera, "reuse_discovery_from", None))
                 and camera.reuse_discovery_from(metadata["camera"]))
-            scanner.capabilities = (await camera.refresh_discovery_observations()
-                if discovery_reused else await camera.discover())
-            prepared("discovered")
-            await camera.acquire()
+            if discovery_reused and callable(getattr(camera, "acquire_with_capabilities", None)):
+                scanner.capabilities = await camera.acquire_with_capabilities()
+                prepared("discovered_and_acquired")
+            else:
+                scanner.capabilities = (await camera.refresh_discovery_observations()
+                    if discovery_reused else await camera.discover())
+                prepared("discovered")
+                await camera.acquire()
             prepared("acquired")
             scanner.acquired = True
             if not await scanner._stop():

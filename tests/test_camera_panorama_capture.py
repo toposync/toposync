@@ -465,6 +465,38 @@ def test_discovery_overlaps_independent_reads_and_drains_them_before_return(fail
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("change", [None, "configuration", "automation", "control", "cancel"])
+def test_combined_acquisition_refreshes_once_and_preserves_guards(change):
+    async def run():
+        camera, configuration, client, services, _ = environment()
+        await camera.discover()
+        client.get_ptz_status.reset_mock()
+        client.get_ptz_status.return_value = OnvifPtzStatus(pan=.6, tilt=.7, zoom=None)
+        camera.lease = {"lease_id": "attention", "fence": 9}
+        services.active = camera.lease.copy()
+        if change == "configuration":
+            configuration["devices"][0]["onvif"]["xaddr"] = "http://replacement"
+        elif change == "automation":
+            camera._read_motion_automation = AsyncMock(return_value={"auto_tracking": True, "automatic_return": False})
+        elif change == "control":
+            services.active = {"lease_id": "other", "fence": 10}
+        elif change == "cancel":
+            client.get_ptz_status.side_effect = asyncio.CancelledError()
+        try:
+            if change:
+                with pytest.raises(asyncio.CancelledError if change == "cancel" else PanoramaCaptureError):
+                    await camera.acquire_with_capabilities()
+            else:
+                result = await camera.acquire_with_capabilities()
+                assert result["position"]["pan"] == .6
+                client.get_ptz_status.assert_awaited_once()
+                assert services.calls[-1][0] == "cameras.control.snapshot"
+            assert not any(name in {"cameras.control.acquire", "cameras.control.submit"} for name, _ in services.calls)
+        finally:
+            await camera.close()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("change", ["pose", "configuration", "automation", "automation_unavailable"])
 def test_prepared_discovery_refreshes_dynamic_readings_and_rejects_changed_binding(change):
     async def run():

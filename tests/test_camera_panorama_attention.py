@@ -60,7 +60,7 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence",
     "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup",
     "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
-    "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive"])
+    "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive", "metadata_combined"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -292,6 +292,8 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
             position=AsyncMock(return_value={}), close=AsyncMock(),
             reuse_discovery_from=Mock(return_value=True), refresh_discovery_observations=AsyncMock(return_value={}))
         service.camera_factory = lambda **kwargs: following
+        if reuse == "metadata_combined":
+            following.acquire_with_capabilities = AsyncMock(return_value={"fresh": True})
         if reuse == "metadata_revision":
             job["revision"] += 1
         if reuse == "metadata_geometry":
@@ -334,11 +336,15 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
             assert "camera" not in service._attention_metadata
         else:
             await operation
-            expected = reuse in {"metadata_same", "metadata_passive"}
+            expected = reuse in {"metadata_same", "metadata_passive", "metadata_combined"}
             assert job["_attention_navigation_trace"]["discovery_reused"] is expected
             assert following.discover.await_count == int(not expected)
-            assert following.refresh_discovery_observations.await_count == int(expected)
-            assert following.acquire.await_count == 1
+            assert following.refresh_discovery_observations.await_count == int(expected and reuse != "metadata_combined")
+            assert following.acquire.await_count == int(reuse != "metadata_combined")
+            if reuse == "metadata_combined":
+                following.acquire_with_capabilities.assert_awaited_once()
+                assert scanner.capabilities == {"fresh": True}
+                assert "discovered_and_acquired" in job["_attention_navigation_trace"]["preparation_elapsed_ms"]
             assert scanner._reference_window.await_count == 2
             assert service._attention_metadata["camera"]["camera"] is following
         following.close.assert_awaited_once()

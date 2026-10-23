@@ -366,6 +366,11 @@ class PanoramaCamera:
         }
         return self._capabilities
 
+    async def acquire_with_capabilities(self) -> dict[str, Any]:
+        """Acquire with fresh observations and return those same capabilities."""
+        await self.acquire()
+        return self._capabilities
+
     async def acquire(self) -> dict[str, Any]:
         await self.refresh_discovery_observations()
         require_motion_automation(self._automation, self._camera)

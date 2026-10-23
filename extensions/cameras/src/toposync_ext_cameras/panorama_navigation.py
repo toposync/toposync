@@ -1477,6 +1477,12 @@ class VisualNavigator:
             pixel_delta = np.linalg.norm((np.tan(updated) - np.tan(before))
                 * np.array([self.localizer.lens["fx"], self.localizer.lens["fy"]])
                 * ANALYSIS_WIDTH / self.localizer.lens["width"])
+            self.trace[-1].update(
+                observed_error_radians=updated.tolist(), response=response.tolist(),
+                response_pixel_delta=float(pixel_delta),
+                motion_match={key: self.last_pulse_match.get(key)
+                    for key in ("verified", "displacement", "overlap", "analysis_size", "homography", "support_scope")},
+            )
             if (self.last_pulse_stationary or np.linalg.norm(response) < 0.01
                     or pixel_delta < MINIMUM_QUALIFIED_RESPONSE_PIXELS):
                 self.trace[-1]["response_qualified"] = False

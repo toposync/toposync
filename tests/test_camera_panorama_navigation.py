@@ -2348,7 +2348,7 @@ def test_live_navigation_prioritizes_arrival_error_over_motor_duration():
     assert navigator.pulses == ["tilt"]
 
 
-@pytest.mark.parametrize("evidence", ["observed", "unverified", "low_overlap", "unstopped", "contradictory", "persistent"])
+@pytest.mark.parametrize("evidence", ["observed", "unverified", "low_overlap", "unstopped", "contradictory", "persistent", "method_disagreement"])
 def test_small_observed_probe_can_identify_axis_without_learning_its_unqualified_gain(evidence):
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
@@ -2381,8 +2381,8 @@ def test_small_observed_probe_can_identify_axis_without_learning_its_unqualified
             self.trace.append({"axis": axis, "amount": amount})
             self.last_pulse_match = {"verified": evidence != "unverified",
                 "overlap": .7 if evidence == "low_overlap" else .99,
-                "displacement": 10. if evidence == "contradictory" else 1.17}
-            self.error[0] -= .3 * amount if evidence == "observed" and self.commands > 1 else 1.17 / 560
+                "displacement": 2.581331 if evidence == "method_disagreement" else (10. if evidence == "contradictory" else 1.17)}
+            self.error[0] -= .3 * amount if evidence == "observed" and self.commands > 1 else (1.866488 if evidence == "method_disagreement" else 1.17) / 560
 
     navigator = Navigator()
     if evidence == "observed":
@@ -2395,6 +2395,14 @@ def test_small_observed_probe_can_identify_axis_without_learning_its_unqualified
         assert navigator.pulses == ([.12, .24, .48] if evidence == "persistent" else [.12])
         assert not navigator.response
     assert navigator.trace[0]["response_qualified"] is False
+    first = navigator.trace[0]
+    assert first["response_pixel_delta"] > 0
+    assert first["observed_error_radians"][0] < .08
+    assert first["response"][0] < 0
+    if evidence == "method_disagreement":
+        assert first["response_pixel_delta"] < 2 < first["motion_match"]["displacement"]
+        assert first["motion_match"]["verified"] is True
+        assert navigator.commands == 1 and not navigator.response
 
 
 @pytest.mark.parametrize('stationary_verified,effective_pulse,initial_response', [

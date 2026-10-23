@@ -478,6 +478,22 @@ class PtzAttentionController:
                 )
                 return
 
+            if (profile.follow_view_updates and governed.lifecycle != "close" and existing
+                    and existing.intent.framing_observation is not None
+                    and existing.intent.framing_observation.panorama is not None
+                    and (governed.framing_observation is None or governed.framing_observation.panorama is None)):
+                # Keep the last complete intent through grace; a ground point cannot reacquire a framed subject.
+                existing.following_view = None
+                existing.following_confirmed = False
+                existing.framing_continuity.interrupt("following_framing_unavailable")
+                if existing.open:
+                    existing.closed_monotonic = now
+                    existing.observation_expired = True
+                self._record(profile, runtime, action="intent_rejected",
+                             reason="following_framing_unavailable", intent=governed)
+                await self._evaluate(profile, runtime, now)
+                return
+
             if governed.lifecycle == "update":
                 recovering_observation = bool(profile.follow_view_updates and existing and existing.observation_expired)
                 if existing is None or (not existing.open and not recovering_observation):

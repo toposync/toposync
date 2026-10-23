@@ -463,6 +463,126 @@ async def test_framing_continuity_is_per_event_and_close_interrupts_it(following
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["CANDIDATE", "ACQUIRING", "FOCUSED"])
+@pytest.mark.parametrize("loss", ["missing", "geometry"])
+@pytest.mark.parametrize("group", [False, True])
+async def test_framed_following_requires_complete_evidence_again_after_loss(phase, loss, group):
+    import asyncio
+    from test_panorama_attention import event, panorama_profile
+
+    clock, _, _, state, calls, cancelled, store, controller = environment(
+        mode="live_panorama", qualified=True, blocked=phase == "ACQUIRING")
+    state["revision"] = 3
+    profile = panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.1, min_focus_seconds=0, close_grace_seconds=5)
+    store.replace_profile(profile)
+    if group:
+        packet, _ = await observed_group()
+        target = AttentionTarget(world_envelope=packet.payload["world_envelope"])
+        framed = observe_framing(packet, packet.payload["subject"]["bbox01"], target)
+    else:
+        target = event(clock).target
+        framed = observation(with_localization(observed_packet()))
+
+    async def submit(sequence, complete, lifecycle="update"):
+        capture = {"capture_instance": "decoder", "generation": 1,
+            "sequence": sequence, "published_at": clock()}
+        frame = framed.model_copy(update=capture)
+        if not complete:
+            frame = None if loss == "missing" else frame.model_copy(update={"panorama": None})
+        await controller.submit_intent(event(clock, lifecycle=lifecycle).model_copy(update={
+            "target": target, "framing_observation": frame, "capture_evidence": capture}))
+
+    try:
+        await submit(4, True, "open")
+        if phase != "CANDIDATE":
+            clock.advance(.2)
+            await controller.tick_once()
+            await asyncio.sleep(0)
+            await controller.tick_once()
+        assert controller.status()[0].state == phase
+        runtime = controller._runtime_for(profile)
+        original = next(iter(runtime.events.values()))
+        last_seen = original.last_seen_monotonic
+        initial_calls = len(calls)
+        grace_deadline = None
+        for sequence in (5, 6):
+            clock.advance(.2)
+            await submit(sequence, False)
+            await controller.tick_once()
+            assert len(calls) == initial_calls
+            assert not original.open and original.observation_expired
+            assert original.last_seen_monotonic == last_seen
+            assert original.intent.framing_observation == framed
+            assert original.framing_continuity.count == 0
+            if phase != "CANDIDATE":
+                assert controller.status()[0].state == "GRACE"
+                if grace_deadline is None:
+                    grace_deadline = runtime.grace_deadline_monotonic
+                assert runtime.grace_deadline_monotonic == grace_deadline
+        if phase == "ACQUIRING":
+            assert cancelled.is_set()
+            with pytest.raises(RuntimeError, match="expired"):
+                calls[0]["target_provider"]()
+        decisions = store.list_decisions()[0]
+        assert any(item.reason == "following_framing_unavailable" for item in decisions)
+        assert sum(item.action == "focus_acquired" for item in decisions) == (phase == "FOCUSED")
+        clock.advance(.1)
+        await submit(7, True)
+        assert controller.status()[0].state == "CANDIDATE"
+        clock.advance(.2)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        assert len(calls) == initial_calls + 1
+        assert calls[-1]["destination"]["framing"]["sequence"] == 7
+        assert calls[-1]["destination"]["framing"]["member_event_ids"] == list(framed.member_event_ids)
+    finally:
+        await controller.shutdown()
+        store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("condition", ["stop_unknown", "manual_owner", "shadow"])
+async def test_framing_loss_preserves_stop_ownership_and_simulation_boundaries(condition):
+    import asyncio
+    from test_panorama_attention import event, panorama_profile
+
+    mode = "shadow" if condition == "shadow" else "live_panorama"
+    clock, camera, _, state, calls, _, store, controller = environment(mode=mode, qualified=True, blocked=True)
+    state["revision"] = 3
+    profile = panorama_profile(mode=mode, follow_view_updates=True,
+        candidate_confirm_seconds=.1, min_focus_seconds=0, close_grace_seconds=5)
+    store.replace_profile(profile)
+    framed = observation(with_localization(observed_packet()))
+    try:
+        await controller.submit_intent(event(clock).model_copy(update={"framing_observation": framed,
+            "capture_evidence": framed.model_dump(include={"capture_instance", "generation", "sequence", "published_at"})}))
+        clock.advance(.2)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        if condition == "stop_unknown":
+            camera.geometry_safe = False
+        elif condition == "manual_owner":
+            camera.lease = {"ptz_device_id": "front", "lease_id": "manual", "fence": 8}
+        await controller.submit_intent(event(clock, lifecycle="update").model_copy(update={
+            "capture_evidence": {"capture_instance": "decoder", "generation": 1,
+                "sequence": 5, "published_at": clock()}}))
+        status = controller.status()[0]
+        if condition == "stop_unknown":
+            assert status.state == "FAULT" and status.fault == "following_stop_unconfirmed"
+        elif condition == "manual_owner":
+            assert status.state == "MANUAL_OVERRIDE"
+            assert camera.releases == camera.emergency_transport_calls == 0
+        else:
+            assert status.state == "GRACE"
+            assert not calls and camera.acquires == 0
+        assert not any(item.action == "focus_acquired" for item in store.list_decisions()[0])
+    finally:
+        await controller.shutdown()
+        store.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("enlarged", [[.125, .0625, .875, .9375], [0., 0., 1., 1.]])
 async def test_extent_change_refreshes_framing_without_repeating_same_center_movement(enlarged):
     import asyncio

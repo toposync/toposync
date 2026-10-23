@@ -33,6 +33,14 @@ unavailable instead of reducing the membership count. Groups observed across
 different frames or transforms still need temporal/geometric association; this
 synchronous path does not certify physical framing or independent identity.
 
+Once following has accepted panorama-bound framing, losing that evidence expires
+the current observation even if a ground anchor remains available. Acquisition
+uses the existing cancellation and verified-Stop path before grace; incomplete
+updates cannot extend that grace or reacquire using only the ground point. A fresh
+complete observation must pass candidate confirmation again. This also applies
+to individual subjects. Events that only supplied ground targets retain their
+existing behavior; historical framing retained during grace is not current proof.
+
 Per-event `observed_framing.continuity` counts distinct accepted observations and
 their publication-time span. It requires the selected source, publication age at
 most one second, no crop boundary contact and a diagnostic margin of five percent

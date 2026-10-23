@@ -2745,3 +2745,175 @@ def test_target_change_during_measurement_replans_without_old_pulse_or_arrival(c
     assert len(measurements) == 2 + pulses and np.allclose(measurements[-1], latest)
     assert navigator.commands == pulses and len(navigator.trace) == pulses
     assert scanner.checkpoint["navigation_target_replans"] == 1
+
+
+@pytest.mark.parametrize("velocity", [-.08, .02, .08])
+def test_fresh_qualified_pose_retargets_a_moving_subject_without_waiting_for_a_quiet_frame(velocity):
+    import math
+    import time
+
+    class FreshCommand(Exception):
+        pass
+
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped",
+        last_frame={"capture_evidence": {"capture_instance": "decoder", "generation": 1, "sequence": 1},
+            "received_monotonic": time.monotonic()})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    angle = [.15]
+    direction = lambda: [math.cos(angle[0]), math.sin(angle[0]), 0.]
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.measurements = 0
+            self.response = {"pan": np.array([-.5, 0.])}
+
+        async def locate(self):
+            if self.measurements > 4:
+                pytest.fail("Repeated analysis starved a continuously updating target")
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+
+        async def _target_measurement(self, target, located):
+            self.measurements += 1
+            measured = localized_axis_measurement(target, lens, located)
+            angle[0] += velocity  # Independent subject motion while matching the frame.
+            return measured
+
+        async def _pulse(self, axis, amount, **kwargs):
+            assert axis == "pan"
+            assert scanner.checkpoint["navigation_step"]["target_ray"] == pytest.approx(direction())
+            assert amount == pytest.approx(min(.6, angle[0] / .5 * .8), rel=.002)
+            assert self.measurements == 1
+            raise FreshCommand()
+
+    navigator = Navigator()
+    with pytest.raises(FreshCommand):
+        asyncio.run(navigator.aim(direction(), target_provider=direction))
+    assert scanner.checkpoint["navigation_target_rebases"] == 1
+
+
+@pytest.mark.parametrize("velocity", [-.06, .03, .12])
+def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monkeypatch, record_property, velocity):
+    """Ideal synthetic pan plant; no device, decoder or physical timing qualification."""
+    import math
+    import json
+    from toposync_ext_cameras import panorama_navigation as navigation
+
+    elapsed, camera_angle = [0.], [0.]
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 100. + elapsed[0])
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped", last_frame={})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []}, target_reference=lambda _: reference)
+
+    def target_angle():
+        return .18 + velocity * elapsed[0]
+
+    def direction():
+        return [math.cos(target_angle()), math.sin(target_angle()), 0.]
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.response = {"pan": np.array([-.5, 0.])}
+            self.frames = 0
+
+        async def locate(self):
+            assert elapsed[0] < 8, "Tracking must make progress within the replay window"
+            self.frames += 1
+            scanner.last_frame = {"received_monotonic": 100. + elapsed[0],
+                "capture_evidence": {"capture_instance": "replay", "generation": 1, "sequence": self.frames}}
+            c, s = math.cos(camera_angle[0]), math.sin(camera_angle[0])
+            return {"rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]], "reference_id": "reference",
+                "analysis_width": 960, "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+
+        async def _target_measurement(self, target, located):
+            # Independent image-space oracle for this ideal camera and world angle.
+            error = 560 * math.tan(math.atan2(target[1], target[0]) - camera_angle[0])
+            elapsed[0] += .08
+            return {"center_error_pixels": abs(error), "error_pixels": [error, 0], "analysis_width": 960}
+
+        async def _pulse(self, axis, amount, **kwargs):
+            assert axis == "pan" and abs(amount) <= .6
+            assert self.commands < self.maximum_commands
+            assert scanner.checkpoint["navigation_step"]["target_ray"] == pytest.approx(direction())
+            camera_angle[0] += .5 * amount
+            elapsed[0] += abs(amount) + .1  # The subject keeps moving through actuation and settling.
+            self.commands += 1
+            self.trace.append({"axis": axis, "amount": amount})
+            self.last_pulse_stationary = False
+
+    navigator = Navigator()
+    if velocity == .12:
+        # This replay remains a known tracking failure; rejecting it is not mobile acceptance.
+        with pytest.raises(PanoramaCaptureError, match="visual_arrival_unconfirmed"):
+            asyncio.run(navigator.aim(direction(), target_provider=direction))
+        assert abs(560 * math.tan(target_angle() - camera_angle[0])) > 12
+        assert scanner.checkpoint["navigation_target_rebases"] > 1
+        outcome = "rejected_visual_arrival_unconfirmed"
+    else:
+        result = asyncio.run(navigator.aim(direction(), target_provider=direction))
+        assert result["verified"] and result["target_ray"] == pytest.approx(direction())
+        assert abs(560 * math.tan(target_angle() - camera_angle[0])) <= 12
+        assert 0 < navigator.commands <= 12
+        outcome = "synthetic_arrival"
+    assert scanner.checkpoint["navigation_target_rebases"] >= 1
+    record_property("tracking_replay", json.dumps({"velocity_radians_per_second": velocity,
+        "elapsed_seconds": elapsed[0], "commands": navigator.commands,
+        "final_error_pixels": abs(560 * math.tan(target_angle() - camera_angle[0])),
+        "rebases": scanner.checkpoint["navigation_target_rebases"], "outcome": outcome,
+        "physical_tracking_verified": False}))
+
+
+@pytest.mark.parametrize("invalid", ["pose_quality", "moving", "frame_replaced", "capture_changed", "expired"])
+def test_retarget_does_not_reuse_unqualified_or_changed_camera_observation(invalid):
+    import time
+
+    class NeedsObservation(Exception):
+        pass
+
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped",
+        last_frame={"capture_evidence": {"capture_instance": "decoder", "generation": 1, "sequence": 1},
+            "received_monotonic": time.monotonic()})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []}, target_reference=lambda _: reference)
+    observed = [[1., 0, 0]]
+
+    class Navigator(VisualNavigator):
+        measured = False
+
+        async def locate(self):
+            if self.measured:
+                raise NeedsObservation()
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 2 if invalid == "pose_quality" else 24,
+                "validation_p95_pixels": 1., "inlier_fraction": .8}
+
+        async def _target_measurement(self, *args):
+            self.measured = True
+            observed[0] = [.8, .6, 0]
+            if invalid == "moving":
+                scanner.physical_state = "moving"
+            elif invalid == "frame_replaced":
+                scanner.last_frame = dict(scanner.last_frame)
+            elif invalid == "capture_changed":
+                scanner.last_frame["capture_evidence"]["sequence"] = 2
+            elif invalid == "expired":
+                scanner.last_frame["received_monotonic"] -= 2
+            return {"center_error_pixels": 0}
+
+        async def _renew_localization_frame(self, *args):
+            raise NeedsObservation()
+
+        async def _pulse(self, *args, **kwargs):
+            pytest.fail("Unqualified camera observation must not drive retargeting")
+
+    navigator = Navigator(scanner, localizer)
+    with pytest.raises(NeedsObservation):
+        asyncio.run(navigator.aim(observed[0], target_provider=lambda: observed[0]))
+    assert scanner.checkpoint.get("navigation_target_rebases", 0) == 0 and navigator.commands == 0

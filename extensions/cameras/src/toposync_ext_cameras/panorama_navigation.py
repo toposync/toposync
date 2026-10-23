@@ -1045,8 +1045,30 @@ class VisualNavigator:
             )
             if pixel is None:
                 raise PanoramaCaptureError("visual_route_unavailable")
+            measured_frame = self.scanner.last_frame
+            measured_capture = deepcopy((measured_frame or {}).get("capture_evidence", {}))
             try:
                 measured = await self._target_measurement(target, located) if final else None
+                if final and target_provider is not None:
+                    updated = np.asarray(target_provider())
+                    if not np.allclose(updated, ray, atol=1e-7, rtol=0):
+                        rebased = localized_axis_measurement(updated, self.localizer.lens, located)
+                        same_frame = (measured_frame is self.scanner.last_frame and measured_capture
+                            and measured_capture == self.scanner.last_frame.get("capture_evidence"))
+                        if (rebased is not None and same_frame
+                                and getattr(self.scanner, "physical_state", None) == "stopped"):
+                            if not 0 <= time.monotonic() - measured_frame.get("received_monotonic", 0) <= 1:
+                                raise _ExpiredQualifiedFrame()
+                            if self.localizer.target_reference(updated) is None:
+                                raise PanoramaCaptureError("visual_target_unreachable")
+                            # The same qualified camera pose can project a newer subject direction without matching the old patch again.
+                            ray = target = updated
+                            waypoints = [updated]
+                            measured = rebased
+                            measured["target_update"] = "projected_with_same_stopped_frame"
+                            error = self._error(target, located)
+                            last_error = None
+                            self.scanner.checkpoint["navigation_target_rebases"] = self.scanner.checkpoint.get("navigation_target_rebases", 0) + 1
             except _ExpiredQualifiedFrame as error:
                 # Measurement may consume the last milliseconds of a valid pose.
                 # Reobserve and replan while stopped, never dispatch its old pulse
@@ -1059,6 +1081,7 @@ class VisualNavigator:
             if final:
                 observations.append({
                     "commands": self.commands,
+                    "target_ray": np.asarray(target).tolist(),
                     "capture_evidence": self.scanner.last_frame.get("capture_evidence", {}),
                     "measurement": measured,
                 })

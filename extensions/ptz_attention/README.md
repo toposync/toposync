@@ -38,6 +38,15 @@ that navigation; it never silently switches to aiming at the feet. Return uses
 only its own reference and rejects subject framing. These checks do not certify
 full subject visibility, group framing or association with another lens.
 
+When a target changes during image matching, the navigator can project its updated
+direction through the same fresh, stopped camera pose if held-out localization
+quality and capture identity still qualify it. This avoids waiting for the subject
+to stop updating. The measurement is labeled `projected_with_same_stopped_frame`;
+it is not a new detection in that frame. Invalid or changed camera observations
+require reobservation. Navigation reports `target_rebases` and `target_replans`.
+This does not yet compensate subject motion during motor actuation and settling;
+a faster synthetic trajectory remains rejected by the unchanged arrival limit.
+
 `shadow` records decisions with zero motor commands. Optional following
 uses fresh `capture_evidence`, stable capture instance/generation and increasing
 sequence/publication time to confirm target changes. Minimum dwell, movement

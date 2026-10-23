@@ -1493,15 +1493,6 @@ class VisualNavigator:
             cycle_seconds = time.monotonic() - pulse_started
             updated = self._error(target, after)
             response = (updated - before) / amount
-            if pulse_speed != DEFAULT_CONTINUOUS_PULSE_SPEED:
-                # Match the return controller's check before reusing a scaled velocity model.
-                expected_delta = self.response[axis] * amount
-                observed_delta = updated - before
-                ratio = float(np.linalg.norm(observed_delta) / max(np.linalg.norm(expected_delta), 1e-6))
-                self.trace[-1].update(response_ratio=ratio, response=response.tolist(), response_qualified=False)
-                if np.dot(observed_delta, expected_delta) <= 0 or not 0.4 <= ratio <= 2.5:
-                    self.trace[-1]["failure_code"] = "visual_response_inconsistent"
-                    raise PanoramaCaptureError("visual_response_inconsistent")
             pixel_delta = np.linalg.norm((np.tan(updated) - np.tan(before))
                 * np.array([self.localizer.lens["fx"], self.localizer.lens["fy"]])
                 * ANALYSIS_WIDTH / self.localizer.lens["width"])
@@ -1511,6 +1502,15 @@ class VisualNavigator:
                 motion_match={key: self.last_pulse_match.get(key)
                     for key in ("verified", "displacement", "overlap", "analysis_size", "homography", "support_scope")},
             )
+            if pulse_speed != DEFAULT_CONTINUOUS_PULSE_SPEED:
+                # Match the return controller's check before reusing a scaled velocity model.
+                expected_delta = self.response[axis] * amount
+                observed_delta = updated - before
+                ratio = float(np.linalg.norm(observed_delta) / max(np.linalg.norm(expected_delta), 1e-6))
+                self.trace[-1].update(response_ratio=ratio, response=response.tolist(), response_qualified=False)
+                if np.dot(observed_delta, expected_delta) <= 0 or not 0.4 <= ratio <= 2.5:
+                    self.trace[-1]["failure_code"] = "visual_response_inconsistent"
+                    raise PanoramaCaptureError("visual_response_inconsistent")
             if (self.last_pulse_stationary or np.linalg.norm(response) < 0.01
                     or pixel_delta < MINIMUM_QUALIFIED_RESPONSE_PIXELS):
                 self.trace[-1]["response_qualified"] = False

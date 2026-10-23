@@ -761,7 +761,7 @@ def test_navigation_converges_or_refuses_unattainable_motor_precision(target_yaw
     )
 
 
-@pytest.mark.parametrize("response_ratio", [1., 3.08, -1.])
+@pytest.mark.parametrize("response_ratio", [1., 3.08, -1., .0871122299])
 def test_navigation_checks_low_velocity_response_before_another_correction(response_ratio):
     lens = {"width": 960, "height": 540, "fx": 573.3, "fy": 573.3,
             "cx": 479.5, "cy": 269.5}
@@ -806,6 +806,9 @@ def test_navigation_checks_low_velocity_response_before_another_correction(respo
             asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=3))
         assert navigator.trace[-1]["response_qualified"] is False
         assert navigator.trace[-1]["failure_code"] == "visual_response_inconsistent"
+    assert "observed_error_radians" in navigator.trace[-1]
+    assert "motion_match" in navigator.trace[-1]
+    assert navigator.trace[-1]["response_pixel_delta"] >= 0
     assert navigator.speeds == [.025]
     assert navigator.trace[-1]["response_ratio"] == pytest.approx(abs(response_ratio))
     assert navigator.response["pan"] == pytest.approx([-.28619564, 0.])

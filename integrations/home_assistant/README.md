@@ -228,3 +228,93 @@ Its single transition measurement includes receiver polling and entity updates;
 it is not a latency percentile, a camera-to-entity measurement or a capacity claim.
 Full quality and performance qualification still require the representative corpus
 and measurements of the complete producer and inference path.
+
+### Complete producer and consumer path
+
+`tests/visual_state_producer_fixture.py` starts the actual Toposync application,
+authentication, storage, pipeline compiler/orchestrator, native ONNX inference and
+state endpoint. Only the camera pixels and the small color embedding model are
+synthetic. Two visual operators share a generated source and publish enumerated
+and binary states. The source factory is replaced inside this test fixture; it
+cannot open a real camera. Outbound producer connections are forbidden and counted.
+
+`tests/test_home_assistant_visual_state_full_path.py` installs the real integration
+in a separate Home Assistant container. It creates an owner through the real setup
+API, issues a service token and explicitly grants access to both visual results.
+It measures 24 alternating transitions, verifies an unmapped third class remains
+unknown in the binary entity, checks source-silence expiry, revokes the actual
+service token and replaces it through a configuration-entry reload. Entity identity
+survives token replacement, and the test asserts that no service is called.
+
+The report's clock starts in the consumer immediately before its request to change
+the generated pixels. It stops when both entities reflect the requested class.
+Thus it includes control transport, source sampling, actual inference, temporal
+confirmation, HTTP polling and entity updates. It is not camera acquisition latency.
+The reported nearest-rank percentiles describe these 24 samples; they do not qualify
+capacity, representative visual accuracy, other hardware or physical safety.
+This test complements the separate process-death/restart test; it does not itself
+restart the complete producer and consumer processes.
+
+Prepare a local CPU runtime image with the repository's existing Dockerfile, or
+reuse an already built compatible image after checking its dependencies:
+
+```sh
+docker build --target runtime-cpu --tag toposync-visual-laboratory .
+```
+
+The following run mounts current producer code read-only and records the image
+identity. The image must include `onnx`, `onnxruntime`, `numpy`, `httpx` and the
+normal Toposync runtime dependencies. The test tools are isolated pure-Python
+packages. No Docker socket, host network, device or real data directory is mounted.
+Do not attach other containers to this dedicated internal network.
+
+```sh
+(
+  set -eu
+  visual_artifacts="$HOME/.codex/task-artifacts/toposync-2/visual-full-path"
+  mkdir -p "$visual_artifacts"
+  visual_run=$(mktemp -d "$visual_artifacts/run.XXXXXX")
+  visual_tools="$visual_artifacts/test-tools"
+  python3 -m pip install --target "$visual_tools" pytest==9.1.1 pytest-asyncio==1.4.0
+  visual_image=$(docker image inspect toposync-visual-laboratory --format '{{.Id}}')
+  docker image inspect "$visual_image" --format '{{.Id}} {{.Os}} {{.Architecture}}' > "$visual_run/producer-image.txt"
+  visual_network="toposync-visual-full-$$"
+  visual_producer="toposync-visual-producer-$$"
+  mkdir -p "$visual_run/producer" "$visual_run/consumer"
+  docker network create --internal "$visual_network"
+  trap 'docker logs "$visual_producer" > "$visual_run/producer.log" 2>&1 || true; docker stop "$visual_producer" >/dev/null 2>&1 || true; docker network rm "$visual_network" >/dev/null' EXIT
+  docker run -d --rm --name "$visual_producer" --network "$visual_network" \
+    --network-alias visual-producer --read-only --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+    -v "$PWD/src:/workspace/src:ro" -v "$PWD/extensions:/workspace/extensions:ro" \
+    -v "$PWD/tests:/workspace/tests:ro" -v "$visual_tools:/test-tools:ro" \
+    -v "$visual_run/producer:/artifacts" \
+    -e PYTHONPATH=/workspace/src:/workspace/extensions/cameras/src:/workspace/extensions/vision/src:/workspace/extensions/streaming/src:/test-tools:/workspace/tests \
+    -e TOPOSYNC_FULL_PRODUCER_TEST=1 -e PYTHONDONTWRITEBYTECODE=1 \
+    -w /workspace --entrypoint python "$visual_image" \
+    tests/visual_state_producer_fixture.py --data-dir /artifacts/data
+  # Readiness is checked inside the owned container; no host port is opened.
+  for visual_attempt in $(seq 1 60); do
+    if docker exec "$visual_producer" python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/api/auth/status", timeout=1)' >/dev/null 2>&1; then break; fi
+    if [ "$visual_attempt" -eq 60 ]; then exit 1; fi
+    sleep 1
+  done
+  docker run --rm --network "$visual_network" --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+    -v "$PWD/integrations/home_assistant:/workspace/integrations/home_assistant:ro" \
+    -v "$PWD/tests:/workspace/tests:ro" -v "$visual_tools:/test-tools:ro" \
+    -v "$visual_run/consumer:/artifacts" \
+    -e PYTHONPATH=/test-tools:/workspace:/workspace/tests \
+    -e TOPOSYNC_HA_INSTALLATION_TEST=1 \
+    -e TOPOSYNC_FULL_PRODUCER_URL=http://visual-producer:8000 \
+    -e PYTHONDONTWRITEBYTECODE=1 -w /workspace --entrypoint python \
+    ghcr.io/home-assistant/home-assistant@sha256:33afb0659d786213264c2211f8d91c5fe87461c56eba6a3a546eb05fc71e89f4 \
+    -m pytest -q -p no:cacheprovider tests/test_home_assistant_visual_state_full_path.py \
+    --basetemp /artifacts/data
+)
+```
+
+`full-path-report.json` is written under the consumer's external test directory.
+Preserve the report with the code revision, image identities and dependency versions.
+The producer refuses host execution and nonempty/repository-local data directories.
+The consumer requires the explicit installation flag, Docker marker and exact test
+hostname; an ordinary test run cannot point it at the user's configured server.

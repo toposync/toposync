@@ -61,7 +61,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup",
     "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
     "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive", "metadata_combined",
-    "prepared_reference", "dynamic_reference_ignored", "cancel_initial_localization"])
+    "prepared_reference", "dynamic_reference_ignored", "cancel_initial_localization",
+    "continuous_preparation", "continuous_preparation_cancelled"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -118,6 +119,26 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     service._save = lambda job: None
     service._current = AsyncMock()
     service.localize_frame = AsyncMock(return_value={"status": "localized"})
+    if reuse.startswith("continuous_preparation"):
+        preparation_started = module.asyncio.Event()
+        preparation_finished = module.asyncio.Event()
+        camera.discover.return_value = {"velocity_supported": True}
+        async def prepare_continuous():
+            scanner._stop.assert_awaited()
+            preparation_started.set()
+            try:
+                if reuse.endswith("cancelled"):
+                    await module.asyncio.Event().wait()
+                return True
+            finally:
+                preparation_finished.set()
+        camera.prepare_continuous_move = AsyncMock(side_effect=prepare_continuous)
+        async def observe_with_preparation():
+            await module.asyncio.wait_for(preparation_started.wait(), 1)
+            if reuse.endswith("cancelled"):
+                raise PanoramaCaptureError("capture_timeout")
+            return frame
+        scanner._reference_window.side_effect = observe_with_preparation
     if reuse == "cancel_initial_localization":
         service.localize_frame.side_effect = module.asyncio.CancelledError()
     service._localizers = {("artifact", "geometry"): SimpleNamespace(lens=arrival_lens)}
@@ -188,6 +209,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         scanner._reference_window.side_effect = reference
     job = bound_job()
     job["_attention_navigation_history"] = [{"trial": index} for index in range(8)]
+    scanner.checkpoint["diagnostics"] = {"version": 1, "attempts": [{"command_outcome": "not_issued"}]}
     scanner.checkpoint["navigation_target_replans"] = 2
     scanner.checkpoint["navigation_target_rebases"] = 3
     scanner.checkpoint["navigation_target_predictions"] = 4
@@ -204,6 +226,15 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
         **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}))
+    if reuse == "continuous_preparation_cancelled":
+        with pytest.raises(HTTPException) as failure:
+            await operation
+        assert failure.value.detail["code"] == "capture_timeout"
+        assert preparation_finished.is_set()
+        navigator.aim.assert_not_awaited()
+        camera.close.assert_awaited_once()
+        assert job["stop_confirmed"] is True
+        return
     if reuse == "cancel_initial_localization":
         with pytest.raises(module.asyncio.CancelledError):
             await operation
@@ -268,6 +299,9 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         assert not images
         return
     _, evidence = await operation
+    if reuse == "continuous_preparation":
+        camera.prepare_continuous_move.assert_awaited_once()
+        assert preparation_finished.is_set()
     if reuse == "prepared_reference":
         camera.bind_reference_destination.assert_awaited_once_with(reference["destination"])
         navigator.approach_reference.assert_awaited_once_with(reference["destination"], [0, 0, 1])
@@ -297,6 +331,8 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     assert len(history) == 8 and history[0] == {"trial": 1}
     trace = history[-1]
     assert trace == job["_attention_navigation_trace"]
+    assert trace["diagnostics"] == scanner.checkpoint["diagnostics"]
+    assert trace["diagnostics"] is not scanner.checkpoint["diagnostics"]
     assert trace["navigation_target_observations"] == [{"commands": 0, "measurement": {"center_error_pixels": 4.2}}]
     assert trace["target_replans"] == 2
     assert trace["target_rebases"] == 3

@@ -1610,6 +1610,7 @@ class PanoramaService:
                            "direction_responses", "stationary_durations")
         response_binding = None
         response_observed = None
+        continuous_preparation = None
         job["stop_confirmed"] = False
         try:
             discovery_reused = bool(borrowed_control is not None and metadata
@@ -1630,6 +1631,9 @@ class PanoramaService:
             if not await scanner._stop():
                 raise PanoramaCaptureError("stop_unconfirmed")
             prepared("stopped")
+            if borrowed_control is not None and scanner.capabilities.get("velocity_supported"):
+                # Reuse live-panorama protocol preparation while observing the stopped view.
+                continuous_preparation = asyncio.create_task(camera.prepare_continuous_move())
             # Both observations follow the confirmed Stop and precede any movement.
             position_read = asyncio.create_task(camera.position())
             try:
@@ -1864,6 +1868,7 @@ class PanoramaService:
                     job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
                         for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations")}
                     job["_attention_navigation_trace"].update(preparation=preparation,
+                        diagnostics=copy.deepcopy(scanner.checkpoint.get("diagnostics", {})),
                         target_replans=scanner.checkpoint.get("navigation_target_replans", 0),
                         target_rebases=scanner.checkpoint.get("navigation_target_rebases", 0),
                         target_predictions=scanner.checkpoint.get("navigation_target_predictions", 0),
@@ -1892,6 +1897,10 @@ class PanoramaService:
                 self._save(job)
             finally:
                 try:
+                    if continuous_preparation is not None:
+                        if not continuous_preparation.done():
+                            continuous_preparation.cancel()
+                        await asyncio.shield(asyncio.gather(continuous_preparation, return_exceptions=True))
                     await camera.close()
                     if (borrowed_control is not None and job.get("stop_confirmed")
                             and failure_code in {None, "capture_cancelled", "following_observation_expired"}

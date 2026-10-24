@@ -1174,6 +1174,21 @@ class VisualNavigator:
             raise _ExpiredQualifiedFrame()
         return result
 
+    def _probe_plan(self, target, located, axes, error, near):
+        axis = max(axes, key=lambda name: abs(error[0 if name == "pan" else 1]))
+        direction = reference_probe_direction(
+            axis, np.asarray(target), np.asarray(located["rotation_matrix"]),
+            getattr(self.localizer, "probe_observations", []),
+        )
+        amount = self.probe_durations.get(axis, DEFAULT_NAVIGATION_PROBE_SECONDS) * (direction if direction is not None else 1)
+        from .panorama_approach import approach_pulse
+        approximation = getattr(self.localizer, "approach", {})
+        predicted = (approach_pulse(approximation, axis, np.asarray(target), np.asarray(located["rotation_matrix"]))
+                     if approximation.get("status") == "qualified" else None)
+        if predicted is not None and not near:
+            amount = predicted
+        return axis, amount, direction, predicted
+
     async def aim(
         self, ray: Any, *, maximum_error_pixels: float = MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
         target_provider: Callable[[], list[float]] | None = None,
@@ -1407,19 +1422,7 @@ class VisualNavigator:
                 and measured["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS * 4
                 and self.scanner.capabilities.get("velocity_supported"))
             if missing:
-                axis = max(missing, key=lambda name: abs(error[0 if name == "pan" else 1]))
-                amount = self.probe_durations.get(axis, DEFAULT_NAVIGATION_PROBE_SECONDS)
-                probe_direction = reference_probe_direction(
-                    axis, np.asarray(target), np.asarray(located["rotation_matrix"]),
-                    getattr(self.localizer, "probe_observations", []),
-                )
-                amount *= probe_direction if probe_direction is not None else 1
-                from .panorama_approach import approach_pulse
-                approximation = getattr(self.localizer, "approach", {})
-                predicted = (approach_pulse(approximation, axis, np.asarray(target), np.asarray(located["rotation_matrix"]))
-                             if approximation.get("status") == "qualified" else None)
-                if predicted is not None and not near:
-                    amount = predicted
+                axis, amount, probe_direction, predicted = self._probe_plan(target, located, missing, error, near)
             else:
                 matrix = np.column_stack([self.response[axis] for axis in axes])
                 commands = correction_step(
@@ -1524,6 +1527,26 @@ class VisualNavigator:
                         raise _TargetDispatchChanged("target_projection_unavailable", frame_age)
                     shift = float(np.linalg.norm(np.asarray(new["error_pixels"]) - old["error_pixels"]))
                     if shift > maximum_error_pixels / 2:
+                        # A fresh target may require the exact same initial probe; recompute, never widen its pixel gate.
+                        if (final and missing and not self.response and not self.direction_responses
+                                and not self.stationary_durations and not near and not fine_control
+                                and predicted is None and probe_direction is not None
+                                and new["center_error_pixels"] > MAXIMUM_LIVE_CENTER_ERROR_PIXELS * 4
+                                and self.localizer.target_reference(updated) is not None):
+                            updated_error = self._error(updated, located)
+                            updated_axes = [name for index, name in enumerate(("pan", "tilt"))
+                                            if self.scanner.capabilities.get("axes", {}).get(name) is True
+                                            and abs(new["error_pixels"][index]) > maximum_error_pixels / np.sqrt(2)]
+                            replanned = (self._probe_plan(updated, located, updated_axes, updated_error, False)
+                                         if updated_axes and np.linalg.norm(updated_error) >= .04 else None)
+                            if (replanned == (axis, pulse_amount, probe_direction, None)
+                                    and 0 <= time.monotonic() - planned_frame_received <= 1):
+                                self.scanner.checkpoint["navigation_step"]["dispatch_replan"] = {
+                                    "target_ray": updated.tolist(), "target_shift_pixels": shift,
+                                    "frame_age_seconds": frame_age, "same_command": True}
+                                if self.trace:
+                                    self.trace[-1]["dispatch_replan"] = self.scanner.checkpoint["navigation_step"]["dispatch_replan"]
+                                return
                         raise _TargetDispatchChanged("target_shifted", frame_age, shift)
             self.dispatch_guard = guard_target_dispatch if target_provider is not None else None
             pulse_started = time.monotonic()

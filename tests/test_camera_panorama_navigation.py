@@ -3403,3 +3403,61 @@ def test_cancelled_navigation_observation_preserves_timing(monkeypatch, stage):
     assert record['completed'] is False
     assert record['elapsed_seconds'] >= 0
     assert record['commands'] == 0
+
+
+@pytest.mark.parametrize('change', ['same_probe', 'reverse', 'axis', 'near', 'expired', 'coverage', 'unqualified_direction'])
+def test_initial_probe_replans_current_target_without_dispatching_changed_command(monkeypatch, change):
+    from toposync_ext_cameras import panorama_navigation as navigation
+
+    clock = [100.]
+    monkeypatch.setattr(navigation.time, 'monotonic', lambda: clock[0])
+    lens = {'width': 960, 'height': 540, 'fx': 560, 'fy': 560, 'cx': 479.5, 'cy': 269.5}
+    reference = {'id': 'reference', 'rotation_matrix': np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={'axes': {'pan': True, 'tilt': True}, 'velocity_supported': True},
+        checkpoint={}, physical_state='stopped', last_frame={'received_monotonic': 100., 'capture_evidence': {'sequence': 1}})
+    changed = [False]
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={'overlap_links': []},
+        target_reference=lambda _: None if changed[0] and change == 'coverage' else reference)
+    first = np.array([1., .3, .1]); first /= np.linalg.norm(first)
+    latest = np.array({'reverse': [1., -.6, .1], 'axis': [1., .02, .6], 'near': [1., .01, .01]}.get(change, [1., .6, .1]))
+    latest /= np.linalg.norm(latest)
+    target = [first]
+    monkeypatch.setattr(navigation, 'reference_probe_direction',
+        lambda axis, ray, rotation, observations: None if change == 'unqualified_direction'
+        else (1 if ray[1 if axis == 'pan' else 2] > 0 else -1))
+
+    class Dispatched(Exception):
+        pass
+
+    class Rejected(Exception):
+        pass
+
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            if changed[0]:
+                raise Rejected()
+            return {**reference, 'reference_id': 'reference', 'analysis_width': 960,
+                'validation_matches': 24, 'validation_p95_pixels': 1., 'inlier_fraction': .8}
+
+        async def _target_measurement(self, ray, located):
+            return navigation.localized_axis_measurement(ray, lens, located)
+
+        async def _pulse(self, axis, amount, **options):
+            changed[0] = True
+            target[0] = latest
+            clock[0] += 1.01 if change == 'expired' else .2
+            self.dispatch_guard()
+            assert axis == 'pan' and amount == navigation.DEFAULT_NAVIGATION_PROBE_SECONDS
+            raise Dispatched()
+
+    navigator = Navigator(scanner, localizer)
+    with pytest.raises(Dispatched if change == 'same_probe' else Rejected):
+        asyncio.run(navigator.aim(first, target_provider=lambda: target[0]))
+    if change == 'same_probe':
+        replan = scanner.checkpoint['navigation_step']['dispatch_replan']
+        assert replan['same_command'] and replan['target_shift_pixels'] > 100
+        assert replan['target_ray'] == pytest.approx(latest)
+        assert scanner.checkpoint.get('navigation_target_replans', 0) == 0
+    else:
+        assert scanner.checkpoint['navigation_target_replans'] == 1
+        assert 'dispatch_replan' not in scanner.checkpoint['navigation_step']

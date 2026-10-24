@@ -1856,9 +1856,22 @@ class VisualNavigator:
         # None requests a rate on the target's own measured cadence. A motor
         # arrival still requests its full horizon and may be refused.
         self.target_prediction_uncertain = False
-        candidate = motion.predict_rate(time.monotonic()) if seconds is None else motion.predict(time.monotonic(), seconds)
+        now = time.monotonic()
+        candidate = motion.predict_rate(now) if seconds is None else motion.predict(now, seconds)
+        # Retain the actual bounded inputs so a refused forecast can be replayed without moving hardware.
+        diagnostic = {"observed_monotonic": now, "requested_cycle_seconds": seconds,
+            "identity": motion.identity, "samples": [[sequence, timestamp, ray.tolist()]
+                for sequence, timestamp, ray in motion.samples],
+            "outcome": "motion_prediction_unavailable", "candidate": candidate,
+            "maximum_error_pixels": maximum_error_pixels}
+        records = self.scanner.checkpoint.setdefault("navigation_prediction_attempts", [])
+        records.append(diagnostic)
+        del records[:-16]
+        if candidate is None:
+            return None
         coverage = getattr(self.localizer, "coverage_mask", None)
-        if candidate is None or getattr(coverage, "ndim", None) != 2 or not coverage.size:
+        diagnostic["outcome"] = "coverage_unavailable"
+        if getattr(coverage, "ndim", None) != 2 or not coverage.size:
             return None
         estimates = []
         for key in ("ray", "comparison_ray", "history_ray"):
@@ -1866,16 +1879,21 @@ class VisualNavigator:
             if (not coverage[min(coverage.shape[0] - 1, int(v * coverage.shape[0])),
                     min(coverage.shape[1] - 1, int(u * coverage.shape[1]))]
                     or self.localizer.target_reference(candidate[key]) is None):
+                diagnostic["outcome"] = "target_unreachable"
                 return None
             estimate = localized_axis_measurement(candidate[key], self.localizer.lens, located)
             if estimate is None:
+                diagnostic["outcome"] = "measurement_unavailable"
                 return None
             estimates.append(estimate)
         uncertainty = max(float(np.linalg.norm(np.asarray(estimates[0]["error_pixels"]) - estimate["error_pixels"]))
             for estimate in estimates[1:])
+        diagnostic["velocity_disagreement_pixels"] = uncertainty
         if uncertainty > maximum_error_pixels / 2:
+            diagnostic["outcome"] = "velocity_disagreement"
             self.target_prediction_uncertain = True
             return None
+        diagnostic["outcome"] = "accepted"
         observed = [localized_axis_measurement(candidate[key], self.localizer.lens, located)
             for key in ("observed_start_ray", "observed_end_ray")]
         displacement = (float(np.linalg.norm(np.asarray(observed[1]["error_pixels"]) - observed[0]["error_pixels"]))

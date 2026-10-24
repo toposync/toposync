@@ -1996,7 +1996,7 @@ class PanoramaService:
                         "can_return": bool((return_checkpoint.get("return") or return_checkpoint.get("visual_original_ray") or return_checkpoint.get("pending_returns")) and return_checkpoint.get("initial_path"))}
                     if borrowed_control is not None:
                         job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
-                            for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations", "navigation_motion_observations")}
+                            for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations", "navigation_motion_observations", "navigation_prediction_attempts")}
                         job["_attention_navigation_trace"].update(preparation=preparation,
                             diagnostics=copy.deepcopy(scanner.checkpoint.get("diagnostics", {})),
                             final_arrival_observation=copy.deepcopy(scanner.checkpoint.get("final_arrival_observation")),

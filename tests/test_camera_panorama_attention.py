@@ -237,6 +237,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     scanner.checkpoint["navigation_target_replans"] = 2
     scanner.checkpoint["navigation_target_rebases"] = 3
     scanner.checkpoint["navigation_target_predictions"] = 4
+    scanner.checkpoint["navigation_prediction_attempts"] = [{"outcome": "motion_prediction_unavailable", "samples": []}]
     current_direction = [[1., 0., 0.]]
     def current_target():
         if reuse == "lost_during_cleanup":
@@ -535,6 +536,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     assert trace["target_replans"] == 2
     assert trace["target_rebases"] == 3
     assert trace["target_predictions"] == 4
+    assert trace["navigation_prediction_attempts"] == scanner.checkpoint["navigation_prediction_attempts"]
     assert trace["error_code"] is None
     initial = trace["navigation_observation_timings"][0]
     assert initial["stage"] == "initial_localization"

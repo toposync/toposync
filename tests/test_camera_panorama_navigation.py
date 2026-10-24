@@ -3957,6 +3957,9 @@ def test_extended_history_forecast_requires_agreement_with_recent_velocity(monke
         "validation_matches": 24, "inlier_fraction": .9}
     result = navigator._predict_target(motion, located, 12., None)
     assert (result is None) is accelerated
+    attempt = scanner.checkpoint["navigation_prediction_attempts"][-1]
+    assert attempt["outcome"] == ("velocity_disagreement" if accelerated else "accepted")
+    assert (attempt["velocity_disagreement_pixels"] > 6.) is accelerated
 
 
 @pytest.mark.parametrize('capacity', [.849335, .9627502441406248])
@@ -4003,3 +4006,36 @@ def test_longer_response_probe_spends_only_current_bidirectional_capacity(capaci
         assert result['duration_seconds'] == capacity
         assert result['following_pulse_limit_seconds'] == 1.2
         assert navigator.trace[0]['qualified_duration_limit_seconds'] == pytest.approx(capacity)
+
+
+@pytest.mark.parametrize("sample_count,age,cycle", [(2, 0., None), (6, .2, None), (6, 1.1, None), (6, .2, 1.)])
+def test_prediction_diagnostic_replays_original_inputs_and_stays_bounded(monkeypatch, sample_count, age, cycle):
+    import json
+    import toposync_ext_cameras.panorama_navigation as navigation
+    from test_camera_panorama_target_motion import observation, direction
+    motion = navigation.TargetMotion()
+    for index in range(sample_count):
+        timestamp = 100 + index * .2
+        motion.observe(observation(index + 1, timestamp), direction(index * .013), timestamp)
+    now = timestamp + age
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: now)
+    scanner = SimpleNamespace(checkpoint={})
+    # Prediction is captured before optical checks; this localizer deliberately has no coverage.
+    navigator = navigation.VisualNavigator(scanner, SimpleNamespace())
+    for _ in range(20):
+        assert navigator._predict_target(motion, {}, 12., cycle) is None
+    records = scanner.checkpoint["navigation_prediction_attempts"]
+    assert len(records) == 16
+    saved = json.loads(json.dumps(records[-1], allow_nan=False))
+    reconstructed = navigation.TargetMotion()
+    scope, capture, generation = saved["identity"]
+    for sequence, received, ray in saved["samples"]:
+        reconstructed.observe({"scope": scope, "capture_instance": capture, "generation": generation,
+            "sequence": sequence, "observed_monotonic": received}, ray, received)
+    replay = (reconstructed.predict_rate(saved["observed_monotonic"]) if cycle is None
+        else reconstructed.predict(saved["observed_monotonic"], saved["requested_cycle_seconds"]))
+    assert replay == saved["candidate"]
+    assert saved["outcome"] == ("coverage_unavailable" if replay else "motion_prediction_unavailable")
+    motion.samples[-1][2][:] = 0
+    motion.observe(None, None, now)
+    assert json.loads(json.dumps(records[-1], allow_nan=False)) == saved

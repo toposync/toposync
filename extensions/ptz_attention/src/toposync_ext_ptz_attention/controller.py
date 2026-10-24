@@ -15,6 +15,7 @@ from toposync.runtime.notifications.events import EventBroadcaster
 from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness
 from toposync.runtime.pipelines.runtime import Packet
+from toposync_ext_cameras.panorama_navigation import MAXIMUM_LIVE_CENTER_ERROR_PIXELS
 
 from .models import (
     AttentionIntent,
@@ -1979,7 +1980,7 @@ class PtzAttentionController:
                     or response.get("stop_confirmed") is not True or response.get("returning") is not returning
                     or ((not profile.follow_view_updates or returning) and destination.target_key != runtime.command_target_key)
                     or evidence.get("verified") is not True or evidence.get("kind") != "visual_aim_verified"
-                    or type(error) not in (int, float) or not 0 <= error <= (3 if returning else 12)):
+                    or type(error) not in (int, float) or not 0 <= error <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS):
                 raise ValueError("unconfirmed visual arrival")
             snapshot = await self.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
                 source_id=profile.source_id, ptz_device_id=profile.ptz_device_id, refresh_physical=False)

@@ -331,7 +331,7 @@ def environment(mode="shadow", qualified=False, failure=None, blocked=False):
             if failure == "arrival":
                 result["evidence"]["measurement"]["center_error_pixels"] = 13
             if failure == "return" and kwargs.get("returning"):
-                result["evidence"]["measurement"]["center_error_pixels"] = 4
+                result["evidence"]["measurement"]["center_error_pixels"] = 13
             if failure == "stop":
                 result["stop_confirmed"] = False
             if failure == "epoch":
@@ -879,13 +879,15 @@ async def test_continuously_changing_world_ray_does_not_restart_shadow_confirmat
 
 
 @pytest.mark.asyncio
-async def test_qualified_synthetic_dispatch_arrival_and_three_pixel_return():
-    clock, camera, _, _, calls, _, store, controller = environment(mode="live_panorama", qualified=True)
+@pytest.mark.parametrize("return_error", [1., 8.389169247990404, 12.])
+async def test_qualified_synthetic_dispatch_arrival_and_shared_precision_return(return_error):
+    clock, camera, _, state, calls, _, store, controller = environment(mode="live_panorama", qualified=True)
     await controller.submit_intent(event(clock))
     assert controller.status()[0].state == "ACQUIRING"
     await asyncio.sleep(0)
     await controller.tick_once()
     assert controller.status()[0].state == "FOCUSED"
+    state["arrival_evidence"] = {"measurement": {"center_error_pixels": return_error}}
     await controller.submit_intent(event(clock, lifecycle="close"))
     await asyncio.sleep(0)
     await controller.tick_once()

@@ -6,12 +6,10 @@ import time
 import pytest
 
 from test_identity_store import enroll, evidence, policy
+from test_identity_api import client
 from test_vision_association import config, observation
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
-
-
-pytest_plugins = ["test_identity_api"]
 
 
 def setup(client, cfg=None):

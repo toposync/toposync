@@ -393,6 +393,14 @@ def test_vision_pose_estimate_config_normalizes_defaults() -> None:
     assert config.max_poses_per_frame == 5
 
 
+def test_register_vision_pipeline_operators_is_idempotent() -> None:
+    registry = OperatorRegistry()
+    register_vision_pipeline_operators(registry)
+    original = registry.get("vision.activity_evidence")
+    register_vision_pipeline_operators(registry)
+    assert registry.get("vision.activity_evidence") is original
+
+
 def test_register_vision_pipeline_operators_exposes_pose_estimate() -> None:
     registry = OperatorRegistry()
 

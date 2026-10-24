@@ -175,6 +175,8 @@ class ActivityEvidenceRuntime(TransformOperatorRuntime):
 
 
 def register_activity_evidence_operator(registry):
+    if registry.get("vision.activity_evidence") is not None:
+        return
     registry.register_operator(
         operator_id="vision.activity_evidence", config_model=ActivityEvidenceConfig,
         inputs=[{"name": "in", "required": True}], outputs=[{"name": "out"}],

@@ -9,6 +9,7 @@ import pytest
 
 from toposync.app import create_app
 from toposync.extensions.manifest import ExtensionManifest
+from toposync.runtime.pipelines import SourceOperatorRuntime
 import toposync.extensions.manager as ext_manager_mod
 
 
@@ -23,6 +24,11 @@ class _FakeEntryPoint:
 class _OperatorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     fps: int = Field(default=5, ge=1, le=60)
+
+
+class _CameraSourceRuntime(SourceOperatorRuntime):
+    async def run(self, context):
+        await context.cancel_event.wait()
 
 
 class _PipelineExtension:
@@ -52,6 +58,7 @@ class _PipelineExtension:
                 }
             ],
             owner="com.test.pipeline_ext",
+            runtime_factory=lambda *_: _CameraSourceRuntime(),
         )
 
 

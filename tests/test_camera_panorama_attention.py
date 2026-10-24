@@ -65,6 +65,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup", "external_cancel_cleanup",
     "response_cancelled", "response_expired", "response_empty", "response_stop_failure", "response_control_failure",
     "local_preparation", "local_preparation_rejected", "local_preparation_cancelled", "local_preparation_return_failed", "local_preparation_degraded",
+    "local_preparation_extension", "local_preparation_extension_degraded", "local_preparation_extension_cancelled",
+    "local_preparation_extension_return_failed", "local_preparation_extension_rejected",
     "target_history", "target_history_changed", "target_history_expired", "return_boundary_jitter", "return_outside_limit"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
@@ -267,13 +269,19 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         navigator._target_measurement.side_effect = measured_after_update
     if reuse.startswith("local_preparation"):
         async def local_probe(**kwargs):
-            assert navigator.aim.await_count == 1
-            assert not navigator.response and not navigator.probe_durations
-            if reuse == "local_preparation_cancelled":
+            extending = navigator.qualify_velocity.await_count == 2
+            assert navigator.aim.await_count == (2 if extending else 1)
+            if extending:
+                assert kwargs['duration_seconds'] == .9627502441406248
+                assert navigator.response and navigator.commands == 1
+            else:
+                assert not navigator.response and not navigator.probe_durations
+            if reuse == "local_preparation_cancelled" or (extending and reuse.endswith("extension_cancelled")):
                 raise module.asyncio.CancelledError()
             navigator.response["pan"] = np.array([.2, 0])
             navigator.pulse_limits["pan"] = 1.2
-            return {"response_qualified": reuse != "local_preparation_rejected",
+            return {"response_qualified": reuse != "local_preparation_rejected"
+                    and not (extending and reuse.endswith("extension_rejected")),
                     "following_pulse_limit_seconds": 1.2}
         navigator.qualify_velocity = AsyncMock(side_effect=local_probe)
         if reuse == "local_preparation_return_failed":
@@ -284,6 +292,16 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
                     navigator.pulse_limits["pan"] = .6
                 return navigator.aim.return_value
             navigator.aim.side_effect = degraded_return
+        if reuse.startswith("local_preparation_extension"):
+            async def extended_return(*args, **kwargs):
+                if navigator.aim.await_count == 2:
+                    navigator.pulse_limits['pan'] = .9627502441406248
+                elif navigator.aim.await_count == 3:
+                    if reuse.endswith('return_failed'):
+                        raise PanoramaCaptureError('visual_arrival_unconfirmed')
+                    navigator.pulse_limits['pan'] = .849335 if reuse.endswith('degraded') else 1.2
+                return navigator.aim.return_value
+            navigator.aim.side_effect = extended_return
     if reuse in {"return_boundary_jitter", "return_outside_limit"}:
         async def aim_with_boundary(ray, *, maximum_error_pixels):
             initial_error = min(11.935579, maximum_error_pixels - .05)
@@ -307,9 +325,11 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         assert not service._navigation_scanners
         return
     if reuse.startswith("local_preparation"):
-        if reuse == "local_preparation":
+        if reuse in {"local_preparation", "local_preparation_extension"}:
             _, evidence = await operation
             assert evidence["response_preparation"]["response_qualified"] is True
+            if reuse.endswith('extension'):
+                assert evidence['response_preparation']['initial_preparation']['returned_pulse_limit_seconds'] == .9627502441406248
             cached = service._attention_responses["camera"]
             assert cached["response"]["pulse_limits"]["pan"] == 1.2
             assert not cached["response"]["probe_durations"], "Old axes cannot gain a new expiry"
@@ -317,7 +337,9 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
             with pytest.raises(module.asyncio.CancelledError if reuse.endswith("cancelled") else HTTPException):
                 await operation
             assert not service._attention_responses
-        assert navigator.aim.await_count == (1 if reuse.endswith("cancelled") else 2)
+        expected_aims = (2 if reuse.endswith('cancelled') else 3) if reuse.startswith('local_preparation_extension') else (1 if reuse.endswith('cancelled') else 2)
+        assert navigator.aim.await_count == expected_aims
+        assert navigator.qualify_velocity.await_count == (2 if reuse.startswith('local_preparation_extension') else 1)
         scanner._confirm_stop.assert_awaited()
         camera.close.assert_awaited_once()
         assert not service.busy and not service._navigation_scanners

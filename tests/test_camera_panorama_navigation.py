@@ -3952,3 +3952,49 @@ def test_extended_history_forecast_requires_agreement_with_recent_velocity(monke
         "validation_matches": 24, "inlier_fraction": .9}
     result = navigator._predict_target(motion, located, 12., None)
     assert (result is None) is accelerated
+
+
+@pytest.mark.parametrize('capacity', [.849335, .9627502441406248])
+@pytest.mark.parametrize('failure', [None, 'expired', 'view_changed', 'one_direction', 'over_budget', 'not_stopped'])
+def test_longer_response_probe_spends_only_current_bidirectional_capacity(capacity, failure):
+    import time
+    now = time.monotonic()
+    calls = []
+    lens = {'width': 960, 'height': 540, 'fx': 560, 'fy': 560, 'cx': 479.5, 'cy': 269.5}
+    match = {'verified': True, 'support_scope': 'distributed_scene', 'overlap': .9,
+        'analysis_size': [960, 540], 'homography': [[1., 0, -80.], [0, 1., 0], [0, 0, 1.]],
+        'inliers': 120, 'source_features': 140, 'target_features': 140, 'displacement': 80.}
+    baseline = {'received_monotonic': now}
+    async def pulse(axis, sign, duration, **options):
+        calls.append((axis, sign, duration, options))
+        return {'frame': {'received_monotonic': time.monotonic(), 'capture_evidence': {'sequence': 2}},
+            'stable': True, 'match': match}
+    scanner = SimpleNamespace(last_frame=baseline, checkpoint={}, _check=lambda: None,
+        _persist=AsyncMock(), _pulse=pulse, capabilities={'velocity_supported': True},
+        physical_state='moving' if failure == 'not_stopped' else 'stopped')
+    navigator = VisualNavigator(scanner, SimpleNamespace(lens=lens))
+    navigator.response['pan'] = np.array([-.2, 0.])
+    navigator.response_rotations['pan'] = np.eye(3)
+    navigator.direction_responses[('pan', 1)] = (.6, np.array([-.12, 0.]))
+    if failure != 'one_direction':
+        navigator.direction_responses[('pan', -1)] = (.14, np.array([.028, 0.]))
+    navigator.pulse_capacity['pan'] = {'limit_seconds': capacity,
+        'observed_monotonic': now - (301 if failure == 'expired' else 0),
+        'rotation_matrix': np.eye(3), 'response': navigator.response['pan'].copy(),
+        'pixel_budget': navigator._response_pixel_delta(np.zeros(2), navigator.response['pan'] * capacity)}
+    rotation = np.diag([-1., 1., -1.]) if failure == 'view_changed' else np.eye(3)
+    navigator.locate = AsyncMock(return_value={'rotation_matrix': rotation})
+    navigator._error = lambda *_: np.array([-.14, 0.]) if calls else np.zeros(2)
+    duration = capacity + .01 if failure == 'over_budget' else capacity
+    if failure:
+        with pytest.raises(PanoramaCaptureError):
+            asyncio.run(navigator.qualify_velocity('pan', 1, .1, duration))
+        assert not calls
+    else:
+        result = asyncio.run(navigator.qualify_velocity('pan', 1, .1, duration))
+        assert len(calls) == 1 and calls[0][:3] == ('pan', 1, duration)
+        assert calls[0][3]['expected_frame'] is baseline
+        assert result['response_qualified'] is True
+        assert result['duration_seconds'] == capacity
+        assert result['following_pulse_limit_seconds'] == 1.2
+        assert navigator.trace[0]['qualified_duration_limit_seconds'] == pytest.approx(capacity)

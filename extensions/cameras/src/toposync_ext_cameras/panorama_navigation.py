@@ -1657,16 +1657,21 @@ class VisualNavigator:
                 or not DEFAULT_CONTINUOUS_PULSE_SPEED <= speed <= .2
                 or not isinstance(duration_seconds, (int, float)) or isinstance(duration_seconds, bool)
                 or not DEFAULT_NAVIGATION_PROBE_SECONDS <= duration_seconds <= (
-                    MAXIMUM_NAVIGATION_PULSE_SECONDS if speed == DEFAULT_CONTINUOUS_PULSE_SPEED else .24)):
+                    1.2 if speed == DEFAULT_CONTINUOUS_PULSE_SPEED else .24)):
             raise PanoramaCaptureError("invalid_velocity")
         if self.scanner.physical_state != "stopped":
             raise PanoramaCaptureError("stop_unconfirmed")
         located = await self.locate()
+        duration_limit = self._retained_pulse_limit(axis, located)
+        if duration_seconds > MAXIMUM_NAVIGATION_PULSE_SECONDS and (
+                not self._bidirectional_response_qualified(axis) or duration_seconds > duration_limit):
+            raise PanoramaCaptureError("visual_response_unavailable")
         target = _rotation_basis(located["rotation_matrix"])[:, 2]
         before = self._error(target, located)
         amount = direction * duration_seconds
         self.scanner.checkpoint["navigation_step"] = {"kind": "velocity_qualification",
-            "response_qualified": False, "axis": axis, "speed": speed, "direction": direction}
+            "response_qualified": False, "axis": axis, "speed": speed, "direction": direction,
+            "qualified_duration_limit_seconds": duration_limit}
         await self._pulse(axis, amount, speed=speed)
         after = await self.locate()
         updated = self._error(target, after)

@@ -1587,7 +1587,7 @@ class PanoramaService:
     ) -> tuple[str, dict[str, Any]]:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
-        from .panorama_navigation import VisualNavigator, _arrival_stop_is_current, select_direct_native_reference
+        from .panorama_navigation import VisualNavigator, MAXIMUM_NAVIGATION_PULSE_SECONDS, _arrival_stop_is_current, select_direct_native_reference
         from .panorama_target_motion import TargetMotion
 
         if self.camera_factory is None:
@@ -1841,10 +1841,23 @@ class PanoramaService:
                         # Reuse the qualified local probe and the same verified home path.
                         for name in response_fields:
                             getattr(navigator, name).clear()
-                        probe = await navigator.qualify_velocity(**response_preparation)
                         response_observed = None
-                        await approach_native_reference(target["ray"])
-                        evidence = await navigator.aim(target["ray"], maximum_error_pixels=planning_error_pixels)
+                        probe_request = response_preparation
+                        preparations = []
+                        for attempt in range(2):
+                            probe = await navigator.qualify_velocity(**probe_request)
+                            await approach_native_reference(target["ray"])
+                            evidence = await navigator.aim(target["ray"], maximum_error_pixels=planning_error_pixels)
+                            limit = navigator.pulse_limits.get(response_preparation["axis"], 0)
+                            preparations.append({**probe, "returned_pulse_limit_seconds": limit})
+                            if not (attempt == 0 and probe.get("response_qualified") is True
+                                    and 1 <= probe.get("following_pulse_limit_seconds", 0) <= 1.2
+                                    and MAXIMUM_NAVIGATION_PULSE_SECONDS < limit < 1):
+                                break
+                            # One longer measurement spends existing capacity; it never resets the command budget.
+                            probe_request = {**response_preparation, "duration_seconds": limit}
+                        if len(preparations) == 2:
+                            probe["initial_preparation"] = preparations[0]
                         evidence["response_preparation"] = probe
                         if (probe.get("response_qualified") is not True
                                 or not 1 <= probe.get("following_pulse_limit_seconds", 0) <= 1.2
@@ -1958,6 +1971,7 @@ class PanoramaService:
                 if response_binding is not None and navigator is not None:
                     # Losing the target does not invalidate a measured motor response after confirmed Stop.
                     if (failure_code in {None, "capture_cancelled", "following_observation_expired"} and job.get("stop_confirmed")
+                            and (response_preparation is None or failure_code is None)
                             and getattr(navigator, "commands", 0) > 0 and getattr(navigator, "response", None)):
                         # shortcut: reuse expires after five minutes; longer reuse needs a durable actuator calibration.
                         self._attention_responses[job["camera_id"]] = {
@@ -1965,7 +1979,7 @@ class PanoramaService:
                             "observed_monotonic": response_observed or time.monotonic(),
                             "response": {name: copy.deepcopy(getattr(navigator, name)) for name in response_fields},
                         }
-                    elif (not job.get("stop_confirmed")
+                    elif (not job.get("stop_confirmed") or (response_preparation is not None and failure_code is not None)
                             or failure_code not in {None, "capture_cancelled", "following_observation_expired"}):
                         getattr(self, "_attention_responses", {}).pop(job["camera_id"], None)
             except asyncio.CancelledError:

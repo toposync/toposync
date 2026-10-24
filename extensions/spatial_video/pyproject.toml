@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["toposync-core>=0.7.5"]
+dependencies = ["toposync-core>=0.11.0"]
 
 [project.entry-points."toposync.extensions"]
 spatial_video = "toposync_ext_spatial_video.plugin:SpatialVideoExtension"

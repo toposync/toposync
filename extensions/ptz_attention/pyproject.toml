@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["toposync-core>=0.3.0", "toposync-ext-cameras>=0.9.0"]
+dependencies = ["toposync-core>=0.11.0", "toposync-ext-cameras>=0.11.0"]
 
 [project.entry-points."toposync.extensions"]
 ptz_attention = "toposync_ext_ptz_attention.plugin:PtzAttentionExtension"

@@ -7,8 +7,8 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-  "toposync-core>=0.9.0",
-  "toposync-ext-cameras>=0.1.0",
+  "toposync-core>=0.11.0",
+  "toposync-ext-cameras>=0.11.0",
   "numpy>=1.26,<3",
   "cryptography>=44,<47",
   "norfair>=2.2,<3",

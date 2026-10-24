@@ -216,7 +216,8 @@ def test_expired_transient_does_not_drop_authorization_for_retained_visit(tmp_pa
 
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("disabled", [False, True])
-def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monkeypatch, existing, disabled):
+@pytest.mark.parametrize("with_notifications", [False, True])
+def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monkeypatch, existing, disabled, with_notifications):
     import asyncio
     from types import SimpleNamespace
     from fastapi import FastAPI
@@ -235,7 +236,8 @@ def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monk
     async def scenario():
         app = FastAPI()
         from toposync.runtime.notifications import NotificationsRuntime
-        app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
+        if with_notifications:
+            app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
         app.state.config_store = ConfigStore(paths=UserDataPaths(
             data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files",
         ))
@@ -268,6 +270,7 @@ def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monk
                 assert extension._association_repository is None
             if existing:
                 assert extension._identity_store is not None
+                assert (extension._identity_store.activity_authorized is None) is (not with_notifications)
                 assert extension._identity_store.observations() == []
             else:
                 assert extension._identity_store is None

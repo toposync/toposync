@@ -14,6 +14,7 @@
 - Align all 16 Python packages, the Full Application add-on and Remote Instance add-on at 0.11.0.
 - Preserve authenticated remote ingress and improve streaming fallback, privacy revocation and accessible configuration controls.
 - Keep Vision activity-evidence registration idempotent when camera and vision setup share one operator registry.
+- Initialize Vision on dedicated processing servers without requiring origin-only notifications; activity history remains unauthorized without its origin service.
 
 ### Upgrade Notes
 

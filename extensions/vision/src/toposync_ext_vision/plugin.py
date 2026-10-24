@@ -204,8 +204,9 @@ class VisionExtension(BaseExtension):
                 scope_directory = hashlib.sha256(b"installation").hexdigest()[:32]
                 if not create and not (Path(directory) / "identities" / scope_directory / "gallery.sqlite3").is_file():
                     return None
+                notifications = getattr(app.state, "notifications", None)
                 self._identity_store = IdentityStore(Path(directory) / "identities", scope="installation",
-                    activity_authorized=app.state.notifications.occurrences.reference_allowed)
+                    activity_authorized=notifications.occurrences.reference_allowed if notifications is not None else None)
             return self._identity_store
 
     async def setup_retention(self, app: FastAPI) -> None:
@@ -224,7 +225,9 @@ class VisionExtension(BaseExtension):
                     store.revoke_activity(identifier)
             await asyncio.to_thread(invalidate)
 
-        app.state.notifications.invalidate_occurrence_derivatives = invalidate_activity
+        notifications = getattr(app.state, "notifications", None)
+        if notifications is not None:
+            notifications.invalidate_occurrence_derivatives = invalidate_activity
 
         async def maintain_identities():
             while True:

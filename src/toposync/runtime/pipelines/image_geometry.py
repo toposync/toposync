@@ -81,3 +81,32 @@ def source_pixels(points: Any, matrix: np.ndarray) -> np.ndarray:
     if not np.isfinite(homogeneous).all() or np.any(np.abs(homogeneous[:, 2]) < 1e-8):
         raise ValueError("Pixel outside projective support")
     return homogeneous[:, :2] / homogeneous[:, 2:]
+
+
+def inspection_geometry(geometry: Any, width: int, height: int, reference: dict) -> dict | None:
+    """Allowlist known pixel transforms only when they belong to this capture."""
+    if not isinstance(geometry, dict):
+        return None
+    evidence = geometry.get("capture_evidence")
+    if not isinstance(evidence, dict) or any(
+        evidence.get(key) != reference[key] for key in ("capture_instance", "generation", "sequence")
+    ):
+        return None
+    try:
+        matrix = geometry_matrix(geometry, width, height)
+        domains = geometry.get("valid_domains", [])
+        if not isinstance(domains, list) or len(domains) > 64:
+            return None
+        validated_domains = []
+        for domain in domains:
+            domain_matrix = geometry_matrix(
+                {"image_size": [width, height], "source_size": domain["size"],
+                 "to_source": domain["matrix"]}, width, height
+            )
+            validated_domains.append({"size": list(domain["size"]), "matrix": domain_matrix.tolist()})
+        return {
+            "image_size": [width, height], "source_size": list(geometry["source_size"]),
+            "to_source": matrix.tolist(), "valid_domains": validated_domains,
+        }
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return None

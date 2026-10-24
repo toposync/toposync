@@ -47,7 +47,8 @@ class EventBroadcaster:
                 return event
         # Preserve durable history in storage. Fetch it over HTTP instead of
         # silently dropping an oversized live update or shortening its evidence.
-        return {"op": "resync"}
+        identifier = notification.get("id") if isinstance(notification, dict) else None
+        return {"op": "resync", "notification_id": identifier if isinstance(identifier, str) and len(identifier) <= 128 else None}
 
     def __init__(self, *, max_queue_size: int = 250) -> None:
         self._subscribers: dict[asyncio.Queue[dict[str, Any]], _Subscription] = {}
@@ -75,9 +76,25 @@ class EventBroadcaster:
         subscription = self._subscribers.pop(q, None)
         if subscription:
             _clear_ephemeral(subscription)
-        if subscription and subscription.include_ephemeral_image:
-            while not q.empty():
-                q.get_nowait()
+        while not q.empty():
+            q.get_nowait()
+
+    def discard(self, notification_ids: tuple[str, ...]) -> None:
+        identifiers = set(notification_ids)
+        if not identifiers:
+            return
+        for queue, subscription in self._subscribers.items():
+            if subscription.notification_id in identifiers:
+                _clear_ephemeral(subscription)
+            retained = []
+            while not queue.empty():
+                event = queue.get_nowait()
+                notification = event.get("notification")
+                identifier = notification.get("id") if isinstance(notification, dict) else event.get("notification_id")
+                if identifier not in identifiers:
+                    retained.append(event)
+            for event in retained:
+                queue.put_nowait(event)
 
     def publish(
         self, event: dict[str, Any], *, ephemeral_image: dict[str, Any] | None = None,
@@ -86,7 +103,7 @@ class EventBroadcaster:
         if not self._subscribers:
             return
         notification = event.get("notification")
-        notification_id = notification.get("id") if isinstance(notification, dict) else None
+        notification_id = notification.get("id") if isinstance(notification, dict) else event.get("notification_id")
         # A separate argument prevents transient bytes from entering stored/public records.
         validated_monotonic = time.monotonic()
         validated_unix_ms = time.time() * 1000

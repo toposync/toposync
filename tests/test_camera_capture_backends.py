@@ -23,6 +23,32 @@ from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
 
 
+def test_ffmpeg_shutdown_unblocks_reader_before_join_and_is_idempotent():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from toposync_ext_cameras.processing.frame_grabber import FfmpegFrameGrabber
+
+    reader = FfmpegFrameGrabber.__new__(FfmpegFrameGrabber)
+    reader._frames_stop = threading.Event()
+    reader._stderr_stop = threading.Event()
+    process = Mock(stdout=io.BytesIO(), stderr=io.BytesIO())
+    reader._proc = process
+
+    def join(**kwargs):
+        process.kill.assert_called_once()
+        process.wait.assert_called_once()
+        assert reader._frames_stop.is_set()
+
+    reader._frames_thread = SimpleNamespace(is_alive=lambda: True, join=join)
+    reader._stderr_thread = None
+    reader._frame_buffer = SimpleNamespace(clear=Mock())
+    reader.stop()
+    reader.stop()
+    process.terminate.assert_not_called()
+    assert process.stdout.closed and process.stderr.closed
+    assert reader._proc is None
+
+
 @pytest.mark.parametrize("scheme", ["http", "https", "rtsp"])
 def test_ffmpeg_http_capture_bounds_reads_and_samples_by_receipt_time(monkeypatch, scheme):
     from types import SimpleNamespace

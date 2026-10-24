@@ -75,6 +75,14 @@ class BaseExtension:
     async def shutdown(self) -> None:
         return None
 
+    async def setup_retention(self, app: FastAPI) -> None:  # noqa: ARG002
+        """Maintain existing retained data while disabled, without sources, models or routes.
+
+        Register shutdown callbacks for any maintenance workers. Enabling the
+        extension uses normal setup instead; this hook must not activate it.
+        """
+        return None
+
     def capabilities(self) -> dict[str, Any]:
         return {}
 

@@ -16,10 +16,12 @@ export type AiProfileConfig = {
   name: string;
   provider_id: string;
   model: string;
+  budget_group_id: string | null;
   fallback_profile_ids: string[];
   capabilities: string[];
   timeout_seconds: number;
   max_image_side_px: number;
+  max_images_per_request: number;
   jpeg_quality: number;
   temperature: number;
   enabled: boolean;
@@ -33,11 +35,14 @@ export type AiLimitSettings = {
   requests_per_month: number | null;
 };
 
+export type AiBudgetGroupConfig = { id: string; name: string; limits: AiLimitSettings };
+
 export type AiExtensionSettings = {
   default_profile_id: string;
   providers: AiProviderConfig[];
   profiles: AiProfileConfig[];
   limits: AiLimitSettings;
+  budget_groups: AiBudgetGroupConfig[];
   model_catalog_version: string;
   jev?: OllayaConnectionSettings | null;
 };
@@ -114,6 +119,12 @@ export type ProviderTestResponse = {
 };
 
 export type UsageSnapshot = {
+  available: boolean;
+  error: string;
+  persistent: boolean;
+  budget_groups: Record<string, Record<string, number>>;
   profiles: Record<string, Record<string, number>>;
   raw_counters: Record<string, number>;
+  pauses: Array<{ scope: "profile" | "provider" | "group"; id: string; reason: string;
+    retry_at: number | null; failures: number; recovery_pending: boolean }>;
 };

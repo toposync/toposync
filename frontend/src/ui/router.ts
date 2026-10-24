@@ -29,7 +29,7 @@ function subscribe(listener: Listener): () => void {
   };
 }
 
-function snapshotPathname(): string {
+export function snapshotPathname(): string {
   if (typeof window === "undefined") return "/";
   const pathname = window.location.pathname || "/";
   const basePath = getToposyncBasePath();

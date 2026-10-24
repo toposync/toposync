@@ -206,8 +206,8 @@ def test_server_reuses_scheduler_and_shutdown_reaps_idle_worker(tmp_path, owner)
             runtime = PipelinesOrchestrator(
                 **shared, notifications=NotificationsRuntime(data_dir=tmp_path), files_dir=tmp_path / "files"
             )
-            scheduler = runtime._build_runtime_dependencies(origin_inbox=None).execution_scheduler
-            assert runtime._build_runtime_dependencies(origin_inbox=None).execution_scheduler is scheduler
+            scheduler = runtime._build_runtime_dependencies(origin_inbox=None, pipelines=[]).execution_scheduler
+            assert runtime._build_runtime_dependencies(origin_inbox=None, pipelines=[]).execution_scheduler is scheduler
         else:
             runtime = ProcessingServerRuntime(**shared, services=ServiceRegistry())
             scheduler = runtime._execution_scheduler

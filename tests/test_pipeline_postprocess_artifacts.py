@@ -2227,3 +2227,95 @@ def test_velocity_state_is_namespaced_when_tracking_id_repeats_across_streams() 
         assert v2.get("valid") is False
 
     asyncio.run(scenario())
+
+
+def test_velocity_does_not_mix_mapping_revisions_and_exposes_signed_world_direction():
+    async def scenario():
+        runtime = VelocityEstimationRuntime({})
+        def sample(ts, x, z, revision=1):
+            return Packet.create(stream_id="front:person", lifecycle=Lifecycle.UPDATE, payload={
+                "event_id": "person", "frame_ts": ts, "world": {"x": x, "z": z},
+                "source": {"device_id": "front", "source_id": "wide"},
+                "mapping": {"status": "mapped", "composition_id": "yard", "calibrated_view_id": "panorama",
+                    "panorama_revision": revision, "visual_localization": {"source_artifact_id": "artifact", "geometry_digest": "geometry"}}})
+        await runtime.process_packet(sample(1, 0, 0), None)
+        moving = (await runtime.process_packet(sample(2, 3, -4), None))[0].payload["velocity"]
+        remapped = (await runtime.process_packet(sample(3, 103, -4, revision=2), None))[0].payload["velocity"]
+        assert remapped["valid"] is False and remapped["vector_mps"] is None
+        assert remapped["ever_stopped"] is False and remapped["arrival_evidence"] is None
+        assert moving["vector_mps"] == {"x": 3, "z": -4}
+        assert moving["vector_raw_mps"] == {"x": 3, "z": -4}
+        assert moving["speed_mps"] == pytest.approx(5)
+        assert moving["time_basis"] == "frame_ts"
+        assert moving["world_reference"]["panorama_revision"] == 1
+        fresh = (await runtime.process_packet(sample(4, 104, -4, revision=2), None))[0].payload["velocity"]
+        assert fresh["vector_mps"] == {"x": 1, "z": 0}
+        assert fresh["world_reference"]["panorama_revision"] == 2
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["camera", "source", "composition_id", "calibrated_view_id", "panorama_revision",
+    "map_revision", "source_artifact_id", "geometry_digest", "time_basis", "pose_only"])
+def test_velocity_reference_and_clock_changes_reset_history_but_camera_pose_does_not(change):
+    async def scenario():
+        runtime = VelocityEstimationRuntime({})
+        def sample(ts, x):
+            return Packet.create(stream_id="same", lifecycle=Lifecycle.UPDATE, payload={
+                "event_id": "same", "frame_ts": ts, "world": {"x": x, "z": 0},
+                "source": {"device_id": "front", "source_id": "wide"},
+                "mapping": {"status": "mapped", "composition_id": "yard", "calibrated_view_id": "reference",
+                    "panorama_revision": 1, "map_revision": "map-one", "motion_epoch": 1,
+                    "visual_localization": {"source_artifact_id": "artifact", "geometry_digest": "geometry",
+                        "rotation_matrix": np.eye(3).tolist()}}})
+        await runtime.process_packet(sample(1, 0), None)
+        await runtime.process_packet(sample(2, 0), None)
+        packet = sample(3, 1)
+        if change in {"camera", "source"}:
+            packet.payload["source"]["device_id" if change == "camera" else "source_id"] = "other"
+        elif change in {"source_artifact_id", "geometry_digest"}:
+            packet.payload["mapping"]["visual_localization"][change] = "other"
+        elif change == "time_basis":
+            packet.payload["media"] = {"ts": 3.}
+        elif change == "pose_only":
+            packet.payload["mapping"]["motion_epoch"] = 2
+            packet.payload["mapping"]["visual_localization"]["rotation_matrix"] = np.diag([-1, 1, -1]).tolist()
+        else:
+            packet.payload["mapping"][change] = 2 if change == "panorama_revision" else "other"
+        velocity = (await runtime.process_packet(packet, None))[0].payload["velocity"]
+        if change == "pose_only":
+            assert velocity["valid"] and velocity["ever_stopped"]
+            assert velocity["vector_mps"] == {"x": 1., "z": 0.}
+        else:
+            assert not velocity["valid"] and not velocity["ever_stopped"]
+            assert velocity["vector_mps"] is None and velocity["vector_raw_mps"] is None
+            assert velocity["reason"] == ("time_basis_changed" if change == "time_basis" else "world_reference_changed")
+    asyncio.run(scenario())
+
+
+def test_velocity_exposes_stop_and_reversal_without_hiding_window_lag():
+    async def scenario():
+        runtime = VelocityEstimationRuntime({})
+        outputs = []
+        for ts, x in [(1., 0.), (1.4, .4), (1.6, .4), (1.8, .2)]:
+            packet = Packet.create(stream_id="person", lifecycle=Lifecycle.UPDATE,
+                payload={"event_id": "person", "frame_ts": ts, "world": {"x": x, "z": 0.}})
+            outputs.append((await runtime.process_packet(packet, None))[0].payload["velocity"])
+        assert outputs[2]["vector_raw_mps"] == {"x": 0., "z": 0.}
+        assert outputs[2]["vector_mps"]["x"] == pytest.approx(2 / 3)
+        assert outputs[3]["vector_raw_mps"]["x"] == pytest.approx(-1)
+        assert outputs[3]["vector_mps"]["x"] > 0, "Windowed direction is not safe instantaneous prediction after reversal"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("payload,basis", [({}, "packet.created_at"), ({"ts": 4}, "ts"),
+    ({"ts": 4, "frame_ts": 3}, "frame_ts"), ({"frame_ts": 3, "media": {"ts": 2}}, "media.ts"),
+    ({"frame_ts": 3, "media": {"ts": float("nan")}}, "frame_ts")])
+def test_velocity_timestamp_basis_is_explicit_even_without_a_physical_clock(payload, basis):
+    async def scenario():
+        packet = Packet.create(stream_id="person", lifecycle=Lifecycle.UPDATE,
+            payload={"event_id": "person", "world": {"x": 0, "z": 0}, **payload})
+        result = (await VelocityEstimationRuntime({}).process_packet(packet, None))[0]
+        assert result.payload["velocity"]["time_basis"] == basis
+        assert not result.payload["velocity"]["valid"]
+        assert result.payload["velocity"]["vector_mps"] is None
+    asyncio.run(scenario())

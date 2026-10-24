@@ -261,6 +261,7 @@ class SimpleIouKalmanTrackerBackend:
             metadata={
                 **dict(state.metadata or {}),
                 "hits": int(state.hits),
+                "observation_state": "detection_associated",
             },
         )
 

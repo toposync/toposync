@@ -440,6 +440,85 @@ async def _run_keeps_recent_cached_frame_during_polling() -> None:
     assert hub.release_calls == []
 
 
+@pytest.mark.parametrize("has_frame", [False, True])
+def test_capture_observation_includes_open_first_frame_and_release_cost(monkeypatch, has_frame):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from toposync_ext_cameras.capture_service import CameraCaptureFrame
+
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    async def delay(seconds):
+        clock[0] += seconds
+    monkeypatch.setattr(asyncio, "sleep", delay)
+
+    async def run():
+        service = _service()
+        async def open_capture(*args):
+            await delay(.3)
+            return SimpleNamespace(lease_id="lease", resolved=_Resolved())
+        async def latest(*args, **kwargs):
+            await delay(.1)
+            return CameraCaptureFrame(lease_id="lease", frame=_Frame() if has_frame else None,
+                frame_ts=2000, width=32, height=24, capture_evidence={
+                    "capture_instance": "reader", "generation": 1, "sequence": 1})
+        service.open = AsyncMock(side_effect=open_capture)
+        service.get_latest = AsyncMock(side_effect=latest)
+        async def release_capture(_):
+            await delay(.2)
+        service.release = AsyncMock(side_effect=release_capture)
+        # Civil clock jumps do not belong in duration arithmetic.
+        monkeypatch.setattr(time, "time", lambda: 2000 - clock[0])
+        result = await service.observe(CameraCaptureRequest(owner_id="observer"),
+            PipelineRuntimeDependencies(), duration_s=.5, sample_interval_s=.1)
+        assert result["open_elapsed_seconds"] == pytest.approx(.3)
+        assert result["first_frame_elapsed_seconds"] == (pytest.approx(.4) if has_frame else None)
+        assert result["release_elapsed_seconds"] == pytest.approx(.2)
+        assert result["request_elapsed_seconds"] == pytest.approx(
+            result["open_elapsed_seconds"] + result["observation_elapsed_seconds"] + result["release_elapsed_seconds"])
+        assert result["duration_seconds"] == pytest.approx(
+            result["observation_elapsed_seconds"] + result["release_elapsed_seconds"])
+        assert result["timing_clock"] == "process_monotonic"
+        service.release.assert_awaited_once_with("lease")
+    asyncio.run(run())
+
+
+def test_capture_observation_api_uses_requested_cadence_without_changing_source(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from source_panorama_browser_fixture import fixture_config
+    from toposync.app import create_app
+    import toposync_ext_cameras.plugin as plugin
+
+    requests = []
+    service = _service()
+
+    async def observe(request, dependencies, **options):
+        requests.append(request)
+        return {"requested_fps": request.fps}
+
+    service.observe = observe
+    monkeypatch.setattr(plugin, "get_global_camera_capture_service", lambda: service)
+    configuration = fixture_config()
+    camera = configuration["settings"]["extensions"]["com.toposync.cameras"]["devices"][0]
+    configuration_path = tmp_path / "config.json"
+    configuration_path.write_text(json.dumps(configuration))
+    monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
+    with TestClient(create_app()) as client:
+        saved = configuration_path.read_bytes()
+        path = f"/api/cameras/cameras/{camera['id']}/sources/{camera['sources'][0]['id']}/capture-observation"
+        for body, expected in [({}, None), ({"fps": 12}, 12)]:
+            response = client.post(path, json=body)
+            assert response.status_code == 200, response.text
+            assert response.json()["requested_fps"] == expected
+        for value in [0, 61, "NaN", "Infinity"]:
+            assert client.post(path, json={"fps": value}).status_code == 422
+        assert len(requests) == 2
+        assert all(request.camera_id == camera["id"] and request.source_id == camera["sources"][0]["id"] for request in requests)
+        assert configuration_path.read_bytes() == saved
+
+
 def test_camera_capture_service_observe_reports_sequence_without_frames() -> None:
     from toposync_ext_cameras.processing.frame_grabber import CaptureFrameSample
 
@@ -473,6 +552,7 @@ def test_camera_capture_service_observe_reports_sequence_without_frames() -> Non
         )
         assert observed["images_persisted"] is False
         assert observed["distinct_frame_count"] >= 2
+        assert {sample["capture_instance"] for sample in observed["samples"]} == {"continuous-test"}
         assert all("frame" not in sample for sample in observed["samples"])
         assert hub.release_calls == ["front:main:auto"]
 

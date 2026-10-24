@@ -282,6 +282,7 @@ def test_orchestrator_runs_local_bundle_with_shared_detect_and_pipeline_local_tr
             ):
                 graph["nodes"].insert(1, {
                     "id": "cadence", "operator": "core.velocity_throttle",
+                    "state": {"resource_owner": "synthetic:camera:test", "resource_partition": "stream_id"},
                     "config": {"key_field": "stream_id", "moving_field": "metadata.motion_gate_open",
                                "moving_interval_seconds": 0.01, "stopped_interval_seconds": 1.0},
                 })

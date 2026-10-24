@@ -388,7 +388,8 @@ class StreamWriterBridge:
             self._mediamtx_log_offset = 0
             self._mediamtx_log_remainder = ""
             self._last_log_scan_monotonic = 0.0
-            await self._runtime_state.prune_transmissions(set())
+            # Authorized pipeline previews do not depend on the external streaming engine.
+            await self._runtime_state.prune_transmissions({target.transmission_id for target in targets})
             await self._runtime_state.prune_output_viewers(set())
             return
 

@@ -10,16 +10,45 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
+from toposync.runtime.pipelines.inspection import inspection_execution
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies, TransformOperatorRuntime
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, resolve_image_artifact_for_data
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_media_ts
-from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
+from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet, packet_occurrence_id
 from toposync.runtime.pipelines.telemetry import METRIC_AI_CONDITION_CONFIDENCE
 
 from toposync_ext_ai.providers import ConditionEvaluationResult, RegionDetection, RegionDetectionResult
 
 from .image_utils import crop_bbox01, expand_bbox01, image_size, normalize_bbox01
 from .schemas import AiConditionFilterConfig, AiSmartCropConfig
+
+
+def _inspect_condition(context, packet, *, result=None, status, reason="", reused=False):
+    if not getattr(context, "inspection_active", lambda: False)():
+        return
+    try:
+        if result and result.observable is False:
+            status = "unknown"
+        properties = {"evaluation_source": "cached_result" if reused else "current_result" if result else "no_result"}
+        reason = reason or (result.reason if result else "")
+        if reason in {"ai_service_unavailable", "all_ai_profiles_failed", "no_ai_profile_available",
+            "invalid_ai_service_response", "concurrency_full", "primary_concurrency_full", "missing_image",
+            "missing_condition_description", "stale_evidence", "missing_image_or_condition", "subject_context_unavailable",
+            "stream_capacity", "replayed_evidence", "evaluation_interval", "evaluation_failed"}:
+            properties["activity_reason"] = reason
+        if result:
+            properties.update({key: value for key in ("model", "provider_id", "profile_id")
+                if (value := getattr(result, key)) and len(value) <= 512})
+            if not reused and result.attempts:
+                elapsed = [attempt.latency_ms for attempt in result.attempts]
+                if all(math.isfinite(value) and value >= 0 for value in elapsed):
+                    properties["evaluation_ms"] = sum(elapsed)
+        context.inspect("analyzed", packet, model_id=result.model if result else None, visuals=[{
+            "layer": "activity", "kind": "points", "points": [], "state": "ai_" + status,
+            "subject_id": (packet.payload.get("subject") or {}).get("id"), "properties": properties,
+            "score": result.confidence if result else None, "score_kind": "ai_model_score" if result else None}])
+    except Exception:
+        pass  # Provider text, prompts and diagnostic failures cannot affect functional decisions.
 
 
 @dataclass(slots=True)
@@ -39,6 +68,7 @@ class _SmartCropState:
 
 @dataclass(slots=True)
 class _ConditionState:
+    occurrence_id: str | None = None
     last_eval_at: float = 0.0
     last_result: ConditionEvaluationResult | None = None
     stream_allowed: bool | None = None
@@ -466,13 +496,33 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         self._states: dict[str, _ConditionState] = {}
         self._fallback_profile_ids_cache: list[str] | None = None
         self._occurrences: OrderedDict[str, _ConditionOccurrence] = OrderedDict()
+        self._annotation_tasks: dict[asyncio.Task[None], str | None] = {}
+        self._waiting_packet: Packet | None = None
+
+    async def invalidate_occurrence(self, identifier: str) -> None:
+        if self._waiting_packet is not None and packet_occurrence_id(self._waiting_packet) == identifier:
+            self._waiting_packet = None
+        tasks = {task for task, occurrence in self._annotation_tasks.items() if occurrence == identifier}
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            done, pending = await asyncio.wait(tasks, timeout=2)
+            await asyncio.gather(*done, return_exceptions=True)
+            if pending:
+                raise RuntimeError("Occurrence inference did not acknowledge cancellation")
+        self._states = {key: state for key, state in self._states.items() if state.occurrence_id != identifier}
+        for key, state in list(self._occurrences.items()):
+            if state.last_packet is not None and packet_occurrence_id(state.last_packet) == identifier:
+                self._occurrences.pop(key)
 
     async def run(self, context) -> None:  # noqa: ANN001
         if self._config.emit_mode == "occurrence":
             while not context.is_cancelled():
                 packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
                 if packet is not None:
-                    for output in await self._process_occurrence(packet, context):
+                    with inspection_execution(context, packet):
+                        outputs = await self._process_occurrence(packet, context)
+                    for output in outputs:
                         await context.emit(output, port=self.output_port)
                 for state in self._occurrences.values():
                     if (state.last_packet is not None and state.started_at is not None
@@ -482,10 +532,10 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             return
         primary_slots = asyncio.Semaphore(int(self._config.max_concurrency))
         fallback_slots = asyncio.Semaphore(int(self._config.max_concurrency))
-        tasks: set[asyncio.Task[None]] = set()
+        tasks = self._annotation_tasks
 
         def discard_task(task: asyncio.Task[None]) -> None:
-            tasks.discard(task)
+            tasks.pop(task, None)
 
         async def drain_tasks() -> None:
             if not tasks:
@@ -501,7 +551,9 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             concurrency_reason: str,
         ) -> None:
             started_ns = time.monotonic_ns()
+            inspect = getattr(context, "inspect", lambda *args, **kwargs: None)
             try:
+                inspect("started", packet)
                 out_packets = await self._process_packet_with_profiles(
                     packet,
                     context,
@@ -510,8 +562,10 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                     concurrency_reason=concurrency_reason,
                 )
             except asyncio.CancelledError:
+                inspect("closed", packet, reason="execution_stopped")
                 raise
             except Exception:
+                inspect("error", packet, reason="operator_error")
                 context.metrics.error_count += 1
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)
                 return
@@ -524,6 +578,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
 
             elapsed_ms = max(0.0, (float(time.monotonic_ns()) - float(started_ns)) / 1_000_000.0)
             context.metrics.record_latency(elapsed_ms)
+            inspect("completed", packet, processing_ms=elapsed_ms)
             for out_packet in out_packets:
                 await context.emit(out_packet, port=self.output_port)
 
@@ -545,6 +600,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                     continue
 
                 policy = self._config.concurrency_policy
+                self._waiting_packet, packet = packet, None
                 slot = await self._acquire_condition_slot(primary_slots, wait=policy == "queue")
                 profile_id: str | None = None
                 fallback_profile_ids: list[str] | None = None
@@ -560,14 +616,22 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                             concurrency_reason = "primary_concurrency_full"
 
                 if slot is None:
+                    if self._waiting_packet is not None:
+                        _inspect_condition(context, self._waiting_packet, status="unknown", reason="concurrency_full")
                     if self._config.emit_mode == "annotate":
                         # Do not let a skipped update overtake an earlier inference/open.
                         await drain_tasks()
-                        await context.emit(self._annotate(packet, result=None, status="unknown", reason="concurrency_full"), port=self.output_port)
+                        if self._waiting_packet is not None:
+                            await context.emit(self._annotate(self._waiting_packet, result=None, status="unknown", reason="concurrency_full"), port=self.output_port)
                     else:
                         context.metrics.dropped_packets += 1
+                    self._waiting_packet = None
                     continue
 
+                packet, self._waiting_packet = self._waiting_packet, None
+                if packet is None:
+                    slot.release()
+                    continue
                 task = asyncio.create_task(
                     process_with_slot(
                         packet,
@@ -578,9 +642,11 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                     ),
                     name=f"ai.condition_filter[{context.node_id}]",
                 )
-                tasks.add(task)
+                tasks[task] = packet_occurrence_id(packet)
+                packet = None
                 task.add_done_callback(discard_task)
         finally:
+            self._waiting_packet = None
             if tasks:
                 done, pending = await asyncio.wait(set(tasks), timeout=2.0)
                 for task in pending:
@@ -666,6 +732,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
             return outputs + self._close_occurrence(state, packet, "stale_evidence")
         _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
+        _inspect_condition(context, packet, result=result,
+            status="matched" if result.observable is not False and result.matches and result.confidence >= self._config.confidence_threshold else "not_matched")
         if result.observable is False:
             return outputs + self._close_occurrence(state, packet, "evidence_unobservable")
         if not result.matches or result.confidence < self._config.confidence_threshold:
@@ -735,7 +803,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         concurrency_reason: str,
     ) -> list[Packet]:
         if self._config.emit_mode == "annotate":
-            return await self._process_annotation(packet, profile_id, fallback_profile_ids)
+            return await self._process_annotation(packet, profile_id, fallback_profile_ids, context)
         stream_key = packet.stream_id
         state = self._states.setdefault(stream_key, _ConditionState())
 
@@ -746,6 +814,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
 
         description = self._config.condition_description.strip()
         if not description:
+            _inspect_condition(context, packet, status="skipped", reason="missing_condition_description")
             return [self._annotate(packet, result=None, status="skipped", reason="missing_condition_description")]
 
         artifact_name, image = resolve_image_artifact_for_data(
@@ -754,10 +823,11 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         )
         image_key = artifact_name
         if image is None:
-            return self._handle_failure(packet, state=state, reason="missing_image")
+            return self._handle_failure(packet, state=state, reason="missing_image", context=context)
 
         now = time.monotonic()
         result = self._cached_result(state=state, now=now)
+        reused = result is not None
         if result is None:
             result = await self._evaluate_condition(
                 image=image,
@@ -776,6 +846,8 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
 
         passes = bool(result.observable is not False and result.matches and result.confidence >= self._config.confidence_threshold)
         _record_condition_confidence_telemetry(packet=packet, context=context, result=result)
+        _inspect_condition(context, packet, result=result, status="matched" if passes else "not_matched",
+            reason=concurrency_reason, reused=reused)
         if packet.lifecycle == Lifecycle.OPEN:
             state.stream_allowed = passes
         elif state.stream_allowed is None and passes:
@@ -791,14 +863,19 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
         )
         return [annotated] if passes else []
 
-    async def _process_annotation(self, packet, profile_id, fallback_profile_ids):
+    async def _process_annotation(self, packet, profile_id, fallback_profile_ids, context):
         # Annotation never decides lifecycle or suppresses the upstream occurrence.
         def unknown(reason):
+            _inspect_condition(context, packet, status="unknown", reason=reason)
             return [self._annotate(packet, result=None, status="unknown", reason=reason)]
 
         if packet.lifecycle == Lifecycle.CLOSE:
             self._states.pop(packet.stream_id, None)
             return [self._annotate(packet, result=None, status="closed")]
+        if "occurrence_reference" in packet.payload:
+            from toposync.runtime.pipelines.occurrence_sink import occurrence_enrichment_allowed
+            if not await occurrence_enrichment_allowed(packet, self._deps):
+                return []
         freshness = resolve_frame_freshness(packet)
         if freshness.age_seconds is None or freshness.age_seconds > self._config.evidence_timeout_seconds:
             return unknown("stale_evidence")
@@ -823,6 +900,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             if len(self._states) >= self._config.maximum_occurrence_streams:
                 return unknown("stream_capacity")
         state = self._states.setdefault(packet.stream_id, _ConditionState())
+        state.occurrence_id = packet_occurrence_id(packet)
         evidence = packet.payload["capture_evidence"]
         capture = (evidence["capture_instance"], evidence["generation"], evidence["sequence"])
         if float(evidence["published_at"]) < state.last_publication_time:
@@ -843,11 +921,14 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             ), timeout=30)
         except Exception:
             return unknown("evaluation_failed")
+        if "occurrence_reference" in packet.payload and not await occurrence_enrichment_allowed(packet, self._deps):
+            return []
         unavailable = result.reason in {"ai_service_unavailable", "all_ai_profiles_failed",
             "no_ai_profile_available", "invalid_ai_service_response"}
         status = "unknown" if (result.observable is False or unavailable
                                or self._config.bind_subject_context and result.observable is not True
                                or result.confidence < self._config.confidence_threshold) else ("matched" if result.matches else "not_matched")
+        _inspect_condition(context, packet, result=result, status=status)
         return [self._annotate(packet, result=result, status=status,
                               input_artifact_name=artifact_name, input_image_key=artifact_name)]
 
@@ -967,8 +1048,9 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
             return result
         return None
 
-    def _handle_failure(self, packet: Packet, *, state: _ConditionState, reason: str) -> list[Packet]:
+    def _handle_failure(self, packet: Packet, *, state: _ConditionState, reason: str, context=None) -> list[Packet]:
         policy = self._config.failure_policy
+        _inspect_condition(context, packet, status="unknown", reason=reason)
         if policy == "pass_through":
             return [self._annotate(packet, result=state.last_result, status="skipped", reason=reason)]
         if (policy == "reuse_last" and state.last_result is not None
@@ -978,6 +1060,7 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                 state.last_result.matches and state.last_result.confidence >= self._config.confidence_threshold
             )
             annotated = self._annotate(packet, result=state.last_result, status="reused", reason=reason)
+            _inspect_condition(context, packet, result=state.last_result, status="reused", reason=reason, reused=True)
             return [annotated] if passes else []
         return []
 
@@ -1030,6 +1113,22 @@ class AiConditionFilterRuntime(TransformOperatorRuntime):
                        if self._config.bind_subject_context else {}),
                 }
         payload["ai"] = ai_payload
+        payload["condition_annotation"] = {
+            key: ai_payload["condition_filter"][key]
+            for key in ("status", "observable", "reason", "condition_description", "description",
+                        "matches", "confidence", "profile_id", "provider_id", "model", "subject_context")
+            if key in ai_payload["condition_filter"]
+        }
+        payload["condition_annotation"].update(
+            camera_id=packet.payload.get("camera_id"), frame_ts=packet.payload.get("frame_ts"),
+            subject_id=(packet.payload.get("subject") or {}).get("id"),
+        )
+        if "occurrence_reference" in payload:
+            payload["occurrence_enrichment"] = {
+                "kind": "context", "text": self._config.condition_description,
+                "status": {"matched": "observed", "not_matched": "not_observed"}.get(status, "unknown"),
+                "reason": reason or (result.reason if result is not None else "") or None,
+            }
         return replace(packet, payload=payload)
 
 

@@ -28,6 +28,7 @@ import type {
   AttentionValidationResponse,
 } from "../types";
 import { PtzAttentionWizard } from "./PtzAttentionWizard";
+import { ArrivalFramingNotice, ObservedFramingNotice } from "./ArrivalFramingNotice";
 
 type Translate = ReturnType<HostI18n["useI18n"]>["t"];
 type Tone = "success" | "warning" | "danger" | "info" | "neutral";
@@ -465,6 +466,7 @@ function PtzAttentionSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: 
                 locale={locale}
                 profile={selectedProfile}
                 session={session}
+                statusAge={status?.generated_at ? Date.now() / 1000 - status.generated_at : Infinity}
                 camera={camera}
                 currentViewId={currentViewId(session)}
                 bindingReady={bindingReady}
@@ -573,6 +575,7 @@ function SessionCockpit({
   locale,
   profile,
   session,
+  statusAge,
   camera,
   currentViewId,
   bindingReady,
@@ -592,6 +595,7 @@ function SessionCockpit({
   locale: string;
   profile: AttentionProfile;
   session: AttentionSession | null;
+  statusAge: number;
   camera: AttentionCameraCatalogItem | null;
   currentViewId: string;
   bindingReady: boolean;
@@ -654,6 +658,9 @@ function SessionCockpit({
         </div>
 
         {profile.mode === "shadow" ? <SessionNotice tone="info">{t("ext.ptz_attention.session.shadow_notice", {}, "Shadow review active.")}</SessionNotice> : null}
+        {state === "FOLLOWING" && !stale ? <SessionNotice tone="info">{t("ext.ptz_attention.session.following_notice")}</SessionNotice> : null}
+        {profile.mode !== "shadow" && (state === "FOCUSED" || state === "GRACE") ? <ObservedFramingNotice
+          observation={!stale && state === "FOCUSED" ? session?.observed_framing : null} statusAge={statusAge} t={t} /> : null}
         {!bindingReady ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.binding_notice", {}, "No enabled pipeline binding is ready for this profile.")}</SessionNotice> : null}
         {sharedObserver ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.shared_observer_notice", {}, "The event observer and PTZ actuator are the same camera; focus movement changes the observed scene.")}</SessionNotice> : null}
         {state === "MANUAL_OVERRIDE" ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.manual_notice", {}, "Manual control owns the camera.")}</SessionNotice> : null}
@@ -682,8 +689,18 @@ function SessionCockpit({
         </div>
 
         <div className="ptzAttentionActions">
-          {profile.mode === "paused" || session?.paused ? (
-            <button className="primaryButton" type="button" disabled={controlsDisabled || liveResumeBlocked} onClick={() => onCommand("resume")}>
+          {profile.campaign_ends_at ? <div className="ptzAttentionMuted">
+            {session?.campaign_expired
+              ? t("ext.ptz_attention.campaign.expired_help", {}, "Campaign ended. Recover the camera if needed, then edit the deadline before resuming.")
+              : session?.campaign_finishing ? t("ext.ptz_attention.campaign.finishing_help", {}, "Campaign finishing. No new targets are accepted while return is verified.")
+              : `${t("ext.ptz_attention.campaign.end", {}, "End campaign at (optional)")}: ${formatDateTime(profile.campaign_ends_at, locale)}`}
+          </div> : null}
+          {state === "RETURNING" && (session?.campaign_expired || session?.campaign_finishing) ? (
+            <button className="chipButton" type="button" disabled={controlsDisabled} onClick={() => onCommand("pause")}>
+              {t("ext.ptz_attention.campaign.stop_return", {}, "Stop return")}
+            </button>
+          ) : profile.mode === "paused" || session?.paused ? (
+            <button className="primaryButton" type="button" disabled={controlsDisabled || liveResumeBlocked || session?.campaign_expired || session?.campaign_finishing} onClick={() => onCommand("resume")}>
               {t("ext.ptz_attention.action.resume", {}, "Resume automation")}
             </button>
           ) : (
@@ -767,6 +784,25 @@ function DecisionReview({
                         decision.details.target ? t("ext.ptz_attention.panorama.target") : "",
                       ].filter(Boolean).join(" · ") || "-"}
                     </div>
+                    <ArrivalFramingNotice action={decision.action} details={decision.details} t={t} />
+                    {typeof decision.details.event_to_decision_ms === "number" ? (
+                      <div className="ptzAttentionMuted">
+                        {t("ext.ptz_attention.latency.decision", {
+                          milliseconds: Math.round(decision.details.event_to_decision_ms),
+                        })}
+                        {typeof decision.details.command_to_arrival_ms === "number"
+                          ? ` · ${t("ext.ptz_attention.latency.arrival", {
+                            milliseconds: Math.round(decision.details.command_to_arrival_ms),
+                            source: String(decision.details.arrival_source_id || "-"),
+                          })}`
+                          : ""}
+                        {typeof decision.details.candidate_to_arrival_ms === "number"
+                          ? ` · ${t("ext.ptz_attention.latency.candidateArrival", {
+                            milliseconds: Math.round(decision.details.candidate_to_arrival_ms),
+                          })}`
+                          : ""}
+                      </div>
+                    ) : null}
                   </div>
                   <time className="ptzAttentionDecisionTime" dateTime={new Date(decision.created_at * 1000).toISOString()}>{formatDateTime(decision.created_at, locale)}</time>
                 </div>
@@ -878,7 +914,7 @@ function Metric({ label, value }: { label: string; value: string }): React.React
 
 function timelineIndex(state: AttentionRuntimeState): number {
   if (state === "CANDIDATE" || state === "ACQUIRING") return 1;
-  if (state === "FOCUSED" || state === "GRACE") return 2;
+  if (state === "FOCUSED" || state === "FOLLOWING" || state === "GRACE") return 2;
   if (state === "RETURNING") return 3;
   if (state === "IDLE") return 0;
   return -1;
@@ -895,7 +931,7 @@ function modeLabel(mode: AttentionExecutionMode, t: Translate): string {
 function stateTone(state: AttentionRuntimeState): Tone {
   if (state === "FAULT") return "danger";
   if (state === "MANUAL_OVERRIDE" || state === "GRACE") return "warning";
-  if (state === "FOCUSED") return "success";
+  if (state === "FOCUSED" || state === "FOLLOWING") return "info";
   if (state === "ACQUIRING" || state === "RETURNING" || state === "CANDIDATE") return "info";
   return "neutral";
 }
@@ -911,6 +947,7 @@ function decisionTone(decision: AttentionDecision): Tone {
   const action = decision.action.toLowerCase();
   if (decision.state === "FAULT" || action.includes("fault") || action.includes("failed")) return "danger";
   if (action.includes("suppress") || action.includes("reject") || action.includes("shadow")) return "warning";
+  if (action === "focus_acquired") return "info";
   if (action.includes("focus") || action.includes("home") || action.includes("return")) return "success";
   return "neutral";
 }

@@ -5,6 +5,68 @@ import asyncio
 import pytest
 
 
+def test_pre_dispatch_rejection_after_transport_preparation_is_not_ambiguous(monkeypatch):
+    from unittest.mock import AsyncMock
+    from toposync_ext_cameras.onvif.client import OnvifClient, SOAP12_NS
+
+    current = [True]
+    async def resolve(self, **kwargs):
+        current[0] = False
+        return "1.2", SOAP12_NS, "none"
+    refusal = RuntimeError("target expired while preparing transport")
+    def guard():
+        if not current[0]:
+            raise refusal
+    client = OnvifClient(xaddr="http://camera.test/onvif", username="", password="")
+    monkeypatch.setattr(OnvifClient, "_resolve_ptz_transport", resolve)
+    send = AsyncMock()
+    monkeypatch.setattr(OnvifClient, "_call", send)
+    with pytest.raises(RuntimeError) as rejected:
+        asyncio.run(client._call_ptz_mutation_once(url="http://camera.test/ptz", profile_token="main",
+            body_xml="<move/>", soap_action="move", operation="ContinuousMove", on_dispatch=guard))
+    assert rejected.value is refusal
+    send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["continuous_move", "relative_move", "absolute_move", "goto_preset"])
+@pytest.mark.parametrize("failure", ["before_send", "after_send", "none"])
+def test_movement_guard_runs_after_preparation_and_preserves_send_ambiguity(monkeypatch, operation, failure):
+    from toposync_ext_cameras.onvif.client import OnvifClient, OnvifAmbiguousMutationError, SOAP12_NS
+    order = []
+    error = RuntimeError("expired" if failure == "before_send" else "network reply unavailable")
+    async def resolve(self, **kwargs):
+        order.append("prepared")
+        return "1.2", SOAP12_NS, "none"
+    def guard():
+        assert order == ["prepared"]
+        order.append("guard")
+        if failure == "before_send":
+            raise error
+    async def send(self, **kwargs):
+        assert order == ["prepared", "guard"]
+        order.append("sent")
+        if failure == "after_send":
+            raise error
+        name = {"continuous_move": "ContinuousMove", "relative_move": "RelativeMove",
+            "absolute_move": "AbsoluteMove", "goto_preset": "GotoPreset"}[operation]
+        return f'<s:Envelope xmlns:s="{SOAP12_NS}"><s:Body><{name}Response xmlns="http://www.onvif.org/ver20/ptz/wsdl"/></s:Body></s:Envelope>'.encode()
+    monkeypatch.setattr(OnvifClient, "_resolve_ptz_transport", resolve)
+    monkeypatch.setattr(OnvifClient, "_call", send)
+    client = OnvifClient(xaddr="http://camera.test/onvif", username="", password="")
+    arguments = {"preset_token": "home"} if operation == "goto_preset" else {"pan": .1, "tilt": 0., "zoom": 0.}
+    call = getattr(client, operation)("http://camera.test/ptz", profile_token="main", dispatch_guard=guard, **arguments)
+    if failure == "none":
+        asyncio.run(call)
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            asyncio.run(call)
+        if failure == "before_send":
+            assert raised.value is error and order == ["prepared", "guard"]
+        else:
+            assert isinstance(raised.value, OnvifAmbiguousMutationError) and raised.value.__cause__ is error
+    assert order.count("sent") == (0 if failure == "before_send" else 1)
+
+
 def test_continuous_receipt_excludes_read_only_transport_preflight(monkeypatch):
     from types import SimpleNamespace
     import toposync_ext_cameras.onvif.client as module

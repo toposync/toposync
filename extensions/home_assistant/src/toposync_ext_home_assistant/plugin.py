@@ -605,6 +605,9 @@ class HomeAssistantExtension(BaseExtension):
             return await _call_service(server, domain, service_name, dict(data or {}))
 
         services.register("home_assistant.call_service", _service_call_service)
+        from .automatic import register_automatic_capabilities
+
+        register_automatic_capabilities(services)
 
         async def _set_state_service(
             *,

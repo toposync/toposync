@@ -253,12 +253,10 @@ def test_equivalent_motion_graphs_share_detection_but_distinct_sources_do_not():
     from toposync.runtime.pipelines.shared_runtime import build_merged_pipeline_plan
     from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
     from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
-    from toposync_ext_vision.pipelines.operators import register_vision_pipeline_operators
 
     registry = OperatorRegistry()
     register_builtin_operators(registry)
     register_camera_pipeline_operators(registry)
-    register_vision_pipeline_operators(registry)
 
     def pipeline(name, camera):
         graph = build_pipeline_graph_v2(
@@ -278,6 +276,9 @@ def test_equivalent_motion_graphs_share_detection_but_distinct_sources_do_not():
                 for a, b in [("source", "motion"), ("motion", "framing"), ("framing", "detect")]
             ],
         )
+        for node in graph["nodes"]:
+            if node["id"] in {"motion", "framing"}:
+                node["state"] = {"resource_owner": f"camera-analysis:{camera}", "resource_partition": "camera/source/stream"}
         return Pipeline(name=name, graph=graph)
 
     report = PipelineGraphCompiler(registry).compile_many(

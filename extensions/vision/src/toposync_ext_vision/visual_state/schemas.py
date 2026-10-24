@@ -1,0 +1,393 @@
+from __future__ import annotations
+
+from typing import Annotated, Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from toposync_ext_cameras.visual_region_models import CanonicalRegionConfig
+
+
+Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]+$", min_length=1, max_length=128)]
+ClassKey = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+Revision = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+Counter = Annotated[int, Field(strict=True, ge=0)]
+Milliseconds = Annotated[int, Field(strict=True, ge=0, le=3_600_000)]
+Score = Annotated[float, Field(strict=True, ge=-1, le=1)]
+Margin = Annotated[float, Field(strict=True, ge=0, le=2)]
+Timestamp = Annotated[float, Field(strict=True, ge=0)]
+Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+
+
+class VisualStateModel(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", allow_inf_nan=False, validate_default=True, frozen=True,
+    )
+
+
+class QualificationSubmission(VisualStateModel):
+    operation_id: Identifier
+    context_revision: Digest
+    scope: Literal["laboratory", "replay", "isolated_consumer"]
+    decision: Literal["passed", "failed"]
+    report_sha256: Digest
+    protocol_sha256: Digest
+    environment_sha256: Digest
+
+
+class QualificationRecord(QualificationSubmission):
+    sensor_id: Identifier
+    actor_id: Identifier
+    created_at: Timestamp
+
+
+class ComparisonPolicy(VisualStateModel):
+    # Thresholds must come from calibration, never from an implied universal confidence.
+    enter_threshold: Score
+    enter_margin: Margin
+    hold_threshold: Score
+    hold_margin: Margin
+
+    @model_validator(mode="after")
+    def validate_hysteresis(self) -> Self:
+        if self.hold_threshold > self.enter_threshold or self.hold_margin > self.enter_margin:
+            raise ValueError("maintenance thresholds cannot exceed entry thresholds")
+        return self
+
+
+class TemporalPolicy(VisualStateModel):
+    confirmations: int = Field(default=2, strict=True, ge=2, le=30)
+    minimum_separation_ms: int = Field(default=150, strict=True, ge=1, le=60_000)
+    maximum_gap_ms: int = Field(default=750, strict=True, ge=1, le=3_600_000)
+    pending_hold_ms: Milliseconds = 500
+    maximum_frame_age_ms: int = Field(default=750, strict=True, ge=1, le=3_600_000)
+    validity_ms: int = Field(default=2000, strict=True, ge=1, le=3_600_000)
+
+    @model_validator(mode="after")
+    def validate_intervals(self) -> Self:
+        if self.minimum_separation_ms > self.maximum_gap_ms:
+            raise ValueError("minimum separation cannot exceed maximum confirmation gap")
+        if self.pending_hold_ms > self.validity_ms:
+            raise ValueError("pending retention cannot exceed validity")
+        if self.maximum_frame_age_ms > self.validity_ms:
+            raise ValueError("maximum frame age cannot exceed validity")
+        return self
+
+
+class VisualStateClass(VisualStateModel):
+    class_id: Identifier
+    key: ClassKey
+    label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+    description: str = Field(default="", max_length=1000)
+    enabled: bool = Field(default=True, strict=True)
+    reference_ids: tuple[Identifier, ...] = Field(default=(), max_length=30)
+    minimum_duration_ms: Milliseconds = 0
+    comparison: ComparisonPolicy | None = None
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> Self:
+        if self.key in {"unknown", "unavailable"}:
+            raise ValueError("class key is reserved")
+        if len(set(self.reference_ids)) != len(self.reference_ids):
+            raise ValueError("reference identifiers must be unique within a class")
+        return self
+
+
+class VisualAiLimits(VisualStateModel):
+    max_concurrency: int = Field(default=1, strict=True, ge=1, le=1)
+    requests_per_minute: int | None = Field(default=20, strict=True, ge=1)
+    requests_per_hour: int | None = Field(default=300, strict=True, ge=1)
+    requests_per_day: int | None = Field(default=2000, strict=True, ge=1)
+    requests_per_month: int | None = Field(default=None, strict=True, ge=1)
+
+
+class SuggestionPolicy(VisualStateModel):
+    mode: Literal["off", "review"] = "review"
+    maximum_pending: int = Field(default=20, strict=True, ge=1, le=100)
+    retention_days: int = Field(default=7, strict=True, ge=1, le=30)
+
+
+class HomeAssistantPublication(VisualStateModel):
+    enabled: bool = Field(default=False, strict=True)
+    kind: Literal["enum", "binary"] = "enum"
+    name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=80)] = ""
+    on_class_ids: tuple[Identifier, ...] = Field(default=(), max_length=32)
+    off_class_ids: tuple[Identifier, ...] = Field(default=(), max_length=32)
+
+    @model_validator(mode="after")
+    def validate_mapping(self) -> Self:
+        identifiers = (*self.on_class_ids, *self.off_class_ids)
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("binary class mappings must be unique and disjoint")
+        if self.enabled and self.kind == "binary" and (not self.on_class_ids or not self.off_class_ids):
+            raise ValueError("binary publication requires explicit on and off classes")
+        return self
+
+
+class VisualStateConfig(VisualStateModel):
+    schema_version: Literal[1] = 1
+    sensor_id: Identifier
+    source_identity: Name | None = None
+    region_id: Identifier | None = None
+    canonical_region: CanonicalRegionConfig | None = None
+    use_full_image: bool = Field(default=False, strict=True)
+    preparation_revision: Revision | None = None
+    reference_revision: Revision
+    model_revision: Revision
+    input_artifact_name: Name = "main"
+    evaluation_interval_ms: int = Field(default=250, strict=True, ge=50, le=60_000)
+    classes: tuple[VisualStateClass, ...] = Field(min_length=2, max_length=32)
+    strategy: Literal["examples", "fallback", "direct"] = "examples"
+    model_id: Name | None = None
+    comparison: ComparisonPolicy | None = None
+    temporal: TemporalPolicy = Field(default_factory=TemporalPolicy)
+    ai_profile_id: Identifier | None = None
+    scene_description: str = Field(default="", max_length=2000)
+    ai_timeout_ms: int = Field(default=60_000, strict=True, ge=1, le=120_000)
+    ai_max_attempts: int = Field(default=1, strict=True, ge=1, le=3)
+    ai_allow_remote_images: bool = Field(default=False, strict=True)
+    ai_references_per_class: int = Field(default=2, strict=True, ge=1, le=30)
+    ai_limits: VisualAiLimits = Field(default_factory=VisualAiLimits)
+    suggestions: SuggestionPolicy = Field(default_factory=SuggestionPolicy)
+    home_assistant: HomeAssistantPublication = Field(default_factory=HomeAssistantPublication)
+
+    @model_validator(mode="after")
+    def validate_configuration(self) -> Self:
+        if self.canonical_region is not None:
+            self.canonical_region.require_region()
+            if self.use_full_image:
+                raise ValueError("a canonical region cannot use the full image")
+            if self.source_identity is not None and self.region_id is None:
+                raise ValueError("a bound canonical region requires a region identifier")
+        if self.region_id is not None and self.use_full_image:
+            raise ValueError("select a prepared region or explicitly use the full image")
+        if (self.source_identity is None) != (self.preparation_revision is None):
+            raise ValueError("source and preparation must be bound together")
+        if self.source_identity is not None and self.region_id is None and not self.use_full_image:
+            raise ValueError("select a prepared region or explicitly use the full image")
+        if len({item.class_id for item in self.classes}) != len(self.classes):
+            raise ValueError("class identifiers must be unique")
+        if len({item.key for item in self.classes}) != len(self.classes):
+            raise ValueError("class keys must be unique")
+        mapped = set(self.home_assistant.on_class_ids) | set(self.home_assistant.off_class_ids)
+        if not mapped <= {item.class_id for item in self.classes}:
+            raise ValueError("Home Assistant mappings must reference existing classes")
+        publication = self.home_assistant
+        if publication.enabled and publication.kind == "binary":
+            active = {item.class_id for item in self.classes if item.enabled}
+            if not active.intersection(publication.on_class_ids) or not active.intersection(publication.off_class_ids):
+                raise ValueError("binary publication requires enabled classes on both sides")
+        references = [reference for item in self.classes for reference in item.reference_ids]
+        if references and self.source_identity is None:
+            raise ValueError("references require a verified source and preparation")
+        if len(references) > 300:
+            raise ValueError("at most 300 references are allowed per sensor")
+        if len(references) != len(set(references)):
+            raise ValueError("a reference cannot belong to different classes in the same sensor")
+        if sum(item.enabled for item in self.classes) < 2:
+            raise ValueError("at least two classes must be enabled")
+        return self
+
+    def validate_activation(self) -> None:
+        """Drafts may lack examples/resources; activation must not silently fill them."""
+        if self.sensor_id == "unconfigured":
+            raise ValueError("activation requires an individual sensor identifier")
+        if self.source_identity is None:
+            raise ValueError("activation requires a verified source and preparation")
+        active = [item for item in self.classes if item.enabled]
+        if self.strategy != "direct":
+            if self.model_id is None or self.comparison is None:
+                raise ValueError("local analysis requires a model and calibrated comparison policy")
+            if any(not item.reference_ids for item in active):
+                raise ValueError("local analysis requires references for every enabled class")
+        if self.strategy != "examples" and self.ai_profile_id is None:
+            raise ValueError("multimodal analysis requires an AI profile")
+        if self.strategy == "direct" and any(
+            not item.reference_ids and not item.description.strip() for item in active
+        ):
+            raise ValueError("direct analysis requires a description or reference for every class")
+
+
+class SampleIdentity(VisualStateModel):
+    capture_instance: Identifier
+    generation: Counter
+    sequence: Counter
+
+
+class ReferenceEvidence(VisualStateModel):
+    source_identity: Name
+    preparation_revision: Revision
+    sample: SampleIdentity
+    observed_at: Timestamp
+    freshness_basis: Literal["capture", "receipt"]
+    historical_fallback: Literal[False] = False
+    prepared_region: bool = Field(default=False, strict=True)
+
+
+class SuggestionProvenance(VisualStateModel):
+    runtime_epoch: Identifier
+    proposed_class_id: Identifier
+    configuration_digest: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    reference_revision: Revision
+    model_revision: Revision
+    ai_configuration_revision: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    profile_id: Identifier
+    provider_id: Identifier
+    model: Name
+    reason: str = Field(min_length=1, max_length=320)
+    declared_confidence: float | None = Field(default=None, ge=0, le=1)
+    input_reference_ids: tuple[Identifier, ...] = Field(default=(), max_length=300)
+
+
+class StoredReference(VisualStateModel):
+    reference_id: Identifier
+    class_id: Identifier
+    sha256: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    width: int = Field(strict=True, gt=0)
+    height: int = Field(strict=True, gt=0)
+    size_bytes: int = Field(strict=True, gt=0)
+    created_at: Timestamp
+    created_by: Identifier | None = None
+    evidence: ReferenceEvidence
+    label_origin: Literal["human", "multimodal"] = "human"
+    status: Literal["confirmed", "suggestion"] = "confirmed"
+    suggestion_id: Identifier | None = None
+    provenance: SuggestionProvenance | None = None
+
+
+class SuggestionReview(VisualStateModel):
+    operation_id: Identifier
+    fingerprint: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    action: Literal["accept", "reject", "undo"]
+    actor_id: Identifier
+    reviewed_at: Timestamp
+    class_id: Identifier | None = None
+    reference_id: Identifier | None = None
+    draft_id: Identifier
+
+
+class VisualSuggestion(VisualStateModel):
+    suggestion_id: Identifier
+    sensor_id: Identifier
+    context_digest: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    reference: StoredReference
+    status: Literal["pending", "accepted", "rejected", "expired"] = "pending"
+    revision: Counter = 0
+    expires_at: Timestamp
+    reviews: tuple[SuggestionReview, ...] = Field(default=(), max_length=64)
+
+
+class ReferenceDraft(VisualStateModel):
+    draft_id: Identifier
+    revision: Counter
+    expires_at: Timestamp
+    configuration: VisualStateConfig
+
+
+class Observation(VisualStateModel):
+    sensor_id: Identifier
+    runtime_epoch: Identifier
+    source_identity: Name
+    preparation_revision: Revision
+    reference_revision: Revision
+    model_revision: Revision
+    sample: SampleIdentity
+    observed_at: Timestamp
+    observed_monotonic: Timestamp
+    freshness_basis: Literal["capture", "receipt"]
+    region_quality: Literal["valid", "unobservable", "unavailable"]
+    class_id: Identifier | None = None
+    acceptance: Literal["enter", "hold", "abstain"] = "abstain"
+    similarity: Score | None = None
+    margin: Margin | None = None
+    reference_ids: tuple[Identifier, ...] = Field(default=(), max_length=300)
+    method: Literal["local", "multimodal"]
+    declared_confidence: Annotated[float, Field(strict=True, ge=0, le=1)] | None = None
+    duration_ms: Milliseconds = 0
+    reason: Annotated[str, StringConstraints(min_length=1, max_length=160)]
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> Self:
+        if (self.class_id is None) != (self.acceptance == "abstain"):
+            raise ValueError("abstention requires no class; acceptance requires a class")
+        if self.region_quality != "valid" and self.acceptance != "abstain":
+            raise ValueError("invalid region cannot confirm a class")
+        if self.method == "local" and self.acceptance != "abstain":
+            if self.similarity is None or self.margin is None:
+                raise ValueError("local acceptance requires similarity and margin")
+        return self
+
+
+class ConfirmedHistory(VisualStateModel):
+    class_id: Identifier
+    observed_at: Timestamp
+
+
+class StateCandidate(VisualStateModel):
+    class_id: Identifier
+    started_at: Timestamp
+
+
+class MultimodalEvaluation(VisualStateModel):
+    runtime_epoch: Identifier
+    sample: SampleIdentity
+    observed_at: Timestamp
+    status: Literal["running", "complete", "discarded", "limited", "failed"]
+    reason: Annotated[str, StringConstraints(min_length=1, max_length=160)]
+    duration_ms: Milliseconds | None = None
+    retry_at: Timestamp | None = None
+    profile_id: str = Field(default="", max_length=256)
+    provider_id: str = Field(default="", max_length=256)
+    model: str = Field(default="", max_length=256)
+
+
+class PublishedState(VisualStateModel):
+    schema_version: Literal[1] = 1
+    sensor_id: Identifier
+    runtime_epoch: Identifier
+    state_version: Counter
+    status: Literal["confirmed", "pending", "unknown", "unavailable"]
+    class_id: Identifier | None = None
+    class_key: ClassKey | None = None
+    reason: Annotated[str, StringConstraints(min_length=1, max_length=160)]
+    observed_at: Timestamp | None = None
+    confirmed_at: Timestamp | None = None
+    valid_for_ms: Milliseconds = 0
+    last_confirmed: ConfirmedHistory | None = None
+    candidate: StateCandidate | None = None
+    sample: SampleIdentity | None = None
+    source_identity: Name
+    preparation_revision: Revision
+    reference_revision: Revision
+    model_revision: Revision
+    method: Literal["local", "multimodal"] | None = None
+    freshness_basis: Literal["capture", "receipt"] | None = None
+    processing_status: Literal["idle", "waiting", "evaluating", "limited", "failed"] = "idle"
+    last_analysis: Observation | None = None
+    analysis_age_ms: Counter | None = None
+    ai_evaluation: MultimodalEvaluation | None = None
+
+    @model_validator(mode="after")
+    def validate_current_value(self) -> Self:
+        if (self.last_analysis is None) != (self.analysis_age_ms is None):
+            raise ValueError("last analysis requires its measured age")
+        if self.last_analysis is not None and any(
+            getattr(self.last_analysis, field) != getattr(self, field) for field in (
+                "sensor_id", "runtime_epoch", "source_identity", "preparation_revision", "reference_revision", "model_revision",
+            )
+        ):
+            raise ValueError("last analysis must belong to this sensor execution and revisions")
+        if (self.class_id is None) != (self.class_key is None):
+            raise ValueError("current class identifier and key must be present together")
+        if self.status in {"unknown", "unavailable"}:
+            if self.class_id is not None or self.valid_for_ms != 0 or self.candidate is not None:
+                raise ValueError("unknown/unavailable cannot carry a current value or candidate")
+        if self.status == "confirmed" and (self.class_id is None or self.candidate is not None):
+            raise ValueError("confirmed state requires a current class and no candidate")
+        if self.class_id is not None:
+            if self.valid_for_ms == 0 or any(value is None for value in (
+                self.sample, self.observed_at, self.confirmed_at, self.method, self.freshness_basis,
+            )):
+                raise ValueError("current value requires fresh observation evidence")
+        elif self.valid_for_ms != 0:
+            raise ValueError("a state without a current value cannot have remaining validity")
+        return self

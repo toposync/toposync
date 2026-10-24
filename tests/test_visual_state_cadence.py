@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
+from toposync.runtime.pipelines.operators_core import VelocityThrottleRuntime
+from toposync.runtime.pipelines.runtime import Lifecycle
+from toposync_ext_cameras.pipelines.operators import MotionGateRuntime
+from toposync_ext_vision.visual_state.operator import visual_state_cadence_diagnostics, visual_state_diagnostics
+from toposync_ext_vision.visual_state.schemas import VisualStateConfig
+
+from test_visual_state_contracts import configuration  # noqa: F401
+from test_visual_state_runtime import frame, harness, until
+
+
+def node(operator, **settings):
+    return {"node_id": operator, "operator_id": operator, "normalized_config": settings}
+
+
+@pytest.mark.parametrize("upstream,code", [
+    (node("camera.motion_gate"), "visual_state_motion_dependency"),
+    (node("camera.motion_bgsub_adaptive"), "visual_state_motion_dependency"),
+    (node("camera.motion_sample_bg"), "visual_state_motion_dependency"),
+    (node("camera.onvif_state_gate", fail_open=True), "visual_state_event_dependency"),
+    (node("camera.source", observation_window_id="window", keep_capture_when_gate_closed=True), "visual_state_event_dependency"),
+    (node("core.filter", expression="true"), "visual_state_event_dependency"),
+    (node("core.debounce"), "visual_state_event_dependency"),
+    (node("core.throttle", interval_seconds=5), "visual_state_cadence_too_slow"),
+    (node("core.velocity_throttle", moving_interval_seconds=.1, stopped_interval_seconds=2), "visual_state_cadence_too_slow"),
+    (node("core.fps_reducer", target_fps=1), "visual_state_cadence_too_slow"),
+])
+def test_manual_pipeline_keeps_configuration_and_reports_unqualified_response(configuration, upstream, code):  # noqa: F811
+    before = json.dumps(upstream, sort_keys=True)
+    diagnostics = visual_state_cadence_diagnostics(VisualStateConfig.model_validate(configuration), {"upstream_nodes": [upstream]})
+    assert code in {item.code for item in diagnostics}
+    assert all(item.details["rapid_response_qualified"] is False for item in diagnostics)
+    assert json.dumps(upstream, sort_keys=True) == before
+
+
+def test_cadence_checks_remain_visible_before_model_setup_and_do_not_expose_source_credentials(configuration):  # noqa: F811
+    context = {"upstream_nodes": [node("camera.source", fps=1, rtsp_url="rtsp://secret:password@private"),
+                                  node("core.throttle", interval_seconds=.5), node("core.fps_reducer", target_fps=4)]}
+    diagnostics = visual_state_diagnostics({**configuration, "model_id": "missing"}, context)
+    assert {"visual_state_not_ready", "visual_state_serial_limits", "visual_state_cadence_too_slow"} <= {item.code for item in diagnostics}
+    assert "secret" not in json.dumps([item.model_dump() for item in diagnostics])
+
+
+def test_continuous_input_and_idle_delivery_are_not_rejected_as_event_dependent(configuration):  # noqa: F811
+    context = {"upstream_nodes": [node("camera.source", fps=10), node("camera.motion_gate", emit_when_idle=True),
+        node("core.velocity_throttle", moving_interval_seconds=.1, stopped_interval_seconds=.5,
+             moving_field="metadata.motion_gate_open", key_field="stream_id")]}
+    assert not visual_state_cadence_diagnostics(VisualStateConfig.model_validate(configuration), context)
+
+
+def test_direct_mode_reports_budget_and_latency_without_requiring_embedding_model(configuration):  # noqa: F811
+    configuration.update(strategy="direct", model_id=None, comparison=None, ai_profile_id="visual")
+    before = json.dumps(configuration, sort_keys=True)
+    diagnostics = visual_state_diagnostics(configuration, {})
+    assert {item.code for item in diagnostics} == {"visual_state_ai_budget_too_low", "visual_state_ai_latency_unverified"}
+    assert json.dumps(configuration, sort_keys=True) == before
+    configuration["ai_limits"] = {f"requests_per_{period}": None for period in ("minute", "hour", "day", "month")}
+    assert {item.code for item in visual_state_diagnostics(configuration, {})} == {"visual_state_ai_latency_unverified"}
+
+
+def test_compiled_editor_analysis_reaches_the_visual_sensor_with_upstream_context(configuration):  # noqa: F811
+    from toposync.runtime.config_store import Pipeline
+    from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler, register_builtin_operators
+    from toposync.runtime.pipelines.recommendations import analyze_compiled_pipeline
+    from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+    from toposync_ext_cameras.pipelines import register_camera_pipeline_operators
+    from toposync_ext_vision.visual_state.operator import register_visual_state_operator
+
+    registry = OperatorRegistry()
+    register_builtin_operators(registry)
+    register_camera_pipeline_operators(registry)
+    register_visual_state_operator(registry)
+    pipeline = Pipeline(name="cadence", enabled=False, graph=build_pipeline_graph_v2(graph_uid="cadence",
+        nodes=[{"id": "source", "operator": "camera.source", "config": {"fps": 1}},
+               {"id": "motion", "operator": "camera.motion_gate", "config": {"emit_when_idle": False}},
+               {"id": "sensor", "operator": "vision.visual_state", "config": configuration}],
+        edges=[{"from": {"node": source, "port": "out"}, "to": {"node": target, "port": "in"},
+                "traffic": {"modality": "video"}} for source, target in [("source", "motion"), ("motion", "sensor")]]))
+    before = pipeline.model_dump_json()
+    compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
+    alerts = analyze_compiled_pipeline(pipeline=compiled, registry=registry)
+    owned = {alert.code for alert in alerts if alert.node_id == "sensor"}
+    assert {"visual_state_motion_dependency", "visual_state_cadence_too_slow"} <= owned
+    assert pipeline.model_dump_json() == before
+
+
+@pytest.mark.parametrize("blue_start,blue_stop,expected_blue_samples,should_confirm", [
+    pytest.param(12, 13, 0, False, id="pulse-between-samples"),
+    pytest.param(13, 14, 1, False, id="pulse-with-one-sample"),
+    pytest.param(12, 25, 3, True, id="sustained-transition"),
+])
+def test_real_sensor_reconciles_without_motion_or_onvif_and_expires_after_input_stops(
+    tmp_path, monkeypatch, blue_start, blue_stop, expected_blue_samples, should_confirm,
+):
+    import toposync_ext_cameras.pipelines.operators as camera_operators
+    import toposync.runtime.pipelines.operators_core as core_operators
+
+    class NoMotion:
+        def __init__(self, **kwargs):
+            pass
+
+        def process(self, *args, **kwargs):
+            return SimpleNamespace(active=False, score=0., bboxes01=(), last_latency_ms=0., fps=10.)
+
+    monkeypatch.setattr(camera_operators, "MotionDetector", NoMotion)
+
+    async def scenario():
+        runtime, context, clock, references, _ = await harness(tmp_path)
+        local_time = SimpleNamespace(monotonic=clock, time=clock.unix)
+        monkeypatch.setattr(camera_operators, "time", local_time)
+        monkeypatch.setattr(core_operators, "time", local_time)
+        from toposync_ext_cameras.pipeline_templates import build_visual_state_graph
+        graph = build_visual_state_graph(camera_id="synthetic", source_id="main", graph_uid="sensor",
+            sensor_configuration=runtime.config.model_dump(mode="json"))
+        settings = {item["id"]: item["config"] for item in graph["nodes"]}
+        motion = MotionGateRuntime(settings["motion"], PipelineRuntimeDependencies())
+        throttle = VelocityThrottleRuntime(settings["cadence"])
+        await runtime.prepare(context)
+        task = asyncio.create_task(runtime.run(context))
+        seen, observed_at, blue_samples = [], [], []
+        changed_at = None
+        confirmed_at = None
+        try:
+            for sequence in range(1, 25):
+                clock.now += 1 / settings["source"]["fps"]
+                if sequence == blue_start:
+                    changed_at = clock.now
+                color = "blue" if blue_start <= sequence < blue_stop else "red"
+                packet = frame(clock, sequence, color).with_lifecycle(Lifecycle.UPDATE)
+                gated = await motion.process_packet(packet, None)
+                assert gated and gated[0].metadata["motion_gate_open"] is False
+                for accepted in await throttle.process_packet(gated[0], None):
+                    await context.inputs["in"].put(accepted)
+                    await until(lambda: runtime._reducer._last_seen is not None
+                                and runtime._reducer._last_seen.sample.sequence == sequence)
+                    seen.append(runtime._reducer.tick().class_id)
+                    observed_at.append(clock.now)
+                    if color == "blue":
+                        blue_samples.append(sequence)
+                    if seen[-1] == "blue" and confirmed_at is None:
+                        confirmed_at = clock.now
+            assert all(current - previous == .5 for previous, current in zip(observed_at, observed_at[1:]))
+            assert len(blue_samples) == expected_blue_samples
+            assert changed_at is not None and "red" in seen
+            if should_confirm:
+                assert confirmed_at is not None and confirmed_at - changed_at == .625
+                assert seen[-1] == "blue"
+            else:
+                # A pulse between samples is invisible; one sample cannot confirm a transition.
+                assert confirmed_at is None and "blue" not in seen and seen[-1] == "red"
+            assert not any(packet.payload.get("onvif") for packet in context.packets)
+            clock.now += 2.1
+            await until(lambda: context.packets[-1].payload["visual_state"]["reason"] == "observation_expired")
+            assert context.packets[-1].payload["visual_state"]["class_id"] is None
+        finally:
+            context.cancel_event.set()
+            await task
+            await context.scheduler.shutdown()
+            references.close()
+
+    asyncio.run(scenario())

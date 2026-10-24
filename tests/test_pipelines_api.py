@@ -739,6 +739,8 @@ def test_pipeline_writes_require_models_only_when_enabling(tmp_path, monkeypatch
         client.portal.call(orchestrator._reconcile)
         assert "missing_model" in orchestrator.status()["activation_errors"]
         assert orchestrator.status()["pipelines"] == []
+        # External edits invalidate the editor snapshot, including when stopping.
+        pipeline = client.get("/api/pipelines/missing_model").json()
         pipeline["enabled"] = False
         stopped = client.put("/api/pipelines/missing_model", json=pipeline)
         assert stopped.status_code == 200, stopped.text
@@ -1137,6 +1139,46 @@ def test_processing_servers_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyP
         res = client.delete("/api/processing-servers/remote_gpu")
         assert res.status_code == 200
         assert res.json()["id"] == "remote_gpu"
+
+
+@pytest.mark.parametrize("invalid,code", [("private-value", "int_parsing"), (0, "greater_than_equal"), (13, "value_error")])
+def test_pipeline_compile_preserves_legacy_detail_and_adds_safe_field_errors(tmp_path, monkeypatch, invalid, code):
+    import json
+    from pydantic import BaseModel, Field, field_validator
+
+    class Configuration(BaseModel):
+        count: int = Field(default=1, ge=1)
+
+        @field_validator("count")
+        @classmethod
+        def allowed_count(cls, value):
+            if value == 13:
+                raise ValueError("count is reserved")
+            return value
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        client.app.state.pipeline_operator_registry.register_operator(
+            operator_id="test.configuration", config_model=Configuration, inputs=[], outputs=[])
+        pipeline = Pipeline(name="validation", enabled=False, graph=_v2_graph("validation", nodes=[{
+            "id": "source", "operator": "test.configuration", "config": {"count": invalid},
+        }])).model_dump(mode="json")
+        response = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert response.status_code == 400
+        result = response.json()
+        assert isinstance(result["detail"], str) and "Invalid config for operator" in result["detail"]
+        errors = result["validation_errors"]
+        assert len(errors) == 1
+        assert errors[0]["node_id"] == "source" and errors[0]["operator_id"] == "test.configuration"
+        assert errors[0]["loc"] == ["count"] and errors[0]["type"] == code
+        assert set(errors[0]) == {"node_id", "operator_id", "loc", "type", "msg"}
+        assert "private-value" not in json.dumps(errors)
+        textual = client.post("/api/pipelines/compile", content=json.dumps({"pipeline": pipeline}),
+                              headers={"content-type": "application/json"})
+        assert textual.status_code == 400 and textual.json() == result
+        pipeline["graph"]["nodes"][0]["operator"] = "test.missing"
+        unknown = client.post("/api/pipelines/compile", json={"pipeline": pipeline})
+        assert unknown.status_code == 400
+        assert unknown.json() == {"detail": "Unknown operator id: test.missing"}
 
 
 def test_pipeline_compile_returns_recommendations(

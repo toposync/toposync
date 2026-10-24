@@ -53,7 +53,7 @@ CAT_ACTIVITY_RECIPES = {
 def build_shared_camera_detection_nodes(
     *, camera_id: str, source_id: str, detection_model_id: str
 ) -> list[dict[str, Any]]:
-    return [
+    nodes = [
         {"id": "source", "operator": "camera.source",
          "config": {"camera_id": camera_id, "source_id": source_id, "fps": 4.0}},
         {"id": "motion", "operator": "camera.motion_gate",
@@ -71,6 +71,35 @@ def build_shared_camera_detection_nodes(
                     "confidence_threshold": 0.25, "emit_mode": "annotate",
                     "use_image_region": True}},
     ]
+    owner = f"camera-analysis:{camera_id}/{source_id}"
+    for node in nodes:
+        if node["id"] in {"motion", "cadence", "motion_region"}:
+            node["state"] = {
+                "resource_owner": owner,
+                "resource_partition": "camera/source/stream",
+            }
+    return nodes
+
+
+def build_visual_state_graph(*, camera_id: str, source_id: str, graph_uid: str, sensor_configuration: dict[str, Any]) -> dict[str, Any]:
+    nodes = [
+        {"id": "source", "operator": "camera.source",
+         "config": {"camera_id": camera_id, "source_id": source_id, "fps": 8.0}},
+        {"id": "motion", "operator": "camera.motion_gate",
+         "config": {"threshold": 0.01, "activation_frames": 2, "hold_seconds": 6.0,
+                    "emit_when_idle": True}},
+        {"id": "cadence", "operator": "core.velocity_throttle",
+         "config": {"moving_interval_seconds": 0.25, "stopped_interval_seconds": 0.5,
+                    "key_field": "stream_id", "moving_field": "metadata.motion_gate_open",
+                    "default_moving": True}},
+        {"id": "sensor", "operator": "vision.visual_state", "config": sensor_configuration},
+    ]
+    return build_pipeline_graph_v2(graph_uid=graph_uid, nodes=nodes, edges=[
+        {"from": {"node": source, "port": "out"}, "to": {"node": target, "port": "in"},
+         "traffic": {"modality": "video.frame", "semantic_class": "frame", "continuous": True},
+         "maxsize": 1, "drop_policy": "latest_only"}
+        for source, target in [("source", "motion"), ("motion", "cadence"), ("cadence", "sensor")]
+    ])
 
 
 class CameraObservationRegion(BaseModel):

@@ -179,9 +179,9 @@ def _register_test_source_and_sink(
 def _tracking_pipeline_graph(
     *, source_id: str, detect_id: str, track_id: str, sink_id: str, sink_name: str
 ) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "nodes": [
+    return build_pipeline_graph_v2(
+        graph_uid="fanout_fixture",
+        nodes=[
             {
                 "id": source_id,
                 "operator": "test.frame_source",
@@ -208,7 +208,7 @@ def _tracking_pipeline_graph(
             },
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
-        "edges": [
+        edges=[
             {
                 "from": {"node": source_id, "port": "out"},
                 "to": {"node": detect_id, "port": "in"},
@@ -228,7 +228,7 @@ def _tracking_pipeline_graph(
                 "drop_policy": "drop_oldest",
             },
         ],
-    }
+    )
 
 
 def _tracking_pipeline_graph_with_shareable_transform(
@@ -241,9 +241,9 @@ def _tracking_pipeline_graph_with_shareable_transform(
     sink_name: str,
     track_to_transform_maxsize: int,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "nodes": [
+    return build_pipeline_graph_v2(
+        graph_uid="fanout_fixture",
+        nodes=[
             {
                 "id": source_id,
                 "operator": "test.frame_source",
@@ -271,7 +271,7 @@ def _tracking_pipeline_graph_with_shareable_transform(
             {"id": transform_id, "operator": "test.identity", "config": {}},
             {"id": sink_id, "operator": "test.collect_sink", "config": {"sink_name": sink_name}},
         ],
-        "edges": [
+        edges=[
             {
                 "from": {"node": source_id, "port": "out"},
                 "to": {"node": detect_id, "port": "in"},
@@ -297,7 +297,7 @@ def _tracking_pipeline_graph_with_shareable_transform(
                 "drop_policy": "drop_oldest",
             },
         ],
-    }
+    )
 
 
 def _build_detection_sequence(
@@ -448,9 +448,9 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
             notifications_upsert=upsert,
         )
 
-        graph = {
-            "schema_version": 1,
-            "nodes": [
+        graph = build_pipeline_graph_v2(
+            graph_uid="fanout_fixture",
+            nodes=[
                 {
                     "id": "source",
                     "operator": "test.frame_source",
@@ -496,7 +496,7 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                     },
                 },
             ],
-            "edges": [
+            edges=[
                 {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
                 {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
                 {"from": {"node": "track", "port": "out"}, "to": {"node": "crop", "port": "in"}},
@@ -504,15 +504,8 @@ def test_tracking_crop_store_notify_keeps_three_object_events_independent(tmp_pa
                 {"from": {"node": "crop", "port": "out"}, "to": {"node": "store", "port": "in"}},
                 {"from": {"node": "store", "port": "out"}, "to": {"node": "notify", "port": "in"}},
             ],
-        }
-        pipeline = Pipeline(
-            name="tracked_object_crop_notifications",
-            graph=build_pipeline_graph_v2(
-                graph_uid="tracked_object_crop_notifications",
-                nodes=graph["nodes"],
-                edges=graph["edges"],
-            ),
         )
+        pipeline = Pipeline(name="tracked_object_crop_notifications", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.6)
@@ -704,9 +697,9 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
             vision_model_registry=_build_registry(),
         )
 
-        graph = {
-            "schema_version": 1,
-            "nodes": [
+        graph = build_pipeline_graph_v2(
+            graph_uid="fanout_fixture",
+            nodes=[
                 {
                     "id": "source",
                     "operator": "test.frame_source",
@@ -728,18 +721,13 @@ def test_vision_track_annotate_mode_passes_through_frames_with_tracks() -> None:
                     "config": {"sink_name": "tracking_sink"},
                 },
             ],
-            "edges": [
+            edges=[
                 {"from": {"node": "source", "port": "out"}, "to": {"node": "detect", "port": "in"}},
                 {"from": {"node": "detect", "port": "out"}, "to": {"node": "track", "port": "in"}},
                 {"from": {"node": "track", "port": "out"}, "to": {"node": "sink", "port": "in"}},
             ],
-        }
-        pipeline = Pipeline(
-            name="stage5_tracking_annotate",
-            graph=build_pipeline_graph_v2(
-                graph_uid="stage5_tracking_annotate", nodes=graph["nodes"], edges=graph["edges"]
-            ),
         )
+        pipeline = Pipeline(name="stage5_tracking_annotate", graph=graph)
         compiled = PipelineGraphCompiler(registry).compile_pipeline(pipeline)
         runtime = PipelineRuntime(compiled=compiled, registry=registry, dependencies=dependencies)
         await runtime.run_for(0.25)

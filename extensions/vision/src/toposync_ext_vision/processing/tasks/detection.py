@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -59,6 +60,15 @@ class VisionDetectRuntime(TransformOperatorRuntime):
         if isinstance(registry, ModelRegistry):
             return registry
         return build_default_model_registry()
+
+    async def prepare(self, context) -> None:
+        work = asyncio.create_task(context.run_blocking(self._ensure_backend))
+        try:
+            await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # Native model loading must finish before candidate cleanup.
+            await work
+            raise
 
     def _ensure_manifest(self) -> ModelManifest:
         if self._manifest is not None:
@@ -390,6 +400,9 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             input_artifact_name=self._parsed.input_artifact_name,
         )
         if frame is None:
+            inspect = getattr(context, "inspect", None)
+            if callable(inspect):
+                inspect("filtered", packet, reason="image_unavailable")
             return []
 
         manifest = self._ensure_manifest()
@@ -400,6 +413,11 @@ class VisionDetectRuntime(TransformOperatorRuntime):
             inference_packet = packet
             if self._parsed.use_image_region:
                 inference_packet, frame = self._region_input(packet, artifact_name, frame)
+            inspection_frame = None
+            inspection = getattr(context, "inspection_store", None)
+            if inspection is not None and context.inspection_active() and 0 < getattr(frame, "nbytes", 0) <= inspection.maximum_image_bytes:
+                # Preserve inference pixels off-loop; the diagnostic callback only retains a reference.
+                inspection_frame = await context.run_blocking(frame.copy)
             concurrency_key = f"vision.detect:{manifest.runtime}:{manifest.model_id}"
             raw_detections = await context.run_blocking(
                 backend.detect,
@@ -407,6 +425,10 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 categories=self._categories_set or None,
                 concurrency_key=concurrency_key,
             )
+            inspect = getattr(context, "inspect", None)
+            if callable(inspect):
+                inspect("analyzed", inference_packet, frame=inspection_frame, detections=raw_detections, model_id=manifest.model_id,
+                        geometry=inference_packet.artifacts[artifact_name].metadata.get("image_geometry"))
             if self._shutting_down:
                 return []
             detections = self._normalize_detections(
@@ -415,6 +437,10 @@ class VisionDetectRuntime(TransformOperatorRuntime):
                 manifest=manifest,
                 selected_artifact_name=artifact_name,
             )
+        else:
+            inspect = getattr(context, "inspect", None)
+            if callable(inspect):
+                inspect("filtered", packet, reason="inference_interval")
 
         self._record_confidence_telemetry(packet=packet, context=context, detections=detections)
         if self._parsed.emit_mode == "events":

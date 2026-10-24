@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import logging
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ class WriterFrameState:
     last_frame_monotonic: float = 0.0
     last_frame_unix: float | None = None
     updated_at_monotonic: float = field(default_factory=time.monotonic)
+    presentation: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +47,7 @@ class SelectedWriterFrame:
     fallback_reason: str | None
     stale: bool
     placeholder_active: bool
+    presentation: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -54,6 +57,7 @@ class TransmissionFrameState:
     frame_ts: float
     updated_at_monotonic: float
     updated_at_unix: float | None = None
+    presentation: dict[str, Any] | None = None
 
 
 class TransmissionRuntimeState:
@@ -102,6 +106,7 @@ class TransmissionRuntimeState:
         writer_priority: int,
         frame: numpy.ndarray | None,
         frame_ts: float,
+        presentation: dict[str, Any] | None = None,
     ) -> None:
         transmission_key = _normalize_key(transmission_id)
         writer_key = _normalize_key(writer_id)
@@ -123,11 +128,13 @@ class TransmissionRuntimeState:
                 now_unix = float(self._wall_time())
                 normalized_frame = _normalize_frame(frame)
                 state.frame = normalized_frame
+                state.presentation = deepcopy(presentation)
                 state.frame_ts = float(frame_ts)
                 state.last_frame_monotonic = now_monotonic
                 state.last_frame_unix = now_unix
                 self._last_incoming_frame_by_transmission[transmission_key] = TransmissionFrameState(
                     frame=normalized_frame,
+                    presentation=state.presentation,
                     writer_id=writer_key,
                     frame_ts=float(frame_ts),
                     updated_at_monotonic=float(now_monotonic),
@@ -231,6 +238,7 @@ class TransmissionRuntimeState:
             if selected.frame is not None:
                 self._last_selected_frame_by_transmission[transmission_key] = TransmissionFrameState(
                     frame=selected.frame,
+                    presentation=selected.presentation,
                     writer_id=selected.writer_id,
                     frame_ts=float(selected.frame_ts),
                     updated_at_monotonic=float(selected.last_frame_monotonic),
@@ -238,6 +246,7 @@ class TransmissionRuntimeState:
                 )
 
             resolved_frame = selected.frame
+            resolved_presentation = selected.presentation
             resolved_frame_ts = float(selected.frame_ts)
             resolved_updated_monotonic = float(selected.last_frame_monotonic)
             resolved_updated_unix = selected.last_frame_unix
@@ -248,6 +257,7 @@ class TransmissionRuntimeState:
                 fallback = self._fallback_frame_locked(transmission_key)
                 if fallback is not None:
                     resolved_frame = fallback.frame
+                    resolved_presentation = fallback.presentation
                     resolved_frame_ts = float(fallback.frame_ts)
                     resolved_updated_monotonic = float(fallback.updated_at_monotonic)
                     resolved_updated_unix = fallback.updated_at_unix
@@ -264,6 +274,7 @@ class TransmissionRuntimeState:
                 writer_id=selected.writer_id if selected.frame is not None else None,
                 selected_writer_id=selected_frame_writer_id if resolved_frame is not None else None,
                 frame=resolved_frame,
+                presentation=resolved_presentation,
                 lifecycle_state=selected.lifecycle_state if selected.frame is not None else None,
                 writer_priority=int(selected.writer_priority) if selected.frame is not None else 0,
                 frame_ts=resolved_frame_ts,
@@ -565,6 +576,7 @@ class TransmissionRuntimeState:
             writer_id=None,
             selected_writer_id=fallback.writer_id,
             frame=fallback.frame,
+            presentation=fallback.presentation,
             lifecycle_state=None,
             writer_priority=0,
             frame_ts=float(fallback.frame_ts),
@@ -623,6 +635,7 @@ class TransmissionRuntimeState:
                     writer_id=selected.writer_id,
                     selected_writer_id=selected.writer_id,
                     frame=selected.frame,
+                    presentation=selected.presentation,
                     lifecycle_state=selected.lifecycle_state,
                     writer_priority=int(selected.writer_priority),
                     frame_ts=float(selected.frame_ts),
@@ -682,6 +695,7 @@ class TransmissionRuntimeState:
         fallback_reason: str | None,
         stale_after_s: float,
         placeholder_after_s: float,
+        presentation: dict[str, Any] | None = None,
     ) -> SelectedWriterFrame:
         selected_age = (
             max(0.0, float(now_monotonic) - float(updated_at_monotonic))
@@ -715,6 +729,7 @@ class TransmissionRuntimeState:
             fallback_reason=fallback_reason,
             stale=bool(stale),
             placeholder_active=bool(placeholder_active),
+            presentation=deepcopy(presentation),
         )
 
 

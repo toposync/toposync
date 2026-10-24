@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -104,6 +105,39 @@ def test_store_persists_profiles_and_decisions_but_closes_live_sessions(tmp_path
     assert row is not None
     assert row[0] == "process_restarted"
     assert row[1] is not None
+
+
+@pytest.mark.parametrize("ended", [False, True])
+@pytest.mark.parametrize("recovery", [False, True])
+def test_session_evidence_survives_close_or_restart_without_losing_recovery_policy(tmp_path, ended, recovery):
+    path = tmp_path / "attention.sqlite3"
+    store = AttentionStore(path)
+    session_id = store.start_session(ptz_device_id="front", profile_id="attention",
+        event_key="event", preset_token="", priority=50, now=0, recovery_on_restart=recovery,
+        details={"source_id": "wide", "arrival_verified": False, "recovery_on_restart": not recovery})
+    store.update_session(session_id, details={"arrival_verified": True,
+        "command_to_arrival_ms": 400, "recovery_on_restart": not recovery})
+    if ended:
+        store.end_session(session_id, outcome="paused", now=1, details={"session_elapsed_ms": 1000})
+        store.update_session(session_id, details={"source_id": "wrong"})
+        store.end_session(session_id, outcome="wrong", now=2)
+    store.close()
+    reopened = AttentionStore(path)
+    row = reopened._conn.execute("SELECT * FROM attention_session WHERE id = ?", (session_id,)).fetchone()
+    details = json.loads(row["details_json"])
+    assert row["started_at"] == 0
+    assert row["outcome"] == ("paused" if ended else "process_restarted")
+    assert details["source_id"] == "wide"
+    assert details["arrival_verified"] is True
+    assert details["command_to_arrival_ms"] == 400
+    assert details["recovery_on_restart"] is recovery
+    assert reopened.is_recovery_required("front") is (recovery and not ended)
+    if ended:
+        assert row["ended_at"] == 1
+        assert details["session_elapsed_ms"] == 1000
+    else:
+        assert "session_elapsed_ms" not in details
+    reopened.close()
 
 
 def test_store_allows_only_one_profile_per_physical_device() -> None:

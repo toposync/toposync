@@ -732,6 +732,74 @@ def test_spatial_relation_rejects_low_confidence_world_match_when_bbox_is_far() 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("pose,model", [
+    ("numeric_pose", "panorama_ray_ground_v1"),
+    ("visual_frame_rotation", "panorama_ray_ground_v1"),
+    ("fixed_source_frame", "panorama_image_ground_v1"),
+])
+@pytest.mark.parametrize("invalid", [
+    None, "unmapped", "quality", "revision", "different_revision", "different_map", "invalid_model",
+    "different_composition", "low_confidence", "invalid_confidence", "missing_anchor", "stale_localization",
+    "different_geometry", "different_artifact",
+])
+def test_relation_uses_matching_panorama_geometry_without_inventing_confidence(pose, model, invalid):
+    members = _near_members()
+    packet = _group_packet(members=members)
+    for member in members:
+        member["world_anchor"].pop("confidence")
+        member["mapping"] = {
+            "status": "mapped", "quality": {"status": "ready"}, "composition_id": "yard",
+            "calibrated_view_id": "panorama", "panorama_revision": 2,
+            "projection_model": model, "pose_evidence": pose,
+            "visual_localization": {
+                "source_artifact_id": "artifact", "geometry_digest": "geometry",
+                "capture_evidence": dict(member["capture_evidence"]),
+            },
+        }
+    mapping = members[1]["mapping"]
+    if invalid == "unmapped":
+        mapping["status"] = "unmapped"
+    elif invalid == "quality":
+        mapping.pop("quality")
+    elif invalid == "revision":
+        mapping["panorama_revision"] = True
+    elif invalid == "different_revision":
+        mapping["panorama_revision"] = 3
+    elif invalid == "different_map":
+        mapping["calibrated_view_id"] = "other"
+    elif invalid == "invalid_model":
+        mapping["projection_model"] = []
+    elif invalid == "different_composition":
+        mapping["composition_id"] = "other"
+    elif invalid == "low_confidence":
+        members[1]["world_anchor"]["confidence"] = .2
+    elif invalid == "invalid_confidence":
+        members[1]["world_anchor"]["confidence"] = float("nan")
+    elif invalid == "missing_anchor":
+        members[1].pop("world_anchor")
+    elif invalid == "stale_localization":
+        mapping["visual_localization"]["capture_evidence"]["sequence"] -= 1
+    elif invalid == "different_geometry":
+        mapping["visual_localization"]["geometry_digest"] = "other"
+    elif invalid == "different_artifact":
+        mapping["visual_localization"]["source_artifact_id"] = "other"
+    expected_world = invalid is None or (
+        pose != "visual_frame_rotation"
+        and invalid in {"stale_localization", "different_geometry", "different_artifact"}
+    )
+    runtime = VisionSpatialRelationEventRuntime({
+        "dwell_seconds": 0, "enter_image_center_distance": .5, "exit_image_center_distance": .6,
+    })
+    outputs = asyncio.run(runtime.process_packet(packet, None))
+    assert len(outputs) == 1
+    payload = outputs[0].payload
+    assert payload["spatial_relation_event"]["coordinate_space"] == ("world" if expected_world else "image")
+    assert ("world_envelope" in payload) == expected_world
+    if expected_world:
+        assert payload["world_anchor"] == {"x": 1.0, "z": 0.0}
+        assert payload["world_envelope"]["member_count"] == 2
+
+
 def test_spatial_relation_confidence_uses_matched_pair_and_clears_stale_world_target() -> None:
     runtime = VisionSpatialRelationEventRuntime(
         {

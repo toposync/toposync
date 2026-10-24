@@ -445,12 +445,13 @@ class AttentionStore:
         preset_token: str,
         priority: int,
         recovery_on_restart: bool = True,
+        details: dict[str, Any] | None = None,
         now: float | None = None,
     ) -> str:
         session_id = f"session_{uuid.uuid4().hex}"
-        started_at = float(now or time.time())
+        started_at = float(time.time() if now is None else now)
         details_json = json.dumps(
-            {"recovery_on_restart": bool(recovery_on_restart)},
+            {**dict(details or {}), "recovery_on_restart": bool(recovery_on_restart)},
             ensure_ascii=False,
             separators=(",", ":"),
         )
@@ -483,18 +484,37 @@ class AttentionStore:
         details: dict[str, Any] | None = None,
         now: float | None = None,
     ) -> None:
-        ended_at = float(now or time.time())
-        details_json = json.dumps(
-            dict(details or {}), ensure_ascii=False, separators=(",", ":"), default=str
-        )
+        self.update_session(session_id, outcome=str(outcome or "ended").strip(), details=details, now=now)
+
+    def update_session(
+        self,
+        session_id: str,
+        *,
+        details: dict[str, Any] | None = None,
+        outcome: str | None = None,
+        now: float | None = None,
+    ) -> None:
+        """Preserve evidence across stages; a terminal session is immutable."""
         with self._lock:
+            row = self._conn.execute(
+                "SELECT details_json FROM attention_session WHERE id = ? AND ended_at IS NULL",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return
+            previous = json.loads(row["details_json"])
+            updated = {**previous, **dict(details or {})}
+            # Diagnostic updates must never disable physical recovery after a crash.
+            updated["recovery_on_restart"] = previous.get("recovery_on_restart", True)
+            details_json = json.dumps(updated, ensure_ascii=False, separators=(",", ":"), default=str)
+            ended_at = float(time.time() if now is None else now) if outcome is not None else None
             self._conn.execute(
                 """
                 UPDATE attention_session
-                SET ended_at = ?, outcome = ?, details_json = ?
+                SET ended_at = ?, outcome = COALESCE(?, outcome), details_json = ?
                 WHERE id = ? AND ended_at IS NULL
                 """,
-                (ended_at, str(outcome or "ended").strip(), details_json, session_id),
+                (ended_at, outcome, details_json, session_id),
             )
 
     def close_open_sessions(self, *, outcome: str) -> int:

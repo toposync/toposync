@@ -68,6 +68,8 @@
   --color-action-background: #087873;
   --color-action-hover: #06645f;
   --color-action-text: #ffffff;
+  --color-action-danger-background: #b91c1c;
+  --color-action-danger-hover: #991b1b;
   --color-accent-teal: #0ea5a4;
   --color-accent-blue: #3b82f6;
   --gradient-accent: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));
@@ -77,8 +79,8 @@
   --color-danger: #ef4444;
   --color-info: #3b82f6;
 
-  --color-focus-ring-outer: rgba(59, 130, 246, 0.35);
-  --color-focus-ring-inner: rgba(14, 165, 164, 0.25);
+  --color-focus-ring-outer: var(--color-action-background);
+  --color-focus-ring-inner: var(--color-surface-solid);
 
   --color-accent-background-soft: rgba(14, 165, 164, 0.1);
   --color-accent-background-soft-2: rgba(59, 130, 246, 0.08);

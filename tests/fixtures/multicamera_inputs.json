@@ -1,0 +1,608 @@
+{
+  "schema_version": 1,
+  "kind": "synthetic_contract_inputs_not_production_schema",
+  "cases": [
+    {
+      "identifier": "F01",
+      "description": "Trio e identidade tardia; split/reunião determinísticos.",
+      "related_tests": [
+        "T03",
+        "T04",
+        "T28"
+      ],
+      "boundary": "after_local_tracking_and_mapping_with_controlled_gallery_decisions",
+      "inputs": {
+        "observations": [
+          {
+            "observation_identifier": "observation-f8dfd2eae22e",
+            "camera_identifier": "front",
+            "source_identifier": "front-main",
+            "capture_instance_identifier": "front-capture",
+            "capture_generation": 1,
+            "frame_sequence": 1,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 0.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.0,
+              0.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-310fc1d999b8",
+            "camera_identifier": "front",
+            "source_identifier": "front-main",
+            "capture_instance_identifier": "front-capture",
+            "capture_generation": 1,
+            "frame_sequence": 1,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 0.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.7,
+              0.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-29b3df873fcd",
+            "camera_identifier": "front",
+            "source_identifier": "front-main",
+            "capture_instance_identifier": "front-capture",
+            "capture_generation": 1,
+            "frame_sequence": 1,
+            "local_track_identifier": "track-3",
+            "category": "person",
+            "observed_at_seconds": 0.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              3.4,
+              0.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-3b8d45cbce6c",
+            "camera_identifier": "front",
+            "source_identifier": "front-main",
+            "capture_instance_identifier": "front-capture",
+            "capture_generation": 1,
+            "frame_sequence": 2,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 1.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.0,
+              1.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-9f442b99e78c",
+            "camera_identifier": "front",
+            "source_identifier": "front-main",
+            "capture_instance_identifier": "front-capture",
+            "capture_generation": 1,
+            "frame_sequence": 2,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 1.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.7,
+              1.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-b9fe9c14d1d9",
+            "camera_identifier": "front",
+            "source_identifier": "front-main",
+            "capture_instance_identifier": "front-capture",
+            "capture_generation": 1,
+            "frame_sequence": 2,
+            "local_track_identifier": "track-3",
+            "category": "person",
+            "observed_at_seconds": 1.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              3.4,
+              1.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-39cbf11b24b3",
+            "camera_identifier": "garage",
+            "source_identifier": "garage-main",
+            "capture_instance_identifier": "garage-capture",
+            "capture_generation": 1,
+            "frame_sequence": 3,
+            "local_track_identifier": "track-3",
+            "category": "person",
+            "observed_at_seconds": 2.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.0,
+              2.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-142875c13bf4",
+            "camera_identifier": "garage",
+            "source_identifier": "garage-main",
+            "capture_instance_identifier": "garage-capture",
+            "capture_generation": 1,
+            "frame_sequence": 3,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 2.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.7,
+              2.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-062387a034f2",
+            "camera_identifier": "garage",
+            "source_identifier": "garage-main",
+            "capture_instance_identifier": "garage-capture",
+            "capture_generation": 1,
+            "frame_sequence": 3,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 2.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              3.4,
+              2.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-e05da2db3aaa",
+            "camera_identifier": "garage",
+            "source_identifier": "garage-main",
+            "capture_instance_identifier": "garage-capture",
+            "capture_generation": 1,
+            "frame_sequence": 4,
+            "local_track_identifier": "track-3",
+            "category": "person",
+            "observed_at_seconds": 3.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.0,
+              3.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-d03df3e863b7",
+            "camera_identifier": "garage",
+            "source_identifier": "garage-main",
+            "capture_instance_identifier": "garage-capture",
+            "capture_generation": 1,
+            "frame_sequence": 4,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 3.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.7,
+              3.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-1d360b76775f",
+            "camera_identifier": "garage",
+            "source_identifier": "garage-main",
+            "capture_instance_identifier": "garage-capture",
+            "capture_generation": 1,
+            "frame_sequence": 4,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 3.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              3.4,
+              3.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-51c5b70c54d3",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 5,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 4.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.0,
+              4.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-c412da827eae",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 5,
+            "local_track_identifier": "track-3",
+            "category": "person",
+            "observed_at_seconds": 4.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.7,
+              4.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-252f94ca3f42",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 5,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 4.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              3.4,
+              4.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-bbab8e3aaf0e",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 6,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 5.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.0,
+              5.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-8cf7727cd450",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 6,
+            "local_track_identifier": "track-3",
+            "category": "person",
+            "observed_at_seconds": 5.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.7,
+              5.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-9f69348c3dfc",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 6,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 5.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              3.4,
+              5.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-617150365590",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 7,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 6.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.0,
+              6.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-d8e22677c89e",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 7,
+            "local_track_identifier": "track-3",
+            "category": "person",
+            "observed_at_seconds": 6.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.7,
+              6.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-ac940396d73a",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 7,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 6.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              7.0,
+              6.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-c6b89dd32bcd",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 8,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 7.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.0,
+              7.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-7bda4bf3c039",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 8,
+            "local_track_identifier": "track-3",
+            "category": "person",
+            "observed_at_seconds": 7.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              2.7,
+              7.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          },
+          {
+            "observation_identifier": "observation-28a0c874b996",
+            "camera_identifier": "corridor",
+            "source_identifier": "corridor-main",
+            "capture_instance_identifier": "corridor-capture",
+            "capture_generation": 1,
+            "frame_sequence": 8,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 7.0,
+            "clock_domain_identifier": "synthetic-shared-clock",
+            "clock_uncertainty_seconds": 0.0,
+            "coordinate_reference": "synthetic-house-xz-metres",
+            "world_position": [
+              3.4,
+              7.0
+            ],
+            "mapping_revision": "synthetic-map-1",
+            "position_error_bound_metres": 0.02
+          }
+        ],
+        "identity_evidence": [
+          {
+            "observation_identifier": "observation-e05da2db3aaa",
+            "identity_identifier": "synthetic-identity-1",
+            "status": "recognized",
+            "test_double": true,
+            "evidence_kind": "controlled_gallery_decision_not_face_inference"
+          },
+          {
+            "observation_identifier": "observation-d03df3e863b7",
+            "identity_identifier": "synthetic-identity-2",
+            "status": "recognized",
+            "test_double": true,
+            "evidence_kind": "controlled_gallery_decision_not_face_inference"
+          }
+        ],
+        "prepared_context": {
+          "known_transitions": [
+            [
+              "front",
+              "garage"
+            ],
+            [
+              "garage",
+              "corridor"
+            ]
+          ],
+          "group_distance_limit_metres": 2.0,
+          "source_clocks_verified": true
+        },
+        "identity_policy": {
+          "front": "keep_confirmed_identity",
+          "garage": "recognize_here",
+          "corridor": "keep_confirmed_identity"
+        }
+      }
+    },
+    {
+      "identifier": "F02",
+      "description": "Reaparição sem evidência discriminante.",
+      "related_tests": [
+        "T05",
+        "T07",
+        "T33"
+      ],
+      "boundary": "association_with_deliberately_insufficient_evidence",
+      "inputs": {
+        "observations": [
+          {
+            "observation_identifier": "front-ambiguous-1",
+            "camera_identifier": "front",
+            "source_identifier": "front-main",
+            "capture_generation": 1,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 0.0,
+            "clock_domain_identifier": "front-unverified",
+            "clock_uncertainty_seconds": null,
+            "world_position": null,
+            "appearance_descriptor": null
+          },
+          {
+            "observation_identifier": "front-ambiguous-2",
+            "camera_identifier": "front",
+            "source_identifier": "front-main",
+            "capture_generation": 1,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 0.0,
+            "clock_domain_identifier": "front-unverified",
+            "clock_uncertainty_seconds": null,
+            "world_position": null,
+            "appearance_descriptor": null
+          },
+          {
+            "observation_identifier": "garage-ambiguous-1",
+            "camera_identifier": "garage",
+            "source_identifier": "garage-main",
+            "capture_generation": 1,
+            "local_track_identifier": "track-1",
+            "category": "person",
+            "observed_at_seconds": 4.0,
+            "clock_domain_identifier": "garage-unverified",
+            "clock_uncertainty_seconds": null,
+            "world_position": null,
+            "appearance_descriptor": null
+          },
+          {
+            "observation_identifier": "garage-ambiguous-2",
+            "camera_identifier": "garage",
+            "source_identifier": "garage-main",
+            "capture_generation": 1,
+            "local_track_identifier": "track-2",
+            "category": "person",
+            "observed_at_seconds": 4.0,
+            "clock_domain_identifier": "garage-unverified",
+            "clock_uncertainty_seconds": null,
+            "world_position": null,
+            "appearance_descriptor": null
+          }
+        ],
+        "prepared_context": {
+          "possible_transition": [
+            "front",
+            "garage"
+          ],
+          "physical_timing_verified": false
+        }
+      }
+    }
+  ]
+}

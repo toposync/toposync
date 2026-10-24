@@ -50,7 +50,7 @@ def test_manual_activation_blocks_sources_preserves_independent_work_and_bounds_
         async def start_pipeline(pipeline, **_kwargs):
             starts.append(pipeline.name)
 
-        async def start_bundle(pipelines):
+        async def start_bundle(pipelines, *, catalog):
             starts.extend(pipeline.name for pipeline in pipelines)
             return True
 
@@ -111,10 +111,10 @@ def test_disabling_during_preflight_cannot_start_the_previous_configuration(tmp_
             notifications=NotificationsRuntime(data_dir=tmp_path), files_dir=paths.files_dir,
         )
 
-        async def must_not_start(_pipeline):
+        async def must_not_start(_pipelines, *, catalog):
             pytest.fail("The disabled pipeline must never start")
 
-        monkeypatch.setattr(orchestrator, "_start_local_pipeline", must_not_start)
+        monkeypatch.setattr(orchestrator, "_start_local_bundle", must_not_start)
         try:
             pending = asyncio.create_task(orchestrator._reconcile())
             await entered.wait()
@@ -150,10 +150,11 @@ def test_composition_changes_retry_blocked_activation_without_repeating_polls(tm
             notifications=NotificationsRuntime(data_dir=tmp_path), files_dir=paths.files_dir,
         )
 
-        async def start(pipeline):
-            starts.append(pipeline.name)
+        async def start(pipelines, *, catalog):
+            starts.extend(pipeline.name for pipeline in pipelines)
+            return True
 
-        monkeypatch.setattr(orchestrator, "_start_local_pipeline", start)
+        monkeypatch.setattr(orchestrator, "_start_local_bundle", start)
         try:
             await orchestrator._reconcile()
             assert len(checks) == 1 and starts == []

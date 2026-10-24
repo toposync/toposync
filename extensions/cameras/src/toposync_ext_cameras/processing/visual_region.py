@@ -91,6 +91,72 @@ def reference_to_frame(pixels, located, geometry, reference_size):
     return current, valid & observed_pixels(current, geometry)
 
 
+def reference_mask_points(mask, pixels):
+    """Sample a fixed alignment mask; outside points never provide support."""
+    valid = np.isfinite(pixels).all(axis=1) & (pixels >= 0).all(axis=1)
+    valid &= (pixels[:, 0] <= mask.shape[1] - 1) & (pixels[:, 1] <= mask.shape[0] - 1)
+    points = np.rint(pixels[valid]).astype(np.int64)
+    selected = np.zeros(len(pixels), dtype=bool)
+    selected[valid] = mask[points[:, 1], points[:, 0]] > 0
+    return selected
+
+
+def canonical_region(image, mask, coverage, located, geometry, *, maximum_side=256, wrap=False):
+    """Resample only fully observed region pixels into an immutable reference grid."""
+    if (not isinstance(image, np.ndarray) or image.dtype != np.uint8 or image.ndim != 3
+            or image.shape[2] != 3 or image.shape[0] * image.shape[1] > 4_000_000
+            or type(maximum_side) is not int or not 32 <= maximum_side <= 512):
+        raise ValueError("visual_region_image_invalid")
+    geometry_matrix(geometry, image.shape[1], image.shape[0])
+    if located.get("status") != "localized" or located.get("capture_evidence") != geometry.get("capture_evidence"):
+        raise ValueError("visual_region_localization_unverified")
+    if (not isinstance(mask, np.ndarray) or mask.dtype != np.uint8 or mask.ndim != 2
+            or not 2 <= mask.shape[1] <= 8192 or not 2 <= mask.shape[0] <= 4096
+            or not isinstance(coverage, np.ndarray) or coverage.shape != mask.shape):
+        raise ValueError("visual_region_dimensions_invalid")
+    count = np.count_nonzero(mask)
+    if not 1 <= count <= 1_000_000:
+        raise ValueError("visual_region_pixel_limit")
+    if np.any((mask > 0) & (coverage == 0)):
+        raise ValueError("visual_region_outside_reference_coverage")
+    ys, xs = np.nonzero(mask)
+    points = np.column_stack((xs, ys)).astype(float)
+    observed, valid = reference_to_frame(points, located, geometry, mask.shape[1::-1])
+    if not valid.all():
+        raise ValueError("visual_region_outside" if not valid.any() else "visual_region_partial")
+    support = np.asarray(located.get("support_pixels", []), dtype=float)
+    if support.ndim != 2 or support.shape[1] != 2 or len(support) < 3 or not np.isfinite(support).all():
+        raise ValueError("visual_region_local_support_missing")
+    support = source_pixels(support, np.linalg.inv(geometry["to_source"]))
+    hull = cv2.convexHull(support.astype(np.float32))
+    boundary = cv2.convexHull(observed.astype(np.float32)).reshape(-1, 2)
+    if any(cv2.pointPolygonTest(hull, tuple(map(float, point)), False) < 0 for point in boundary):
+        raise ValueError("visual_region_local_support_missing")
+    columns = np.unique(xs)
+    start, width = int(xs.min()), int(xs.max() - xs.min() + 1)
+    if wrap:
+        gaps = np.diff(np.r_[columns, columns[0] + mask.shape[1]])
+        gap = int(np.argmax(gaps))
+        start = int(columns[(gap + 1) % len(columns)])
+        width = int(mask.shape[1] - gaps[gap] + 1)
+    top, height = int(ys.min()), int(ys.max() - ys.min() + 1)
+    scale = min(1, maximum_side / max(width, height))
+    output_width, output_height = max(1, round(width * scale)), max(1, round(height * scale))
+    x = (start + (np.arange(output_width) + .5) * width / output_width - .5) % mask.shape[1]
+    y = top + (np.arange(output_height) + .5) * height / output_height - .5
+    grid_x, grid_y = np.meshgrid(x, y)
+    grid = np.column_stack((grid_x.ravel(), grid_y.ravel()))
+    current, valid = reference_to_frame(grid, located, geometry, mask.shape[1::-1])
+    selected = reference_mask_points(mask, grid)
+    if not selected.any() or not valid[selected].all():
+        raise ValueError("visual_region_partial")
+    output = cv2.remap(image, current[:, 0].reshape(output_height, output_width).astype(np.float32),
+                       current[:, 1].reshape(output_height, output_width).astype(np.float32), cv2.INTER_LINEAR)
+    output[~selected.reshape(output_height, output_width)] = 0
+    output.flags.writeable = False
+    return output
+
+
 def project_region(mask, coverage, located, geometry):
     width, height = geometry["image_size"]
     geometry_matrix(geometry, width, height)

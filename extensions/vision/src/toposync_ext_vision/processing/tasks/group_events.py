@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.inspection import frame_reference, inspection_execution
+from toposync.runtime.pipelines.image_geometry import inspection_geometry
+from toposync.runtime.pipelines.images import resolve_image_artifact_for_data
+
 import math
 import time
 import uuid
@@ -18,6 +22,21 @@ from ..contracts import normalize_bbox01
 
 def _normalize_string(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _member_image_observation(packet: Packet) -> dict | None:
+    reference = frame_reference(packet)
+    name, image = resolve_image_artifact_for_data(packet, input_artifact_name=None)
+    shape = getattr(image, "shape", ())
+    artifact = packet.artifacts.get(name)
+    if (reference is None or not reference.get("device_id") or not reference.get("source_id")
+            or reference.get("published_at") is None or artifact is None or len(shape) < 2):
+        return None
+    original = artifact.metadata.get("image_geometry")
+    if not isinstance(original, dict) or original.get("capture_evidence") != packet.payload.get("capture_evidence"):
+        return None
+    geometry = inspection_geometry(original, shape[1], shape[0], reference)
+    return {"frame_reference": reference, "geometry": geometry} if geometry is not None else None
 
 
 def _normalize_label(value: Any) -> str:
@@ -199,6 +218,7 @@ class _MemberState:
     recognition_occurrence_id: str | None = None
     capture_evidence: dict[str, Any] | None = None
     mapping: dict[str, Any] | None = None
+    image_observation: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -285,11 +305,12 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             packet = await context.read(port="in", timeout_s=0.2)
             started_ns = time.monotonic_ns()
             try:
-                out_packets = (
-                    await self._flush_idle_groups(context)
-                    if packet is None
-                    else await self.process_packet(packet, context)
-                )
+                with inspection_execution(context, packet):
+                    out_packets = (
+                        await self._flush_idle_groups(context)
+                        if packet is None
+                        else await self.process_packet(packet, context)
+                    )
             except Exception as exc:  # noqa: BLE001
                 context.metrics.record_error(exc)
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)
@@ -354,7 +375,11 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             or _normalize_world_anchor(packet.payload.get("world_anchor"))
             or _normalize_world_anchor(packet.payload.get("world"))
         )
-        lifecycle = _active_lifecycle(subject.get("lifecycle"), packet.lifecycle)
+        # A derived condition may close before its tracked subject disappears.
+        lifecycle = (
+            Lifecycle.CLOSE if packet.lifecycle == Lifecycle.CLOSE
+            else _active_lifecycle(subject.get("lifecycle"), packet.lifecycle)
+        )
         try:
             confidence = float(subject.get("confidence", 0.0) or 0.0)
         except Exception:
@@ -530,6 +555,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 "active": member.active,
                 "frame_ts": member.last_seen_packet_ts,
                 "capture_evidence": dict(member.capture_evidence) if member.capture_evidence else None,
+                "image_observation": deepcopy(member.image_observation),
             }
             if member.world_anchor:
                 item["world_anchor"] = dict(member.world_anchor)
@@ -626,6 +652,16 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             payload["world_envelope"] = world_envelope
         members = [member for member in group.members.values() if member.active] or list(group.members.values())
         mappings = [member.mapping for member in members if member.mapping]
+        image_observation = _member_image_observation(source_packet)
+        source_mapping = source_packet.payload.get("mapping")
+        visual_localization = source_mapping.get("visual_localization") if isinstance(source_mapping, dict) else None
+        image_coherent = not terminal and image_observation is not None and all(
+            member.active and member.image_observation == image_observation
+            and member.capture_evidence == payload.get("capture_evidence")
+            and (member.mapping or {}).get("visual_localization") == visual_localization
+            for member in group.members.values()
+        )
+        payload["group_observation"]["image_coherent"] = image_coherent
         if mappings:
             mapped = sum(member.world_anchor is not None for member in members)
             reasons = sorted({str(item.get("reason") or "object_position_unavailable")
@@ -637,6 +673,10 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                 "reasons": reasons,
             }
             payload["mapping"].pop("reason", None)
+            if not image_coherent:
+                # Independent member poses cannot certify the triggering image or the whole group.
+                payload["mapping"].pop("visual_localization", None)
+                payload["mapping"].pop("pose_evidence", None)
             if reasons:
                 payload["mapping"]["reason"] = reasons[0]
             subject["mapping"] = deepcopy(payload["mapping"])
@@ -728,6 +768,7 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
                               if isinstance(member.packet.payload.get("capture_evidence"), dict) else None),
             mapping=(deepcopy(member.packet.payload["mapping"])
                      if isinstance(member.packet.payload.get("mapping"), dict) else None),
+            image_observation=_member_image_observation(member.packet),
         )
         self._group_id_by_member_key[self._member_key(member.source_stream_id, member.event_id)] = (
             group.group_event_id

@@ -141,6 +141,7 @@ class VisionCropObjectsConfig(BaseModel):
     padding_ratio: float = Field(default=0.08, ge=0.0, le=1.0)
     min_crop_size_px: int = Field(default=8, ge=1, le=4096)
     crop_close_frames: bool = False
+    use_segmentation: bool = False
 
     @field_validator("input_artifact_name", "bbox_field")
     @classmethod
@@ -336,7 +337,8 @@ class VisionSpatialRelationEventConfig(BaseModel):
         le=1.0,
         description=(
             "Minimum confidence required on both world anchors before world-space distance is "
-            "used. Missing or weaker confidence falls back to image-space distance."
+            "used. Confidence-free anchors also qualify when both carry ready panorama "
+            "geometry from the same reference and revision. Otherwise image-space distance is used."
         ),
     )
     enter_image_center_distance: float = Field(default=0.20, gt=0.0, le=2.0)

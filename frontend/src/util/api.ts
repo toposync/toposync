@@ -8,6 +8,7 @@ export type EmitEventResponse = {
 import { resolveToposyncUrl } from "@toposync/plugin-api";
 import type { CompositionElement } from "@toposync/plugin-api";
 import type { Notification } from "@toposync/plugin-api";
+import type { PipelineReferenceEvidence, PipelineReferenceFrame } from "@toposync/plugin-api";
 
 export type Composition = {
   id: string;
@@ -92,6 +93,7 @@ export type ExtensionManagementItem = {
     entry_point_name: string;
     entry_point_value: string;
   }>;
+  dependents: Array<{ id: string; name: string }>;
 };
 
 export type ExtensionManagementCatalog = {
@@ -160,6 +162,7 @@ export type AccessOptionsPayload = {
 
 export type Pipeline = {
   name: string;
+  revision?: string;
   display_name?: string;
   enabled?: boolean;
   processing_server_id?: string;
@@ -167,6 +170,19 @@ export type Pipeline = {
   python_source?: string;
   graph: unknown;
 };
+
+export async function openPipelineInspection(name: string, options: AbortableRequestOptions = {}): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
+  return requestJson(resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}/inspection`), { method: "POST", signal: options.signal }, "Inspection unavailable");
+}
+
+export async function getPipelineInspection(session: string, options: AbortableRequestOptions & { after?: number } = {}): Promise<import("@toposync/plugin-api").InspectionSnapshot> {
+  const cursor = options.after === undefined ? "" : `?after=${options.after}`;
+  return requestJson(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}${cursor}`), { signal: options.signal }, "Inspection unavailable");
+}
+
+export async function closePipelineInspection(session: string): Promise<void> {
+  await fetch(resolveToposyncUrl(`/api/pipeline-inspection/${encodeURIComponent(session)}`), { method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(2500) });
+}
 
 export type PipelineAlert = {
   severity: "info" | "warning" | "error";
@@ -197,6 +213,7 @@ export type PipelinePreviewFallbackSnapshotRequest = {
 
 export type PipelinePreviewFrameRequest = {
   pipeline: Pipeline;
+  purpose?: "preview" | "reference";
   fallback_snapshot?: PipelinePreviewFallbackSnapshotRequest | null;
   timeout_seconds?: number;
   format?: "png" | "jpg" | "webp";
@@ -1442,7 +1459,7 @@ async function _parseHttpError(res: Response, fallback: string): Promise<string>
   return fallback;
 }
 
-async function requestJson<T>(input: string, init: RequestInit | undefined, fallback: string): Promise<T> {
+export async function requestJson<T>(input: string, init: RequestInit | undefined, fallback: string): Promise<T> {
   const res = await fetch(input, init);
   if (!res.ok) throw Object.assign(new Error(await _parseHttpError(res, fallback)), { status: res.status });
   return res.json();
@@ -2141,10 +2158,14 @@ export async function createPipeline(pipeline: Pipeline): Promise<Pipeline> {
 
 export async function putPipeline(name: string, pipeline: Pipeline): Promise<Pipeline> {
   return requestJson<Pipeline>(
-    `/api/pipelines/${encodeURIComponent(name)}`,
-    jsonRequest("PUT", pipeline),
+    resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}`),
+    jsonRequest("PUT", pipeline, { signal: AbortSignal.timeout(30_000) }),
     `Failed to save pipeline ${name}`,
   );
+}
+
+export async function getPipeline(name: string): Promise<Pipeline> {
+  return requestJson<Pipeline>(resolveToposyncUrl(`/api/pipelines/${encodeURIComponent(name)}`), { signal: AbortSignal.timeout(30_000) }, "Failed to load pipeline");
 }
 
 export async function duplicatePipeline(name: string, newName: string, displayName = ""): Promise<Pipeline> {
@@ -2481,7 +2502,12 @@ export async function fetchPipelinePreviewFrame(
   payload: PipelinePreviewFrameRequest,
   signal?: AbortSignal,
 ): Promise<Blob> {
-  const response = await fetch("/api/pipelines/preview/frame", {
+  const response = await fetchPipelinePreviewResponse(payload, signal);
+  return response.blob();
+}
+
+async function fetchPipelinePreviewResponse(payload: PipelinePreviewFrameRequest, signal?: AbortSignal): Promise<Response> {
+  const response = await fetch(resolveToposyncUrl("/api/pipelines/preview/frame"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -2491,7 +2517,39 @@ export async function fetchPipelinePreviewFrame(
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Preview failed: ${response.status}`);
   }
-  return response.blob();
+  return response;
+}
+
+export async function fetchPipelineReferenceFrame(
+  payload: PipelinePreviewFrameRequest,
+  signal?: AbortSignal,
+): Promise<PipelineReferenceFrame> {
+  const response = await fetchPipelinePreviewResponse({ ...payload, purpose: "reference", fallback_snapshot: null, format: "png" }, signal);
+  let evidence: PipelineReferenceEvidence;
+  try {
+    evidence = JSON.parse(response.headers.get("X-Toposync-Capture-Evidence") ?? "null");
+    const sample = evidence?.sample;
+    if (!evidence || typeof evidence.source_identity !== "string" || !evidence.source_identity.trim()
+        || evidence.source_identity.length > 200 || !/^[a-f0-9]{64}$/.test(evidence.preparation_revision)
+        || typeof sample?.capture_instance !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(sample.capture_instance)
+        || !Number.isSafeInteger(sample.generation) || sample.generation < 0
+        || !Number.isSafeInteger(sample.sequence) || sample.sequence <= 0
+        || !Number.isFinite(evidence.observed_at) || evidence.observed_at < 0
+        || !["capture", "receipt"].includes(evidence.freshness_basis) || evidence.historical_fallback !== false
+        || typeof evidence.prepared_region !== "boolean") {
+      throw new Error("Invalid capture evidence");
+    }
+  } catch {
+    throw new Error("reference_capture_evidence_invalid");
+  }
+  const blob = await response.blob();
+  signal?.throwIfAborted();
+  const receipt = response.headers.get("X-Toposync-Capture-Receipt") ?? "";
+  if (!receipt || receipt.length > 4096) throw new Error("reference_capture_receipt_invalid");
+  if (blob.type !== "image/png" || blob.size === 0 || blob.size > 8 * 1024 * 1024) {
+    throw new Error("reference_capture_image_invalid");
+  }
+  return { blob, evidence, receipt };
 }
 
 export async function listPipelineOperators(
@@ -2850,4 +2908,17 @@ export async function getNotificationDataOptions(field: string, labelField: stri
   const response = await fetch(resolveToposyncUrl(`/api/notifications/data-options?${params}`), { signal });
   if (!response.ok) throw new Error(`History options: ${response.status}`);
   return (await response.json()).options;
+}
+
+export async function fetchAutomatic(signal?: AbortSignal): Promise<import("./automatic").AutomaticSnapshot> {
+  return requestJson(resolveToposyncUrl("/api/automatic"), { signal }, "Automatic unavailable");
+}
+export async function previewAutomatic(configuration: import("./automatic").AutomaticConfiguration, expectedRevision: number): Promise<import("./automatic").AutomaticPreview> {
+  return requestJson(resolveToposyncUrl("/api/automatic/preview"), jsonRequest("POST", { configuration, expected_revision: expectedRevision }), "Could not prepare activity");
+}
+export async function saveAutomatic(configuration: import("./automatic").AutomaticConfiguration, expectedRevision: number, reviewedPreparations: Record<string, string> = {}): Promise<import("./automatic").AutomaticSnapshot> {
+  return requestJson(resolveToposyncUrl("/api/automatic"), jsonRequest("PUT", { configuration, expected_revision: expectedRevision, reviewed_preparations: reviewedPreparations }), "Could not save activity");
+}
+export async function useAutomaticInFlow(intentId: string, expectedRevision: number, productionRevision?: string): Promise<void> {
+  await requestJson(resolveToposyncUrl(`/api/automatic/${encodeURIComponent(intentId)}/flow`), jsonRequest("POST", { expected_revision: expectedRevision, production_revision: productionRevision }), "Could not create manual flow");
 }

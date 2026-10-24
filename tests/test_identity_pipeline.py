@@ -23,11 +23,24 @@ from toposync_ext_vision.identity.pipelines import (
 from toposync_ext_vision.identity.store import IdentityStore
 
 
+def test_recognition_rejects_ambiguous_duplicate_calibrations():
+    import pytest
+    from pydantic import ValidationError
+    from test_identity_store import policy
+    from toposync_ext_vision.identity.pipelines import RecognizeIdentityConfig
+
+    person = policy().model_dump()
+    with pytest.raises(ValidationError, match="one recognition policy"):
+        RecognizeIdentityConfig(policies=[person, {**person, "acceptance_similarity": .95}])
+    assert len(RecognizeIdentityConfig(policies=[person, policy(species="cat").model_dump()]).policies) == 2
+
+
 class Context:
     pipeline_name = "identity-test"
     node_id = "identity"
 
     async def run_blocking(self, function, *args, **kwargs):
+        kwargs.pop("mode", None)
         kwargs.pop("concurrency_key", None)
         kwargs.pop("process_pool_key", None)
         kwargs.pop("process_pool_deadline_seconds", None)

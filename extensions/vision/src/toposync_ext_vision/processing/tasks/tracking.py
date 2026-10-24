@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from toposync.runtime.pipelines.inspection import inspection_execution
+
 import math
 import os
 import time
@@ -19,6 +21,8 @@ from toposync.runtime.pipelines.telemetry import METRIC_VISION_CONFIDENCE
 from ...pipelines.schemas import VisionTrackConfig
 from ..contracts import DetectionObject, TrackedObject, TrackerBackend, normalize_identifier
 from ..trackers import build_tracker_backend
+from toposync.runtime.pipelines.inspection import copy_inspection_frame
+from ..inspection import InspectionTrackSamples
 from .event_assembler import TrackEventAssembler, _bbox_iou, _normalize_bbox
 
 
@@ -74,6 +78,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._pause_accumulated_by_source_stream: dict[str, float] = {}
         self._last_packet_by_source_stream: dict[str, Packet] = {}
         self._capture_by_source_stream: dict[str, tuple[str, int, int, float]] = {}
+        self._inspection_samples = InspectionTrackSamples()
         self._telemetry_top_k = _read_env_int(
             "TOPOSYNC_TELEMETRY_VISION_TOP_K", 3, min_value=1, max_value=16
         )
@@ -512,6 +517,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
                 continue
 
     def _clear_state_for_stream(self, source_stream_id: str) -> None:
+        self._inspection_samples.clear(source_stream_id)
         for tracking_key, state in list(self._state_by_tracking_key.items()):
             if state.source_stream_id != source_stream_id:
                 continue
@@ -576,11 +582,12 @@ class VisionTrackRuntime(TransformOperatorRuntime):
             packet = await context.read(port=self.input_port, timeout_s=self.read_timeout_s)
             started_ns = time.monotonic_ns()
             try:
-                out_packets = (
-                    await self._flush_idle_events(context)
-                    if packet is None
-                    else await self.process_packet(packet, context)
-                )
+                with inspection_execution(context, packet):
+                    out_packets = (
+                        await self._flush_idle_events(context)
+                        if packet is None
+                        else await self.process_packet(packet, context)
+                    )
             except Exception as exc:
                 context.metrics.record_error(exc)
                 context.logger.exception("Node '%s' failed to process packet", context.node_id)
@@ -662,6 +669,7 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._last_packet_by_source_stream[source_stream_id] = replace(packet, artifacts={})
 
         if bool(self._parsed.pause_when_gate_closed) and not self._motion_gate_open(packet):
+            self._inspection_samples.clear(source_stream_id)
             paused_for = self._mark_paused(source_stream_id, now_monotonic=now_monotonic)
             max_paused = float(self._parsed.max_paused_seconds)
             if max_paused > 0.0 and paused_for >= max_paused and any(
@@ -674,6 +682,10 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         self._mark_resumed(source_stream_id, now_monotonic=now_monotonic)
         detections = self._extract_detections(packet)
         frame_ts = _packet_ts_seconds(packet)
+        artifact_name, frame = resolve_image_artifact_for_data(packet)
+        inspection_frame = await copy_inspection_frame(context, frame)
+        if inspection_frame is None:
+            self._inspection_samples.clear()
         tracked_objects = await self._run_backend_update(
             packet,
             context,
@@ -725,6 +737,16 @@ class VisionTrackRuntime(TransformOperatorRuntime):
         )
         if not annotated_packets:
             return outputs
+        if inspection_frame is not None:
+            try:
+                segments = {track.tracking_id: state.correlation_id for track in tracks[:16]
+                            if (state := self._state_by_tracking_key.get((source_stream_id, track.tracking_id))) is not None}
+                context.inspect("analyzed", packet, frame=inspection_frame, model_id=self._parsed.tracker_id,
+                    reason="inspection_capacity" if len(tracks) > 16 else None,
+                    geometry=packet.artifacts[artifact_name].metadata.get("image_geometry"),
+                    visuals=self._inspection_samples.project(packet, artifact_name, tracks, segments))
+            except Exception:
+                pass  # Inspection cannot change functional tracking or event assembly.
         return outputs + await self._event_assembler.process_packet(annotated_packets[0], context)
 
     def _process_packet_annotate(

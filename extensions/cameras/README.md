@@ -13,6 +13,16 @@ First-party extension focused on camera integration for the global Pipelines run
 
 The old per-camera detections runtime (`/api/cameras/detections/*`, `cameras.tracking`, and `toposync_ext_cameras.processor_server`) is no longer part of this extension.
 
+The read-only `capture-observation` diagnostic separates opening, observation and
+release costs using the process monotonic clock. `first_frame_elapsed_seconds`
+counts from request admission in the capture service, including opening, to the
+first distinct decoded sample; it is null when no sample was observed. This is
+not camera exposure latency or physical arrival confirmation. Existing
+`duration_seconds` retains its post-opening meaning, including cleanup;
+`request_elapsed_seconds` includes all three phases, without HTTP overhead.
+Samples include capture instance, generation and sequence so overlapping consumers
+can be compared without treating decoder replacement as stream continuity.
+
 The person/vehicle stopped recipes sample continuously at four frames per second:
 motion gating would stop supplying evidence after the subject stops. Detection and
 mapping still determine whether a stationary event has sufficient evidence; this
@@ -115,6 +125,75 @@ Semantic PTZ attention; panoramic mapping does not redefine those consumers.
 See [implementation and validation](../../docs/ptz-panorama-mapping.md) for the
 profile contract, geometry, recovery, automated tests and physical validation.
 
+For an already-associated subject with capture-bound panoramic directions, visual
+navigation can compensate briefly using its last measured command, settling and
+localization cycle plus the current target-measurement duration. A completed motor
+cycle is required; measurement time alone cannot establish that timing. Three distinct observations from the same source
+and reference are required; repeated polls do not add samples. The horizon cannot
+exceed one second or the observed history. Stops, reversals, discontinuities,
+unsupported directions and disagreement between recent derivatives disable the
+forecast. Each available axis must already have a measured response.
+
+The forecast guides correction only: arrival remains measured against the observed
+target. `navigation_step.prediction` separates the forecast from
+`observed_target_ray`; `target_predictions` counts accepted planning forecasts,
+not physical commands. The trace separates `motion_cycle_seconds` and
+`measurement_seconds`. Timing uses source publication, not verified exposure, and
+the last cycle does not model latency variance. These bounds and synthetic replays
+do not qualify physical tracking, full subject framing or another optical source.
+
+Moving-subject navigation rechecks its observation after command queue and
+readiness waits through a synchronous, in-process `cameras.control.submit`
+dispatch guard. Lost observations abort; a planning frame older than one second
+or a direction change exceeding half the arrival tolerance discards the proposal
+and replans. Smaller changes require qualified projection on the same reference.
+The guard is temporary, is not persisted, and never applies to Stop or a later
+return. Rejected attempts remain bounded and visible in the navigation trace.
+The same guard runs again after ONVIF preparation, immediately before the mutation
+request, for absolute, relative, continuous and preset moves. The guard also
+rechecks control expiry and fencing. A refusal preserves its original reason,
+records a failed command without dispatch, and
+permits replanning under the existing lease; it does not certify a stable pose.
+The same command identifier cannot dispatch again. Failures after dispatch remain
+ambiguous, and guarded continuous moves never fall back to a relative move.
+Stop remains exempt. Request transmission, device execution and physical exposure
+are still separate events; this check does not guarantee their latency or outcome.
+
+Arrival evidence includes a copied `frame_geometry` only when its capture identity,
+image dimensions, freshness and independent localization qualify. If final Stop
+requires newer video, the geometry and target direction are refreshed together.
+The saved `image_url` identifies that endpoint image. Attention decisions retain
+it as `arrival_image_url`, together with the separate `framing_projection`.
+This projects the four observed corner directions into the qualified arrival
+frame, reporting their bounds/margin or an outside/behind-frame result. Source or
+reference mismatch yields no projection. Existing boundary contact is preserved.
+Four corners do not prove the full silhouette fits, identify a subject anew or
+certify another lens: `subject_visibility_verified` remains false. Focus acquisition
+still reports pointing/settling; complete observed-subject framing is a separate
+acceptance requirement.
+
+### Bounded PTZ control leases
+
+The internal `cameras.control.acquire` service accepts optional
+`maximum_duration_s`, a finite positive duration measured from request admission,
+including discovery and preemption waits. The limit uses the controller's
+monotonic clock. Renewing or reacquiring the same lease cannot extend or remove
+it; a shorter limit may tighten it. `expires_at` continues to report the actual
+lease expiry as a civil timestamp for clients, without changing the monotonic
+enforcement. Requests without a maximum keep the existing renewable lease policy.
+
+The existing expiry watchdog revokes ownership and schedules fenced Stop without
+an attention-controller tick, browser or API poll. Commands queued under expired
+ownership cannot start. This does not cancel an already transmitted command or
+prove the camera stopped: transport completion and physical Stop still require
+their existing verification. Process loss also requires a qualified device-side
+motion timeout; an in-process watchdog alone cannot provide that guarantee.
+
+The ceiling belongs to one lease. A campaign must separately preserve its end
+time and refuse a new lease after expiry, including after restart; callers must
+pass their remaining budget on every new acquisition. The lease primitive alone
+does not implement a complete campaign lifecycle or certify hardware behavior.
+
 ## Camera recipes
 
 A recipe is a ready-made configuration in the camera's existing catalog. Configuring
@@ -139,6 +218,17 @@ ids are diagnostic only.
 - `camera.camera_mapping`
 - `camera.area_restriction`
 - `camera.velocity_estimation`
+
+Velocity output includes signed `vector_mps` and `vector_raw_mps` (`x`/`z`),
+using the same window and most recent interval as the existing speed estimates.
+Invalid estimates expose null vectors. `world_reference` identifies the source
+and mapping used by the samples; a source, mapping revision or timestamp-field
+change resets the history, stationary memory and arrival evidence. Ordinary PTZ
+pose changes within the same mapped reference do not reset it.
+`time_basis` names the resolved media timestamp field or the packet creation-time
+fallback; neither certifies physical exposure timing. Windowed direction can lag
+behind a stop or reversal, so it is not sufficient by itself for motor prediction.
+These fields add no camera commands or required configuration.
 
 Public vision operators are registered by the `com.toposync.vision` extension:
 

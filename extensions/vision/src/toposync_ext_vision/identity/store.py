@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS occurrence (
  decision BLOB NOT NULL, latest_at REAL NOT NULL, closed INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS closed_occurrence (id TEXT PRIMARY KEY, closed_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS activity_reference (
+ owner_id TEXT NOT NULL, occurrence_id TEXT NOT NULL, observation_id TEXT NOT NULL, reference BLOB NOT NULL,
+ PRIMARY KEY(owner_id,observation_id)
+);
+CREATE INDEX IF NOT EXISTS activity_reference_target ON activity_reference(occurrence_id);
+CREATE INDEX IF NOT EXISTS activity_reference_observation ON activity_reference(observation_id);
 CREATE TABLE IF NOT EXISTS observation (
  id TEXT PRIMARY KEY, occurrence_id TEXT NOT NULL REFERENCES occurrence(id),
  species TEXT NOT NULL, space TEXT NOT NULL, quality REAL NOT NULL,
@@ -48,6 +54,12 @@ CREATE TABLE IF NOT EXISTS observation (
 CREATE INDEX IF NOT EXISTS observation_gallery ON observation(species, space, reference, quality DESC);
 CREATE INDEX IF NOT EXISTS observation_occurrence ON observation(occurrence_id);
 CREATE INDEX IF NOT EXISTS observation_identity ON observation(identity_id);
+CREATE TABLE IF NOT EXISTS observation_decision (
+ id TEXT PRIMARY KEY REFERENCES observation(id) ON DELETE CASCADE, decision BLOB NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS observation_owners_delete AFTER DELETE ON observation BEGIN
+ DELETE FROM activity_reference WHERE observation_id=OLD.id;
+END;
 CREATE TABLE IF NOT EXISTS reference_representation (
  observation_id TEXT NOT NULL REFERENCES observation(id) ON DELETE CASCADE,
  space TEXT NOT NULL, evidence BLOB, eligible INTEGER NOT NULL,
@@ -119,11 +131,14 @@ def _json(value: Any) -> bytes:
 class IdentityStore:
     """Uma galeria por escopo autorizado; criação ocorre somente após ativação."""
 
-    def __init__(self, directory: Path, *, scope: str, max_observations: int = 10000):
+    def __init__(self, directory: Path, *, scope: str, max_observations: int = 10000,
+                 activity_authorized: Callable[[dict], bool] | None = None):
         if not scope or len(scope) > 512:
             raise ValueError("an explicit authorization scope is required")
         self.scope = scope
         self.max_observations = max_observations
+        self.activity_authorized = activity_authorized
+        self._activity_cursor = ""
         self._policies: dict[tuple[str, str], RecognitionPolicy] = {}
         self.maintenance_error: str | None = None
         self.directory = directory / hashlib.sha256(scope.encode()).hexdigest()[:32]
@@ -162,7 +177,23 @@ class IdentityStore:
         self._connection.executescript(
             "BEGIN IMMEDIATE;" + _SCHEMA + "PRAGMA user_version=1; COMMIT;"
         )
+        self._connection.create_function("observation_available", 3, self._observation_available)
+        self._connection.execute("CREATE TEMP VIEW available_observation AS SELECT rowid,* FROM observation "
+                                 "WHERE observation_available(id,reference,created_at)")
         database_path.chmod(0o600)
+
+    def _observation_available(self, identifier: str, reference: int, created_at: float) -> bool:
+        # Reads must fail closed before the bounded physical purge catches up.
+        if self._connection.execute("SELECT enabled FROM retention_policy").fetchone()[0]:
+            if created_at <= time.time() - (365 if reference else 7) * 86400:
+                return False
+        if reference:
+            return True
+        owners = self._connection.execute("SELECT owner_id,reference FROM activity_reference WHERE observation_id=?", (identifier,)).fetchall()
+        if any(owner['owner_id'] == 'independent' for owner in owners):
+            return True
+        return not owners or self.activity_authorized is not None and any(
+            self.activity_authorized(self._open(owner['reference'])) for owner in owners)
 
     def close(self) -> None:
         with self._lock:
@@ -268,11 +299,12 @@ class IdentityStore:
                     ("identity", ("name",)),
                     ("observation", ("evidence", "crop")),
                     ("occurrence", ("decision",)),
+                    ("observation_decision", ("decision",)),
                     ("feedback", ("changes", "result")),
                     ("reference_representation", ("evidence",)),
                 ):
                     if (
-                        table == "reference_representation"
+                        table in {"reference_representation", "observation_decision"}
                         and connection.execute(
                             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
                         ).fetchone()
@@ -351,11 +383,11 @@ class IdentityStore:
                 ) or search.casefold() not in name.casefold():
                     continue
                 counts = self._connection.execute(
-                    "SELECT count(DISTINCT occurrence_id), sum(reference) FROM observation WHERE identity_id=?",
+                    "SELECT count(DISTINCT occurrence_id), sum(reference) FROM available_observation WHERE identity_id=?",
                     (row["id"],),
                 ).fetchone()
                 representative = self._connection.execute(
-                    "SELECT id FROM observation WHERE identity_id=? AND crop IS NOT NULL ORDER BY reference DESC,quality DESC,id LIMIT 1",
+                    "SELECT id FROM available_observation WHERE identity_id=? AND crop IS NOT NULL ORDER BY reference DESC,quality DESC,id LIMIT 1",
                     (row["id"],),
                 ).fetchone()
                 result.append(
@@ -372,6 +404,14 @@ class IdentityStore:
             return sorted(result, key=lambda item: (item["name"].casefold(), item["id"]))
 
     def decision(self, occurrence_id: str) -> RecognitionDecision | None:
+        with self._lock:
+            current = self._stored_decision(occurrence_id)
+            if current and current.observation_id and not self._connection.execute(
+                "SELECT 1 FROM available_observation WHERE id=?", (current.observation_id,)).fetchone():
+                return None
+            return current
+
+    def _stored_decision(self, occurrence_id: str) -> RecognitionDecision | None:
         with self._lock:
             row = self._connection.execute(
                 "SELECT decision FROM occurrence WHERE id=?", (occurrence_id,)
@@ -393,17 +433,22 @@ class IdentityStore:
         """
         with self._lock:
             current = self.decision(occurrence_id)
-            if (
-                current is None
-                or current.revision != decision_revision
-                or current.gallery_revision != self.revision
-            ):
+            if current is None or current.revision != decision_revision:
+                return None
+            return self._validated_decision(current, observed_at=observed_at, max_age_seconds=max_age_seconds)
+
+    def _validated_decision(self, current, *, observed_at, max_age_seconds, policies=None):
+        with self._lock:
+            if current.gallery_revision != self.revision:
                 return None
             if current.identity_id and current.provenance != "human":
+                if self._connection.execute('SELECT enabled FROM retention_policy').fetchone()[0] and self._connection.execute(
+                    'SELECT 1 FROM observation WHERE reference=1 AND created_at<=? LIMIT 1', (time.time() - 365 * 86400,)).fetchone():
+                    return None
                 row = self._connection.execute(
-                    "SELECT species FROM occurrence WHERE id=?", (occurrence_id,)
+                    "SELECT species FROM occurrence WHERE id=?", (current.occurrence_id,)
                 ).fetchone()
-                policy = self._policies.get((row["species"], current.embedding_space))
+                policy = (self._policies if policies is None else policies).get((row["species"], current.embedding_space))
                 if (
                     policy is None
                     or not policy.automatic_enabled
@@ -415,10 +460,112 @@ class IdentityStore:
                     return None
             return current
 
+    def activity_participants(self, document: dict, *, authorize_cameras: Callable[[set[str]], bool | None], policies=None) -> dict:
+        """Resolve current names only through retained captures owned by this activity."""
+        result = {key: {"status": "unknown"} for key in document["participants"]}
+        with self._lock:
+            if self.activity_authorized is None or not document["enrichment_allowed"]:
+                return result
+            rows = self._connection.execute(
+                "SELECT occurrence_id,observation_id,reference FROM activity_reference WHERE owner_id=?",
+                (document["id"],)).fetchall()
+            references = [(row, self._open(row["reference"])) for row in rows]
+            candidates = {}
+            conflicts = set()
+            for item in document["enrichments"]:
+                target = item.get("identity_occurrence_id")
+                if item["kind"] != "recognition" or not target:
+                    continue
+                reference = {"occurrence_id": document["id"], "privacy_revision": document["privacy_revision"],
+                    "participant_id": item["participant_id"], "evidence_id": item["evidence_id"], "observed_at": item["observed_at"]}
+                owned = {row["observation_id"] for row, saved in references if row["occurrence_id"] == target and saved == reference}
+                if not owned or not self.activity_authorized(reference):
+                    continue
+                for observation_id in owned:
+                    saved = self._connection.execute(
+                        "SELECT o.identity_id,o.confirmed,d.decision FROM available_observation o "
+                        "LEFT JOIN observation_decision d ON d.id=o.id WHERE o.id=?", (observation_id,)).fetchone()
+                    if saved is None:
+                        continue
+                    if saved['confirmed']:
+                        current = RecognitionDecision(occurrence_id=target, observation_id=observation_id,
+                            identity_id=saved['identity_id'], status='recognized' if saved['identity_id'] else 'unknown',
+                            provenance='human', evidence_at=item['observed_at'], gallery_revision=self.revision,
+                            revision=self.revision, reason='confirmed' if saved['identity_id'] else 'human_unassigned')
+                    elif saved['decision'] is not None:
+                        current = RecognitionDecision.model_validate(self._open(saved['decision']))
+                        if current.provenance == 'human' or current.identity_id != saved['identity_id']:
+                            continue
+                        current = self._validated_decision(current, observed_at=item['observed_at'], max_age_seconds=0, policies=policies)
+                    else:
+                        continue
+                    if current is not None and current.reason == 'identity_conflict':
+                        conflicts.add(item['participant_id'])
+                    if current is None or current.status != "recognized" or current.identity_id is None:
+                        continue
+                    identity = self._identity(self._connection, current.identity_id)
+                    if authorize_cameras(self.camera_ids(identity_id=current.identity_id)) is False:
+                        continue
+                    candidates.setdefault(item["participant_id"], {})[current.identity_id] = {
+                        "status": "recognized", "identity_id": current.identity_id,
+                        "name": self._open(identity["name"]), "provenance": current.provenance,
+                        "gallery_revision": self.revision, "decision_revision": current.revision,
+                        "evidence_id": item["evidence_id"], "observed_at": item["observed_at"]}
+            for key, identities in candidates.items():
+                result[key] = next(iter(identities.values())) if len(identities) == 1 and key not in conflicts else {
+                    "status": "unknown", "reason": "conflicting_identities"}
+            if not all(self.activity_authorized(saved) for _, saved in references):
+                return {key: {"status": "unknown"} for key in document["participants"]}
+            return result
+
+    def inspection_identity(self, occurrence_id: str, *, decision_revision: int, observed_at: float,
+                            camera_id: str | None, authorize_cameras: Callable) -> dict | None:
+        """Return only a current authorized name; never candidates, vectors or a fake probability."""
+        with self._lock:
+            row = self._connection.execute("SELECT camera_id FROM occurrence WHERE id=?", (occurrence_id,)).fetchone()
+            if row is None or row["camera_id"] != camera_id:
+                return None
+            current = self.validated_decision(occurrence_id, decision_revision=decision_revision,
+                observed_at=observed_at, max_age_seconds=10)
+            if current is None:
+                return None
+            result = {"status": current.status, "provenance": current.provenance,
+                      "decision_revision": current.revision, "gallery_revision": self.revision}
+            if current.identity_id is not None:
+                if authorize_cameras(self.camera_ids(identity_id=current.identity_id)) is False:
+                    return None
+                identity = self._identity(self._connection, current.identity_id)
+                result["name"] = self._open(identity["name"])[:64]
+            return result
+
+    def activity_artifacts(self, document: dict) -> dict:
+        with self._lock:
+            enabled = bool(self._connection.execute('SELECT enabled FROM retention_policy').fetchone()[0])
+            artifacts = []
+            if document['enrichment_allowed'] and self.activity_authorized is not None:
+                rows = self._connection.execute('SELECT r.reference,o.id,o.reference AS human_reference,o.created_at,c.camera_id,'
+                    'o.crop IS NOT NULL AS has_image FROM activity_reference r '
+                    'JOIN available_observation o ON o.id=r.observation_id JOIN occurrence c ON c.id=o.occurrence_id '
+                    'WHERE r.owner_id=? ORDER BY o.id', (document['id'],)).fetchall()
+                for row in rows:
+                    reference = self._open(row['reference'])
+                    sample = document['evidence'].get(reference.get('evidence_id'))
+                    if not sample or sample['camera_id'] != row['camera_id'] or sample['participant_id'] != reference.get('participant_id') or not self.activity_authorized(reference):
+                        continue
+                    expires_at = document['expires_at']
+                    if enabled:
+                        expires_at = min(expires_at, row['created_at'] + (365 if row['human_reference'] else 7) * 86400)
+                    artifacts.append({'id': row['id'], 'evidence_id': reference['evidence_id'],
+                        'participant_id': reference['participant_id'], 'has_image': bool(row['has_image']),
+                        'expires_at': expires_at})
+            return {'state': 'retained' if artifacts else 'not_retained', 'artifacts': artifacts,
+                'gallery_retention': {'enabled': enabled, 'transient_days': 7, 'reference_days': 365, 'curation_history_days': 90},
+                'independent_uses': 'retained_by_their_own_policy', 'maintenance_error': self.maintenance_error}
+
     def observation_context(self, observation_id: str) -> dict | None:
         with self._lock:
             row = self._connection.execute(
-                "SELECT evidence FROM observation WHERE id=?", (observation_id,)
+                "SELECT evidence FROM available_observation WHERE id=?", (observation_id,)
             ).fetchone()
             if row is None:
                 raise KeyError(observation_id)
@@ -431,7 +578,7 @@ class IdentityStore:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT id, occurrence_id, species, quality, eligible, identity_id, confirmed, reference, cluster_id "
-                "FROM observation WHERE (? IS NULL OR identity_id=?) ORDER BY created_at DESC LIMIT ?",
+                "FROM available_observation WHERE (? IS NULL OR identity_id=?) ORDER BY created_at DESC LIMIT ?",
                 (identity_id, identity_id, limit),
             ).fetchall()
             return [dict(row) for row in rows]
@@ -483,7 +630,7 @@ class IdentityStore:
             rows = self._connection.execute(
                 "SELECT o.rowid AS position,o.id,o.occurrence_id,o.species,o.quality,o.eligible,"
                 "o.identity_id,o.confirmed,o.reference,o.cluster_id,c.camera_id "
-                "FROM observation o JOIN occurrence c ON c.id=o.occurrence_id "
+                "FROM available_observation o JOIN occurrence c ON c.id=o.occurrence_id "
                 "WHERE o.rowid<=? AND o.rowid<? AND (? IS NULL OR o.identity_id=?) "
                 "AND (? IS NULL OR o.species=?) AND (?=0 OR o.identity_id IS NULL) "
                 "ORDER BY o.rowid DESC",
@@ -534,8 +681,8 @@ class IdentityStore:
             identity = self._identity(connection, identity_id)
             occurrences = []
             for row in connection.execute("SELECT id,camera_id,decision FROM occurrence ORDER BY id"):
-                decision = RecognitionDecision.model_validate(self._open(row["decision"]))
-                if (decision.status != "recognized" or decision.identity_id != identity_id
+                decision = self.decision(row["id"])
+                if (decision is None or decision.status != "recognized" or decision.identity_id != identity_id
                         or association == "human" and decision.provenance != "human"):
                     continue
                 if row["camera_id"] not in authorized:
@@ -553,10 +700,13 @@ class IdentityStore:
             ).fetchone()
             if row is None:
                 return None
+            decision = self.decision(occurrence_id)
+            if decision is None:
+                return None
             observations = [
                 dict(item)
                 for item in self._connection.execute(
-                    "SELECT id,quality,eligible,identity_id,confirmed,reference,cluster_id FROM observation "
+                    "SELECT id,quality,eligible,identity_id,confirmed,reference,cluster_id FROM available_observation "
                     "WHERE occurrence_id=? ORDER BY quality DESC,id",
                     (occurrence_id,),
                 )
@@ -566,7 +716,7 @@ class IdentityStore:
                 "species": row["species"],
                 "camera_id": row["camera_id"],
                 "closed": bool(row["closed"]),
-                "decision": self._open(row["decision"]),
+                "decision": decision.model_dump(),
                 "observations": observations,
                 "revision": self.revision,
             }
@@ -635,7 +785,7 @@ class IdentityStore:
     def image(self, observation_id: str) -> bytes | None:
         with self._lock:
             row = self._connection.execute(
-                "SELECT crop FROM observation WHERE id=?", (observation_id,)
+                "SELECT crop FROM available_observation WHERE id=?", (observation_id,)
             ).fetchone()
             if row is None:
                 raise KeyError(observation_id)
@@ -720,7 +870,7 @@ class IdentityStore:
         if not 1 <= batch_size <= 128:
             raise ValueError("clustering batch must contain at most 128 observations")
         query = (
-            "SELECT id,occurrence_id,evidence,cluster_id,created_at FROM observation "
+            "SELECT id,occurrence_id,evidence,cluster_id,created_at FROM available_observation "
             "WHERE identity_id IS NULL AND confirmed=0 AND eligible=1 AND species=? AND space=? "
             "ORDER BY created_at,id LIMIT ?"
         )
@@ -746,7 +896,7 @@ class IdentityStore:
                 )
             if changes:
                 connection.executemany("UPDATE observation SET cluster_id=? WHERE id=?", changes)
-                connection.execute("UPDATE gallery SET revision=revision+1")
+                self._advance_maintenance_revision(connection, references_removed=False)
             return {
                 "clusters": proposals,
                 "limited": pending > 0,
@@ -824,6 +974,18 @@ class IdentityStore:
         clustering = self.cluster_pending()
         return {"retention": retention, "clustering": clustering}
 
+    def _advance_maintenance_revision(self, connection, *, references_removed: bool) -> None:
+        previous = self.revision
+        connection.execute('UPDATE gallery SET revision=revision+1')
+        if not references_removed:
+            # Maintenance must not invalidate recognition against unchanged references.
+            for table in ('occurrence', 'observation_decision'):
+                for row in connection.execute(f'SELECT id,decision FROM {table}').fetchall():
+                    current = RecognitionDecision.model_validate(self._open(row['decision']))
+                    if current.gallery_revision == previous:
+                        connection.execute(f'UPDATE {table} SET decision=? WHERE id=?',
+                            (self._seal(current.model_copy(update={'gallery_revision': previous + 1}).model_dump()), row['id']))
+
     def apply_retention(self, *, now: float | None = None) -> dict:
         """Bound each category to 128 records per maintenance cycle (once a minute)."""
         now = time.time() if now is None else now
@@ -832,7 +994,7 @@ class IdentityStore:
             if not connection.execute("SELECT enabled FROM retention_policy").fetchone()[0]:
                 return {"enabled": False, **counts, "revision": self.revision}
             rows = connection.execute(
-                "SELECT id,occurrence_id FROM observation "
+                "SELECT id,occurrence_id,reference FROM observation "
                 "WHERE (reference=0 AND created_at<?) OR (reference=1 AND created_at<?) "
                 "ORDER BY created_at,id LIMIT 128", (now - 7 * 86400, now - 365 * 86400),
             ).fetchall()
@@ -842,7 +1004,7 @@ class IdentityStore:
             counts["observations"] = len(rows)
             # Retain a minimal historical decision, but never point at a deleted photo.
             for occurrence_id in {row["occurrence_id"] for row in rows}:
-                current = self.decision(occurrence_id)
+                current = self._stored_decision(occurrence_id)
                 if current and current.observation_id and not connection.execute(
                     "SELECT 1 FROM observation WHERE id=?", (current.observation_id,),
                 ).fetchone():
@@ -872,7 +1034,7 @@ class IdentityStore:
                 connection.execute("DELETE FROM occurrence WHERE id=?", (row["id"],))
             counts["occurrences"] = len(occurrences)
             if any(counts.values()):
-                connection.execute("UPDATE gallery SET revision=revision+1")
+                self._advance_maintenance_revision(connection, references_removed=any(row['reference'] for row in rows))
             revision = self.revision
         if any(counts.values()):
             with self._lock:
@@ -884,7 +1046,7 @@ class IdentityStore:
             "SELECT o.id,o.identity_id,o.occurrence_id,"
             "CASE WHEN r.observation_id IS NULL THEN o.evidence ELSE r.evidence END AS evidence,"
             "CASE WHEN r.observation_id IS NULL THEN o.quality ELSE r.quality END AS matching_quality "
-            "FROM observation o JOIN identity i ON i.id=o.identity_id "
+            "FROM available_observation o JOIN identity i ON i.id=o.identity_id "
             "LEFT JOIN reference_representation r ON r.observation_id=o.id AND r.space=? AND r.active=1 AND o.space<>r.space "
             "WHERE o.reference=1 AND o.confirmed=1 AND o.species=? AND (o.space=? OR (r.eligible=1 AND r.evidence IS NOT NULL)) "
             "AND i.merged_into IS NULL AND o.occurrence_id<>? "
@@ -913,6 +1075,21 @@ class IdentityStore:
             scores[identity_id] = max(scores.get(identity_id, -1.0), score)
         return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
 
+    def _retain_activity_reference(self, connection, reference, occurrence_id, observation_id):
+        if reference is None:
+            # The same capture can also belong to an authorized flow without an activity.
+            connection.execute("INSERT OR IGNORE INTO activity_reference VALUES('independent',?,?,?)",
+                (occurrence_id, observation_id, self._seal({})))
+            return
+        owner = reference["occurrence_id"]
+        if owner == 'independent':
+            raise ValueError('reserved activity owner')
+        if connection.execute("SELECT count(*) FROM activity_reference WHERE owner_id=?", (owner,)).fetchone()[0] >= 512 and not connection.execute(
+            "SELECT 1 FROM activity_reference WHERE owner_id=? AND observation_id=?", (owner, observation_id)).fetchone():
+            raise IdentityCapacityError("activity reference capacity reached")
+        connection.execute("INSERT INTO activity_reference VALUES(?,?,?,?) ON CONFLICT(owner_id,observation_id) DO UPDATE SET reference=excluded.reference",
+                           (owner, occurrence_id, observation_id, self._seal(reference)))
+
     def observe(
         self,
         evidence: IdentityEvidence,
@@ -920,6 +1097,7 @@ class IdentityStore:
         *,
         crop: bytes | None = None,
         expected_gallery_revision: int | None = None,
+        activity_reference: dict | None = None,
     ) -> RecognitionDecision:
         if policy is not None and (
             policy.species != evidence.species or policy.embedding_space != evidence.embedding_space
@@ -948,6 +1126,9 @@ class IdentityStore:
         observation_id = evidence.observation_id(self.scope)
         with self._transaction() as connection:
             gallery_revision = self.revision
+            if activity_reference is not None:
+                if self.activity_authorized is None or not self.activity_authorized(activity_reference):
+                    raise IdentityConflict("activity evidence is no longer authorized")
             if (
                 expected_gallery_revision is not None
                 and expected_gallery_revision != gallery_revision
@@ -983,6 +1164,15 @@ class IdentityStore:
             if connection.execute(
                 "SELECT 1 FROM observation WHERE id=?", (observation_id,)
             ).fetchone():
+                if not connection.execute("SELECT 1 FROM available_observation WHERE id=?", (observation_id,)).fetchone():
+                    return RecognitionDecision(status='unobservable', occurrence_id=evidence.occurrence_id,
+                        reason='evidence_unavailable', gallery_revision=gallery_revision)
+                if not connection.execute("SELECT 1 FROM activity_reference WHERE observation_id=?", (observation_id,)).fetchone():
+                    self._retain_activity_reference(connection, None, evidence.occurrence_id, observation_id)
+                self._retain_activity_reference(connection, activity_reference, evidence.occurrence_id, observation_id)
+                if current and policy and current.policy_fingerprint != policy.fingerprint():
+                    return current.model_copy(update={"identity_id": None, "status": "unobservable", "provenance": "none",
+                        "candidate_ids": (), "reason": "recognition_policy_changed"})
                 return current
             if previous and (previous["closed"] or evidence.observed_at < previous["latest_at"]):
                 return current
@@ -1109,6 +1299,9 @@ class IdentityStore:
                     time.time(),
                 ),
             )
+            connection.execute('INSERT INTO observation_decision(id,decision) VALUES(?,?)',
+                (observation_id, self._seal(decision.model_dump())))
+            self._retain_activity_reference(connection, activity_reference, evidence.occurrence_id, observation_id)
             return decision
 
     def no_evidence(
@@ -1122,7 +1315,7 @@ class IdentityStore:
         expected_policy_fingerprint: str | None = None,
     ) -> RecognitionDecision | None:
         with self._transaction() as connection:
-            current = self.decision(occurrence_id)
+            current = self._stored_decision(occurrence_id)
             if current is None or current.provenance == "human":
                 return current
             row = connection.execute(
@@ -1178,6 +1371,62 @@ class IdentityStore:
             )
             return updated
 
+    def revoke_activity(self, owner_id: str) -> dict:
+        removed = 0
+        erased_observations, erased_occurrences = set(), set()
+        with self._transaction() as connection:
+            references = connection.execute("SELECT occurrence_id,observation_id FROM activity_reference WHERE owner_id=?", (owner_id,)).fetchall()
+            targets = {row["occurrence_id"] for row in references}
+            connection.execute("DELETE FROM activity_reference WHERE owner_id=?", (owner_id,))
+            for target in targets:
+                owned = [row["observation_id"] for row in references if row["occurrence_id"] == target]
+                placeholders = ",".join("?" for _ in owned)
+                rows = connection.execute("SELECT id FROM observation o WHERE reference=0 AND id IN (" + placeholders + ") "
+                    "AND NOT EXISTS(SELECT 1 FROM activity_reference r WHERE r.observation_id=o.id)", owned).fetchall()
+                erased = {row["id"] for row in rows}
+                for identifier in erased:
+                    connection.execute("INSERT OR IGNORE INTO erased_observation VALUES(?)", (identifier,))
+                    connection.execute("DELETE FROM observation WHERE id=?", (identifier,))
+                removed += len(erased)
+                erased_observations.update(erased)
+                retained = connection.execute("SELECT 1 FROM observation WHERE occurrence_id=?", (target,)).fetchone()
+                current = self._stored_decision(target)
+                if retained and current and current.observation_id in erased:
+                    updated = current.model_copy(update={"observation_id": None, "candidate_ids": (),
+                        "identity_id": None, "status": "unobservable", "provenance": "none",
+                        "reason": "evidence_erased", "revision": current.revision + 1, "gallery_revision": self.revision + 1})
+                    connection.execute("UPDATE occurrence SET decision=? WHERE id=?", (self._seal(updated.model_dump()), target))
+                if not retained:
+                    erased_occurrences.add(target)
+                    connection.execute("INSERT OR IGNORE INTO closed_occurrence VALUES(?,?)", (target, time.time()))
+                    connection.execute("DELETE FROM rejection WHERE occurrence_id=?", (target,))
+                    connection.execute("DELETE FROM occurrence WHERE id=?", (target,))
+            if erased_observations or erased_occurrences:
+                for row in connection.execute("SELECT id,changes FROM feedback").fetchall():
+                    changes = self._open(row["changes"])
+                    affected = any(value and value.get("id") in erased_observations for pair in changes.get("observation", []) for value in pair)
+                    affected |= any(value and value.get("id") in erased_occurrences for pair in changes.get("occurrence", []) for value in pair)
+                    if affected:
+                        connection.execute("DELETE FROM feedback WHERE id=?", (row["id"],))
+            if targets:
+                self._advance_maintenance_revision(connection, references_removed=False)
+        if targets:
+            with self._lock:
+                self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return {"observations_removed": removed, "references_removed": len(references)}
+
+    def reconcile_activity_references(self) -> None:
+        with self._lock:
+            rows = self._connection.execute("SELECT DISTINCT owner_id FROM activity_reference WHERE owner_id<> 'independent' AND owner_id>? ORDER BY owner_id LIMIT 128", (self._activity_cursor,)).fetchall()
+            if not rows:
+                self._activity_cursor = ""
+                rows = self._connection.execute("SELECT DISTINCT owner_id FROM activity_reference WHERE owner_id<> 'independent' ORDER BY owner_id LIMIT 128").fetchall()
+            for row in rows:
+                self._activity_cursor = row[0]
+                references = self._connection.execute("SELECT reference FROM activity_reference WHERE owner_id=?", (row[0],)).fetchall()
+                if self.activity_authorized is None or not all(self.activity_authorized(self._open(reference[0])) for reference in references):
+                    self.revoke_activity(row[0])
+
     def close_occurrence(self, occurrence_id: str) -> None:
         with self._transaction() as connection:
             connection.execute(
@@ -1216,7 +1465,7 @@ class IdentityStore:
             identities = {
                 item[0]
                 for item in connection.execute(
-                    "SELECT identity_id FROM observation WHERE occurrence_id=? AND confirmed=1 AND identity_id IS NOT NULL",
+                    "SELECT identity_id FROM available_observation WHERE occurrence_id=? AND confirmed=1 AND identity_id IS NOT NULL",
                     (occurrence_id,),
                 )
             }
@@ -1251,6 +1500,9 @@ class IdentityStore:
             raise ValueError("actor and bounded idempotency key are required")
         request_hash = hashlib.sha256(_json([action, values, actor])).hexdigest()
         with self._transaction() as connection:
+            for identifier in values.get("observation_ids", []):
+                if not connection.execute("SELECT 1 FROM available_observation WHERE id=?", (identifier,)).fetchone():
+                    raise IdentityConflict("observation is no longer available")
             if authorize_cameras is not None:
                 authorize_cameras(self.curation_camera_ids(values))
             replay = connection.execute(
@@ -1395,7 +1647,7 @@ class IdentityStore:
             affected = {row["occurrence_id"] for row in observations}
             if action == "reject":
                 for occurrence_id in affected:
-                    current = self.decision(occurrence_id)
+                    current = self._stored_decision(occurrence_id)
                     if current and (
                         current.identity_id == identity["id"] or current.identity_id is None
                     ):
@@ -1449,7 +1701,7 @@ class IdentityStore:
                 (target["id"], source["id"]),
             )
             for occurrence_id in affected:
-                current = self.decision(occurrence_id)
+                current = self._stored_decision(occurrence_id)
                 if current is None:
                     continue
                 updated = current.model_copy(
@@ -1499,6 +1751,10 @@ class IdentityStore:
             ):
                 raise IdentityConflict("later edits prevent this undo; review the newer changes")
             changes = self._open(row["changes"])
+            for pair in changes.get("observation", []):
+                for value in pair:
+                    if value and not connection.execute("SELECT 1 FROM available_observation WHERE id=?", (value["id"],)).fetchone():
+                        raise IdentityConflict("observation is no longer available")
             state = self._curation_state(connection)
             # Toda divergência aborta antes de qualquer restauração.
             for table, pairs in changes.items():
@@ -1552,7 +1808,7 @@ class IdentityStore:
                         restored = RecognitionDecision.model_validate(
                             self._open(base64.b64decode(old["decision"]))
                         )
-                        latest = self.decision(old["id"])
+                        latest = self._stored_decision(old["id"])
                         restored = restored.model_copy(
                             update={
                                 "revision": latest.revision + 1,
@@ -1649,6 +1905,7 @@ class IdentityStore:
                             "status": "unknown",
                             "provenance": "none",
                             "reason": "identity_deleted",
+                            "observation_id": None,
                             "revision": current.revision + 1,
                             "gallery_revision": expected_revision + 1,
                         }

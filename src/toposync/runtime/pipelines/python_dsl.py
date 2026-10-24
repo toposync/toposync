@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .operator_registry import OperatorRegistry
+from .config_patch import merge_operator_config
 from .runtime import DropPolicy
 
 
@@ -551,12 +552,17 @@ def compile_python_source_to_graph(
     filename: str = "<pipeline>",
 ) -> dict[str, Any]:
     builder = DslGraphBuilder(registry, graph_uid=pipeline_name)
+    patches: list[tuple[str, dict[str, Any]]] = []
+
+    def configure_node(node_id: str, **patch: Any) -> None:
+        patches.append((_validate_node_id(node_id), patch))
 
     globals_dict: dict[str, Any] = {
         "__builtins__": _make_safe_builtins(),
         "DropPolicy": DropPolicy,
         "op": lambda operator_id, **cfg: OperatorFactory(builder, registry, str(operator_id))(**cfg),
         "PIPELINE_NAME": str(pipeline_name),
+        "configure_node": configure_node,
     }
 
     # Expose namespaces for all operator prefixes (camera.*, core.*, vision.*, dist.*, ...).
@@ -591,4 +597,19 @@ def compile_python_source_to_graph(
             "Python source must define PIPELINE (a stream expression built with the DSL).",
         )
 
-    return builder.to_graph_spec()
+    graph = builder.to_graph_spec()
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    for node_id, patch in patches:
+        if node_id not in nodes:
+            raise PythonDslCompileError(f"Cannot configure missing node: {node_id!r}")
+        node = nodes[node_id]
+        try:
+            updated = registry.normalize_config(node["operator"], merge_operator_config(node["config"], patch))
+        except ValueError as error:
+            raise PythonDslCompileError(f"Invalid configuration for node: {node_id!r}") from error
+        registered = registry.get(node["operator"])
+        # Edge defaults were selected while building the expression.
+        if registered.splits_stream(updated) != registered.splits_stream(node["config"]):
+            raise PythonDslCompileError(f"Configure stream splitting in the operator expression: {node_id!r}")
+        node["config"] = updated
+    return graph

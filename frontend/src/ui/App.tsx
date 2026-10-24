@@ -483,6 +483,10 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
   const activeImageSessionRef = useRef<ReturnType<typeof createEphemeralImageSession> | null>(null);
   const lastUserInteractionTsRef = useRef<number>(Date.now());
   const hasManualNotificationSelectionRef = useRef(false);
+  const notificationDetailsOpenRef = useRef(false);
+  const setNotificationDetailsOpen = useCallback((open: boolean) => {
+    notificationDetailsOpenRef.current = open;
+  }, []);
   const markNotificationsViewedInFlightRef = useRef<Promise<void> | null>(null);
   const notificationsFilterRef = useRef<NotificationsFilter>(notificationsRequestFilter);
   const notificationsListRequestRef = useRef(0);
@@ -1118,6 +1122,18 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     // This global stream is intentionally separate from the selected-notification stream below.
     // The list/cache must keep receiving global realtime updates while details track one item.
     const es = new EventSource(resolveToposyncUrl("/api/notifications/stream"));
+    const clearHistory = () => {
+      abortNotificationListRequests();
+      activeNotificationFetchAbortRef.current?.abort();
+      activeNotificationRefreshAbortRef.current?.abort();
+      historySourceRead.current?.abort();
+      activeImageSessionRef.current?.clear();
+      setNotificationsState({ byId: {}, visibleIds: [] });
+      setHistorySource(null);
+      setActiveNotificationId(null);
+    };
+    const activityChanged = () => { clearHistory(); resync(); };
+    window.addEventListener("toposync:activity-changed", activityChanged);
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const resync = (force = true) => {
       if (closed) return;
@@ -1136,7 +1152,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     es.onmessage = (ev) => {
       try {
         const parsed = JSON.parse(ev.data ?? "{}") as { op?: string; notification?: Notification };
-        if (parsed.op === "resync") { resync(); return; }
+        if (parsed.op === "resync" || parsed.op === "invalidate") { activityChanged(); return; }
         const op = parsed.op === "update" ? "update" : "insert";
         const notif = parsed.notification;
         if (!notif || typeof notif.id !== "string") return;
@@ -1157,7 +1173,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
 
           const now = Date.now();
           const idle = now - lastUserInteractionTsRef.current > 12_000;
-          const allowAuto = !hasManualNotificationSelectionRef.current || idle;
+          const allowAuto = !notificationDetailsOpenRef.current && (!hasManualNotificationSelectionRef.current || idle);
           if (allowAuto) setActiveNotificationId(notif.id);
         }
       } catch (err) {
@@ -1166,16 +1182,17 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
     };
     es.onerror = (err) => {
       if (closed) return;
-      activeImageSessionRef.current?.clear();
+      clearHistory();
       console.warn("Notifications SSE error", err);
     };
 
     return () => {
       closed = true;
       clearTimeout(refreshTimer);
+      window.removeEventListener("toposync:activity-changed", activityChanged);
       es.close();
     };
-  }, [backendAvailable, upsertNotification]);
+  }, [backendAvailable, upsertNotification, abortNotificationListRequests]);
 
   useEffect(() => {
     if (!backendAvailable) return;
@@ -1223,6 +1240,11 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
       try {
         if (typeof ev.data !== "string" || ev.data.length > 512 * 1024) { imageSession.clear(); refreshSelectedNotification(); return; }
         const parsed = JSON.parse(ev.data ?? "{}") as { op?: string; notification?: Notification };
+        if (parsed.op === "invalidate") {
+          imageSession.clear();
+          window.dispatchEvent(new Event("toposync:activity-changed"));
+          return;
+        }
         if (parsed.op === "resync") { imageSession.clear(); refreshSelectedNotification(); return; }
         const op = parsed.op === "update" ? "update" : "insert";
         const notif = parsed.notification;
@@ -1861,6 +1883,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
         />
       ) : normalizedPathname.startsWith("/settings") ? (
         <SettingsScreen
+          operatorPanels={pipelineOperatorPanelsByOperatorId}
           backendAvailable={backendAvailable}
           api={host.api}
           wallHeightPreset={wallHeightPreset}
@@ -1933,6 +1956,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             setNotificationsFilter(next); setNotificationsRequestFilter(next);
           }}
           onSelectNotification={selectNotification}
+          onNotificationDetailsOpenChange={setNotificationDetailsOpen}
           onLoadMoreNotifications={loadMoreNotifications}
           onNotificationsViewed={markNotificationsAsViewed}
           api={host.api}
@@ -1990,6 +2014,7 @@ export function App({ authUser, authMode, onLogout }: AppProps): React.ReactElem
             editorReturnPath.current = null;
           }}
           onOpenSettings={openSettings}
+          onOpenAutomatic={targetId => navigate(`/settings?${new URLSearchParams({ panel: "__automatic__", automatic_target: targetId })}`)}
           onActivateComposition={activateCompositionById}
           onCreateComposition={createNewComposition}
           onRenameComposition={renameExistingComposition}

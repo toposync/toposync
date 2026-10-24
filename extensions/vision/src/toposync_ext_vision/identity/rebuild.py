@@ -23,7 +23,7 @@ def representation_status(store: IdentityStore, *, species: Species, space: str)
     with store._lock:
         row = store._connection.execute(
             "SELECT count(*),sum(r.observation_id IS NULL),sum(r.eligible=0),sum(r.eligible=1),sum(r.active=1) "
-            "FROM observation o LEFT JOIN reference_representation r ON r.observation_id=o.id AND r.space=? "
+            "FROM available_observation o LEFT JOIN reference_representation r ON r.observation_id=o.id AND r.space=? "
             "WHERE o.species=? AND o.reference=1 AND o.confirmed=1 AND o.space<>?",
             (space, species, space),
         ).fetchone()
@@ -68,7 +68,7 @@ def rebuild_reference_batch(
         if space not in spaces and len(spaces) >= 3:
             raise IdentityCapacityError("derived embedding space budget reached")
         rows = store._connection.execute(
-            "SELECT o.id,o.evidence,o.crop FROM observation o "
+            "SELECT o.id,o.evidence,o.crop FROM available_observation o "
             "LEFT JOIN reference_representation r ON r.observation_id=o.id AND r.space=? "
             "WHERE o.species=? AND o.reference=1 AND o.confirmed=1 AND o.space<>? "
             "AND (r.observation_id IS NULL OR (? AND r.eligible=0 AND r.active=0)) ORDER BY o.id LIMIT ?",
@@ -77,6 +77,9 @@ def rebuild_reference_batch(
     staged = []
     # CPU work and model loading stay outside the SQLite transaction and gallery lock.
     for row in rows:
+        with store._lock:
+            if not store._connection.execute("SELECT 1 FROM available_observation WHERE id=?", (row['id'],)).fetchone():
+                raise IdentityConflict("reference expired before reconstruction")
         rebuilt = None
         reason = "retained_photo_missing"
         if row["crop"] is not None:
@@ -133,6 +136,8 @@ def rebuild_reference_batch(
                 raise IdentityConflict(
                     "gallery changed during reconstruction; staged results discarded"
                 )
+            if any(not connection.execute("SELECT 1 FROM available_observation WHERE id=?", (item[0],)).fetchone() for item in staged):
+                raise IdentityConflict("reference expired during reconstruction; staged results discarded")
             connection.executemany(
                 "INSERT INTO reference_representation(observation_id,space,evidence,eligible,quality,reason,created_at) VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(observation_id,space) DO UPDATE SET evidence=excluded.evidence,eligible=excluded.eligible,quality=excluded.quality,reason=excluded.reason,created_at=excluded.created_at WHERE reference_representation.active=0",
@@ -160,7 +165,7 @@ def set_representation_active(
             )
         result = connection.execute(
             "UPDATE reference_representation SET active=? WHERE space=? AND active<>? "
-            "AND observation_id IN (SELECT id FROM observation WHERE species=?) "
+            "AND observation_id IN (SELECT id FROM available_observation WHERE species=?) "
             "AND (?=0 OR eligible=1)",
             (int(active), space, int(active), species, int(active)),
         )

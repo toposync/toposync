@@ -68,6 +68,22 @@ class ToposyncClient:
         data = await self._json("GET", "/api/streams/home-assistant/cameras")
         return data if isinstance(data, dict) else {"cameras": []}
 
+    async def get_visual_states(self) -> dict[str, Any] | None:
+        """None means an older server without this capability, never an empty sensor list."""
+        try:
+            data = await self._json("GET", "/api/vision/visual-state/states")
+        except ToposyncApiError as error:
+            if error.status in {404, 405}:
+                return None
+            raise
+        if (not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1
+                or not isinstance(data.get("server_epoch"), str) or not data["server_epoch"]
+                or type(data.get("snapshot_version")) is not int or data["snapshot_version"] < 1
+                or not isinstance(data.get("states"), list)
+                or not isinstance(data.get("capabilities"), dict) or data["capabilities"].get("local_states") is not True):
+            raise ToposyncApiError("Toposync visual state response is invalid")
+        return data
+
     async def heartbeat(self, camera: dict[str, Any], *, ttl_seconds: float = 90.0) -> None:
         transmission_id = str(camera.get("transmission_id") or "").strip()
         if not transmission_id:

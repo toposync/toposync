@@ -118,10 +118,14 @@ def test_area_suppressed_update_keeps_latest_evidence_for_idle_close():
 
         class Context:
             emitted = []
+            inspection_filter_reason = None
             flow_limiter = None
             metrics = NodeRuntimeMetrics()
             logger = logging.getLogger(__name__)
             node_id = "area"
+
+            def inspect(self, state, *args, **kwargs):
+                assert state != "error"
 
             def is_cancelled(self):
                 return len(self.emitted) == 2
@@ -331,10 +335,14 @@ def test_area_offline_closes_at_last_observation():
     async def scenario():
         class Context:
             incoming = observation(0)
+            inspection_filter_reason = None
             flow_limiter = None
             metrics = NodeRuntimeMetrics()
             logger = logging.getLogger(__name__)
             node_id = "area"
+
+            def inspect(self, state, *args, **kwargs):
+                assert state != "error"
 
             def __init__(self):
                 self.emitted = []

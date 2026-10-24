@@ -93,7 +93,7 @@ class _NumericMetricSeries:
     _sums: array = field(init=False, repr=False)
     _mins: array = field(init=False, repr=False)
     _maxs: array = field(init=False, repr=False)
-    _hist: array = field(init=False, repr=False)
+    _hist: dict[int, array] = field(init=False, repr=False)
     updated_at: float = 0.0
     last_sample_at: float = 0.0
 
@@ -107,7 +107,7 @@ class _NumericMetricSeries:
         self._sums = array("d", [0.0] * self.bucket_count)
         self._mins = array("d", [0.0] * self.bucket_count)
         self._maxs = array("d", [0.0] * self.bucket_count)
-        self._hist = array("I", [0] * (self.bucket_count * self.spec.histogram_bins))
+        self._hist = {}
 
     def _bucket_number(self, now_s: float) -> int:
         return int(float(now_s) // float(self.spec.bucket_seconds))
@@ -118,10 +118,7 @@ class _NumericMetricSeries:
         self._sums[idx] = 0.0
         self._mins[idx] = 0.0
         self._maxs[idx] = 0.0
-        base = idx * self.spec.histogram_bins
-        end = base + self.spec.histogram_bins
-        for offset in range(base, end):
-            self._hist[offset] = 0
+        self._hist.pop(idx, None)
 
     def _touch_bucket(self, bucket_number: int) -> int:
         idx = int(bucket_number) % self.bucket_count
@@ -170,9 +167,11 @@ class _NumericMetricSeries:
         self._counts[bucket_idx] = count + 1
         self._sums[bucket_idx] = float(self._sums[bucket_idx]) + value
 
-        base = bucket_idx * self.spec.histogram_bins
-        hist_idx = base + self._bin_index(value)
-        self._hist[hist_idx] = int(self._hist[hist_idx]) + 1
+        histogram = self._hist.get(bucket_idx)
+        if histogram is None:
+            histogram = self._hist[bucket_idx] = array("I", [0]) * self.spec.histogram_bins
+        hist_idx = self._bin_index(value)
+        histogram[hist_idx] = int(histogram[hist_idx]) + 1
 
         self.last_sample_at = now_s
         self.updated_at = now_s
@@ -234,11 +233,10 @@ class _NumericMetricSeries:
             if total_max is None or max_value > total_max:
                 total_max = max_value
 
-            base = idx * bins
-            for bin_idx in range(bins):
-                bin_count = int(self._hist[base + bin_idx])
-                if bin_count:
-                    histogram[bin_idx] += bin_count
+            bucket_histogram = self._hist.get(idx)
+            if bucket_histogram is not None:
+                for bin_idx, bin_count in enumerate(bucket_histogram):
+                    histogram[bin_idx] += int(bin_count)
 
             points.append(
                 (
@@ -1122,7 +1120,12 @@ def _write_persisted_payload(writer: _PersistWriter, view: _TelemetryPersistence
         writer.bytes(series._mins.tobytes())
         writer.bytes(series._maxs.tobytes())
         if include_hist:
-            writer.bytes(series._hist.tobytes())
+            # Keep the dense checkpoint format without allocating empty in-memory buckets.
+            empty_bucket = bytes(spec.histogram_bins * 4)
+            writer.u32(series.bucket_count * len(empty_bucket))
+            for idx in range(series.bucket_count):
+                histogram = series._hist.get(idx)
+                writer._write(histogram.tobytes() if histogram is not None else empty_bucket)
 
     image_items = list(view.image_markers)
     writer.u32(len(image_items))
@@ -1348,7 +1351,11 @@ def _load_persisted_payload_into_store(store: PipelineTelemetryStore, payload: b
         if include_hist and hist_blob is not None:
             expected_hist_len = int(bucket_count) * int(spec.histogram_bins) * 4
             if len(hist_blob) == expected_hist_len:
-                series._hist = _read_array_from_bytes("I", hist_blob)
+                bucket_bytes = int(spec.histogram_bins) * 4
+                for idx in range(int(bucket_count)):
+                    bucket_blob = hist_blob[idx * bucket_bytes : (idx + 1) * bucket_bytes]
+                    if any(bucket_blob):
+                        series._hist[idx] = _read_array_from_bytes("I", bucket_blob)
 
         series.updated_at = float(updated_at or 0.0)
         series.last_sample_at = float(last_sample_at or 0.0)

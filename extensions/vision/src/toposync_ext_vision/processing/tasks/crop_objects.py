@@ -62,6 +62,14 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
             bbox01_selected = reproj
             bbox_source = f"{bbox_source}|reproject:frame_warp"
 
+        mask = None
+        if self._config.use_segmentation and crop_bbox01 is None and frame_warp is None:
+            mask = _subject_mask(packet, image)
+        if mask is not None:
+            import numpy as np
+            image = np.concatenate((image[..., :3], np.where(mask[..., None], 255, 0).astype('uint8')), axis=2)
+            image[~mask, :3] = 0
+
         bbox01_used = _expand_bbox01(bbox01_selected, padding_ratio=float(self._config.padding_ratio))
         cropped = (image, (0.0, 0.0, 1.0, 1.0)) if self._config.preserve_scene else _crop_bbox01(
             image=image,
@@ -86,6 +94,7 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
             Artifact(
                 name=output_artifact_name,
                 data=crop,
+                private=bool(packet.artifacts.get(selected_name or MAIN_ARTIFACT_NAME) and packet.artifacts[selected_name or MAIN_ARTIFACT_NAME].private),
                 mime_type="image/raw",
                 metadata={
                     "source": self._operator_id,
@@ -96,6 +105,10 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
                     "bbox01_selected": list(bbox01_selected),
                     "bbox_source": bbox_source,
                     "padding_ratio": float(self._config.padding_ratio),
+                    "kind": "segmentation" if mask is not None else "rectangle",
+                    "anchor": [max(0.0, min(1.0, ((bbox01_selected[0] + bbox01_selected[2]) / 2 - pixel_bbox01[0]) / max(1e-9, pixel_bbox01[2] - pixel_bbox01[0]))),
+                               max(0.0, min(1.0, (bbox01_selected[3] - pixel_bbox01[1]) / max(1e-9, pixel_bbox01[3] - pixel_bbox01[1])))],
+                    "members": list(((packet.payload.get("association") or {}).get("group") or {}).get("members", [])),
                 },
             )
         )
@@ -119,6 +132,25 @@ class VisionCropObjectsRuntime(TransformOperatorRuntime):
 
     def _close_without_crop(self, packet: Packet) -> Packet:
         return replace(packet, artifacts={})
+
+
+def _subject_mask(packet, image):
+    import numpy as np
+    subject = packet.payload.get("subject") or {}
+    capture = packet.payload.get("capture_evidence")
+    if not capture or getattr(image, "ndim", 0) != 3:
+        return None
+    masks = []
+    for instance in (packet.payload.get("vision") or {}).get("segmentations", []):
+        if instance.get("actor_subject_id") != subject.get("id"):
+            continue
+        artifact = packet.artifacts.get(instance.get("mask_artifact_name"))
+        if artifact is None or artifact.private or artifact.data is None or artifact.metadata.get("capture_evidence") != capture:
+            continue
+        mask = np.asarray(artifact.data)
+        if mask.shape == image.shape[:2] and np.any(mask > 0):
+            masks.append(mask > 0)
+    return np.logical_or.reduce(masks) if masks else None
 
 
 def _read_annotation_bbox01(

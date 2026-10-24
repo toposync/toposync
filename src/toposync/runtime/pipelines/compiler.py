@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from pydantic import ValidationError
 
 from toposync.runtime.config_store import Pipeline
 
@@ -14,7 +16,9 @@ from .runtime import DropPolicy
 
 
 class GraphCompileError(ValueError):
-    pass
+    def __init__(self, message: str, *, validation_errors: list[dict[str, Any]] | None = None):
+        super().__init__(message)
+        self.validation_errors = validation_errors or []
 
 
 CancelCheck = Callable[[], None]
@@ -31,6 +35,8 @@ class _CompileNode:
     node_id: str
     operator_id: str
     config: dict[str, Any]
+    resource_scope: dict[str, str] = field(default_factory=dict)
+    origins: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +85,7 @@ class CompiledNode:
     normalized_config: dict[str, Any]
     signature: str
     shareable: bool
+    origins: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,8 +254,11 @@ class PipelineGraphCompiler:
                     node.operator_id, node.config
                 )
             except Exception as exc:  # noqa: BLE001
+                cause = exc if isinstance(exc, ValidationError) else exc.__cause__
+                errors = cause.errors(include_input=False, include_context=False, include_url=False) if isinstance(cause, ValidationError) else []
                 raise GraphCompileError(
                     f"Invalid config for operator '{node.operator_id}' in node '{node.node_id}': {exc}",
+                    validation_errors=[{"node_id": node.node_id, "operator_id": node.operator_id, **error} for error in errors],
                 ) from exc
             share_strategy_by_node[node.node_id] = operator.definition.share_strategy
             input_ports_by_node[node.node_id] = {port.name for port in operator.definition.inputs}
@@ -358,6 +368,11 @@ class PipelineGraphCompiler:
                 "upstream": upstream,
             }
             shareable = share_strategy_by_node[node_id] == "by_signature"
+            definition = self._registry.get(node.operator_id).definition
+            if node.resource_scope:
+                signature_payload["resource_scope"] = node.resource_scope
+            if definition.state_kind.startswith("stateful"):
+                shareable = bool(node.resource_scope.get("resource_owner") and node.resource_scope.get("resource_partition"))
             if not shareable:
                 signature_payload["node_uid"] = node.uid
                 signature_payload["pipeline_name"] = pipeline.name
@@ -371,6 +386,7 @@ class PipelineGraphCompiler:
                     normalized_config=normalized_config_by_node[node_id],
                     signature=signature,
                     shareable=shareable,
+                    origins=node.origins,
                 ),
             )
 
@@ -433,7 +449,14 @@ class PipelineGraphCompiler:
         pipelines: list[Pipeline],
         *,
         cancel_check: CancelCheck | None = None,
+        catalog: list[Pipeline] | None = None,
     ) -> CompilationReport:
+        from .result_references import expand_result_references
+
+        try:
+            pipelines = expand_result_references(pipelines, catalog if catalog is not None else pipelines, self._registry)
+        except ValueError as exc:
+            raise GraphCompileError(str(exc)) from exc
         compiled = [
             self.compile_pipeline(pipeline, cancel_check=cancel_check) for pipeline in pipelines
         ]
@@ -518,6 +541,10 @@ def _parse_graph_v2(raw_graph: dict[str, Any]) -> _CompileGraph:
     payload = dict(raw_graph)
     payload.setdefault("uid", "graph")
     graph = PipelineGraphV2Spec.model_validate(payload)
+    for node in graph.nodes:
+        for key in ("production_scope", "resource_owner", "resource_partition"):
+            if key in node.state and (not isinstance(node.state[key], str) or not node.state[key] or len(node.state[key]) > 256):
+                raise GraphCompileError(f"Invalid resource scope: {key}")
     return _CompileGraph(
         schema_version=graph.schema_version,
         nodes=tuple(
@@ -526,6 +553,9 @@ def _parse_graph_v2(raw_graph: dict[str, Any]) -> _CompileGraph:
                 node_id=node.id,
                 operator_id=node.operator_id,
                 config=dict(node.config),
+                resource_scope={key: node.state[key] for key in ("production_scope", "resource_owner", "resource_partition") if node.state.get(key)},
+                origins=((str(node.state["result_origin"]["pipeline"]), str(node.state["result_origin"]["node"])),)
+                if isinstance(node.state.get("result_origin"), dict) else (),
             )
             for node in graph.nodes
         ),

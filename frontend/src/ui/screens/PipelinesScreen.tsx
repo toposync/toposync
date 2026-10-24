@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { PipelineOperatorPanel, PipelineReviewPanel, SettingsPanel } from "@toposync/plugin-api";
 
 import { i18n, resolveLocalizedString } from "../../util/i18n";
-import { navigate, replace, usePathname } from "../router";
+import { navigate, replace, snapshotPathname, usePathname } from "../router";
 import type {
   CamerasIndexResponse,
   Pipeline,
@@ -20,6 +20,7 @@ import {
   createPipeline,
   deletePipeline,
   duplicatePipeline,
+  getPipeline,
   getPipelineRuntimeGraphInfo,
   getProcessingServerStatus,
   getPipelineStats,
@@ -33,6 +34,7 @@ import {
 } from "../../util/api";
 import { extractProcessingRuntimeNodeIssues, filterProcessingRuntimeIssuesForPipeline } from "../processingRuntimeHealth";
 import { PipelineStorageCard } from "./pipelines/InteractivePipelineEditor";
+import { PipelineInspectionPanel } from "../streams/PipelineInspectionPanel";
 import { PipelineDuplicateModal } from "./pipelines/PipelineDuplicateModal";
 import { PipelineTelemetryFieldModal } from "./pipelines/PipelineTelemetryFieldModal";
 import { PipelineTelemetryOverviewCard } from "./pipelines/PipelineTelemetryOverviewCard";
@@ -179,9 +181,15 @@ function cameraSourceRefsFromPipelineGraph(graph: unknown): Array<{ cameraId: st
   return refs;
 }
 
+function isAutomaticPipeline(pipeline: Pipeline): boolean {
+  const graph = isRecord(pipeline.graph) ? pipeline.graph : null;
+  const meta = graph && isRecord(graph.meta) ? graph.meta : null;
+  return isRecord(meta?.automatic) && typeof meta.automatic.intent_id === "string" && Boolean(meta.automatic.intent_id);
+}
+
 function isImplicitPipeline(pipeline: Pipeline): boolean {
   const name = String(pipeline.name || "").trim();
-  if (name.startsWith("implicit__")) return true;
+  if (name.startsWith("implicit__") || isAutomaticPipeline(pipeline)) return true;
 
   const graph = isRecord(pipeline.graph) ? pipeline.graph : null;
   const meta = graph && isRecord(graph.meta) ? graph.meta : null;
@@ -232,13 +240,15 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [operators, setOperators] = useState<PipelineOperatorDefinition[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
-    return pipelineNameFromPipelinesPath(window.location.pathname) ?? null;
+    return pipelineNameFromPipelinesPath(snapshotPathname()) ?? null;
   });
   const [camerasIndex, setCamerasIndex] = useState<CamerasIndexResponse>({ cameras: [] });
 
   const [createName, setCreateName] = useState("");
 
   const [draft, setDraft] = useState<Pipeline | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [conflictDraft, setConflictDraft] = useState<Pipeline | null>(null);
   const [graphText, setGraphText] = useState<string>("");
   const [pythonText, setPythonText] = useState<string>("");
   const [mode, setMode] = useState<EditorMode>("interactive");
@@ -316,7 +326,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       setCamerasIndex(cameras);
       setSelectedName((prev) => {
         if (pipelineList.length === 0) return null;
-        const fromPath = typeof window === "undefined" ? null : pipelineNameFromPipelinesPath(window.location.pathname);
+        const fromPath = pipelineNameFromPipelinesPath(snapshotPathname());
         if (!fromPath) return null;
         if (pipelineList.some((pipeline) => pipeline.name === fromPath)) return fromPath;
         if (prev && pipelineList.some((pipeline) => pipeline.name === prev)) return prev;
@@ -615,7 +625,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     setTopologyValidationError(null);
     setTopologyValidationSuccessAt(null);
     try {
-      const output = compiledAlerts === undefined ? await compilePipeline({ ...draft, graph }) : { alerts: compiledAlerts };
+      const output = compiledAlerts === undefined ? await compilePipeline({ ...draft, graph }, { signal: AbortSignal.timeout(30_000) }) : { alerts: compiledAlerts };
       const nextAlerts = Array.isArray(output.alerts) ? output.alerts : [];
       setRecommendations(nextAlerts);
       setRecommendationsError(null);
@@ -855,77 +865,84 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   };
 
   const handleSave = async () => {
-    if (!draft) return;
+    if (!draft || saving) return;
     if (isDraftReadOnly) {
       setError(t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here."));
       return;
     }
-    setError(null);
+    setSaving(true);
+    try {
+      setError(null);
 
-    let updated: Pipeline;
-    let diagnosticError: string | null = null;
+      let updated: Pipeline;
+      let diagnosticError: string | null = null;
 
-    if (mode === "python") {
-      if (!pythonText.trim()) {
-        setError(t("core.ui.pipelines.editor.error.python_source_required"));
-        return;
-      }
-      try {
-        const compiled = await compilePipelinePython({
-          ...draft,
-          editor_mode: "python",
-          python_source: pythonText,
-        });
-        const validation = await validateResolvedGraph(compiled.graph, compiled.alerts ?? [], true);
+      if (mode === "python") {
+        if (!pythonText.trim()) {
+          setError(t("core.ui.pipelines.editor.error.python_source_required"));
+          return;
+        }
+        try {
+          const compiled = await compilePipelinePython({
+            ...draft,
+            editor_mode: "python",
+            python_source: pythonText,
+          }, { signal: AbortSignal.timeout(30_000) });
+          const validation = await validateResolvedGraph(compiled.graph, compiled.alerts ?? [], true);
+          if (!validation.ok) {
+            setError(validation.message);
+            return;
+          }
+          diagnosticError = validation.diagnosticError ?? null;
+          setGraphText(jsonPretty(compiled.graph ?? emptyGraph()));
+          updated = {
+            ...draft,
+            graph: compiled.graph,
+            editor_mode: "python",
+            python_source: pythonText,
+          };
+        } catch (err: any) {
+          setError(String(err?.message ?? err));
+          return;
+        }
+      } else {
+        const resolved = resolveGraphFromActiveMode();
+        if (!resolved.ok) {
+          setError(resolved.message);
+          return;
+        }
+        const validation = await validateResolvedGraph(resolved.graph, undefined, true);
         if (!validation.ok) {
           setError(validation.message);
           return;
         }
         diagnosticError = validation.diagnosticError ?? null;
-        setGraphText(jsonPretty(compiled.graph ?? emptyGraph()));
         updated = {
           ...draft,
-          graph: compiled.graph,
-          editor_mode: "python",
-          python_source: pythonText,
+          graph: resolved.graph,
+          editor_mode: mode,
+          python_source: draft.python_source ?? "",
         };
-      } catch (err: any) {
-        setError(String(err?.message ?? err));
-        return;
       }
-    } else {
-      const resolved = resolveGraphFromActiveMode();
-      if (!resolved.ok) {
-        setError(resolved.message);
-        return;
-      }
-      const validation = await validateResolvedGraph(resolved.graph, undefined, true);
-      if (!validation.ok) {
-        setError(validation.message);
-        return;
-      }
-      diagnosticError = validation.diagnosticError ?? null;
-      updated = {
-        ...draft,
-        graph: resolved.graph,
-        editor_mode: mode,
-        python_source: draft.python_source ?? "",
-      };
-    }
 
-    try {
-      const saved = await putPipeline(draft.name, updated);
-      setPipelines((prev) =>
-        sortPipelinesForDisplay(prev.map((pipeline) => (pipeline.name === saved.name ? saved : pipeline))),
-      );
-      setDraft(saved);
-      setGraphText(jsonPretty(saved.graph ?? emptyGraph()));
-      setTopologyDirty(false);
-      setTopologyValidationError(diagnosticError);
-      setTopologyValidationSuccessAt(diagnosticError ? null : Date.now());
-    } catch (err: any) {
-      setError(String(err?.message ?? err));
-    }
+      try {
+        const saved = await putPipeline(draft.name, updated);
+        setPipelines((prev) =>
+          sortPipelinesForDisplay(prev.map((pipeline) => (pipeline.name === saved.name ? saved : pipeline))),
+        );
+        setDraft(saved);
+        setConflictDraft(null);
+        setGraphText(jsonPretty(saved.graph ?? emptyGraph()));
+        setTopologyDirty(false);
+        setTopologyValidationError(diagnosticError);
+        setTopologyValidationSuccessAt(diagnosticError ? null : Date.now());
+      } catch (err: any) {
+        if (err?.message === "pipeline_revision_conflict" || err?.message === "pipeline_revision_required") {
+          setConflictDraft(updated);
+          setError(t("core.ui.pipelines.save_conflict"));
+        } else setError(String(err?.message ?? err));
+      }
+    } finally { setSaving(false); }
   };
 
   const handleDuplicate = useCallback(
@@ -960,7 +977,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const renderPipelineListItem = (pipeline: Pipeline): React.ReactElement => {
     const implicit = isImplicitPipeline(pipeline);
     const metaParts = [
-      pipeline.enabled === false ? t("core.ui.pipelines.status.disabled") : t("core.ui.pipelines.status.enabled"),
+      isAutomaticPipeline(pipeline) ? t("core.ui.pipelines.status.automatic") : pipeline.enabled === false ? t("core.ui.pipelines.status.disabled") : t("core.ui.pipelines.status.enabled"),
       pipeline.processing_server_id ?? "local",
       implicit ? t("core.ui.pipelines.status.read_only", {}, "read-only") : "",
     ].filter(Boolean);
@@ -987,7 +1004,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   };
 
   return (
-    <div className="pipelinesRoot screenRoot">
+    <div className="pipelinesRoot screenRoot" ref={element => { if (element) element.inert = saving; }} aria-busy={saving}>
       <div className="pipelinesTopbar">
         <button className="iconButton" type="button" onClick={onClose} aria-label={t("core.actions.back", {}, "Back")}>
           <i className="fa-solid fa-arrow-left" aria-hidden="true" />
@@ -1126,6 +1143,21 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   <div className="cardBody">{error}</div>
                 </div>
               ) : null}
+              {conflictDraft?.name === draft.name && <div className="card"><div className="cardBody">
+                <details><summary>{t("core.ui.pipelines.conflict_draft")}</summary>
+                  <textarea readOnly rows={8} className="input" aria-label={t("core.ui.pipelines.conflict_draft")}
+                    value={jsonPretty(conflictDraft)} />
+                </details>
+                <button type="button" className="chipButton" onClick={async () => {
+                  setSaving(true);
+                  try {
+                    const latest = await getPipeline(draft.name);
+                    setPipelines(previous => previous.map(item => item.name === latest.name ? latest : item));
+                    setError(null);
+                  } catch (err: any) { setError(String(err?.message ?? err)); }
+                  finally { setSaving(false); }
+                }}>{t("core.ui.pipelines.conflict_reload")}</button>
+              </div></div>}
               <div className="pipelinesEditorHeader">
                 <div className="pipelinesEditorIdentity">
                   <div className="pipelinesEditorTitle">{draft.display_name || draft.name}</div>
@@ -1142,15 +1174,16 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   </label>
                 </div>
                 <div className="pipelinesEditorActions">
+                  <PipelineInspectionPanel key={`inspection:${draft.name}`} initialPipeline={draft.name} />
                   <button
                     className="pillButton pillButtonPrimary"
                     type="button"
                     onClick={() => void handleSave()}
-                    disabled={isDraftReadOnly}
+                    disabled={isDraftReadOnly || saving}
                     title={isDraftReadOnly ? t("core.ui.pipelines.read_only.error", {}, "Generated pipelines are read-only here.") : undefined}
                   >
                     <i className="fa-solid fa-floppy-disk" aria-hidden="true" />
-                    {t("core.actions.save")}
+                    {t(saving ? "core.ui.pipelines.saving" : "core.actions.save")}
                   </button>
                   <details
                     key={draft.name}
@@ -1201,6 +1234,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
                   <div className="pipelinesAlertText">
                     <div className="pipelinesAlertMessage">
                       {t("core.ui.pipelines.read_only.message", {}, "This generated pipeline is managed by its source and can only be inspected here.")}
+                      {isAutomaticPipeline(draft) && <button className="chipButton" onClick={() => navigate("/settings?panel=__automatic__")}>{t("core.ui.pipelines.open_automatic")}</button>}
                     </div>
                   </div>
                 </div>

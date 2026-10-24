@@ -1302,6 +1302,12 @@ class AuthRuntime:
 
     # Registry used by UX to configure include/exclude quickly.
     configurable_actions: dict[str, list[str]] = {
+        "core:pipeline_result": [
+            "core:pipeline_results:read", "core:pipeline_results:manual",
+            "core:pipeline_results:automatic", "core:pipeline_results:player",
+            "core:pipeline_results:publication",
+            "core:pipeline_results:inspection",
+        ],
         "core:global": [
             "core:settings:read",
             "core:extensions:list",
@@ -1312,6 +1318,7 @@ class AuthRuntime:
             "core:notifications:read",
             "core:notifications:stream",
             "core:pipelines:read",
+            "core:occurrences:write",
             "core:pipelines:runtime:read",
             "core:processing_servers:read",
             "core:embed:start",
@@ -1646,7 +1653,7 @@ class AuthRuntime:
             "is_disabled": False,
         }
 
-    def resolve_request(self, request: Request) -> AuthContext:
+    def resolve_request(self, request: Request, *, refresh: bool = True) -> AuthContext:
         if self.mode == "bypass":
             return AuthContext(
                 principal=self.bypass_principal, mode=self.mode, requires_setup=False
@@ -1708,6 +1715,10 @@ class AuthRuntime:
             return AuthContext(principal=principal, mode=self.mode, requires_setup=requires_setup)
 
         access_cookie = str(request.cookies.get(self.access_cookie_name) or "")
+        if not refresh:
+            previous = getattr(request.state, "auth_context", None)
+            if isinstance(previous, AuthContext) and previous.cookies_to_set:
+                access_cookie = previous.cookies_to_set[0]
         if access_cookie:
             principal = self._principal_from_access(access_cookie)
             if principal is not None:
@@ -1716,7 +1727,7 @@ class AuthRuntime:
                 )
 
         refresh_cookie = str(request.cookies.get(self.refresh_cookie_name) or "")
-        if refresh_cookie:
+        if refresh_cookie and refresh:
             refreshed = self._tokens_from_refresh(refresh_cookie)
             if refreshed is not None:
                 principal, new_tokens = refreshed
@@ -1798,10 +1809,15 @@ class AuthRuntime:
         )
         return self._principal_from_user(user), access_token, refresh_token
 
-    def logout(self, raw_refresh_token: str | None) -> None:
+    def logout(self, raw_refresh_token: str | None, *, access_token: str | None = None) -> str | None:
         token = str(raw_refresh_token or "").strip()
         if token:
+            session = self.store.get_refresh_session(token)
             self.store.revoke_refresh_token(token)
+            if session is not None:
+                return session.user.id
+        principal = self._principal_from_access(access_token) if access_token else None
+        return principal.user_id if principal is not None else None
 
     def start_pairing(self, *, user_id: str, device_label: str | None = None) -> tuple[str, float]:
         return self.store.create_pairing_code(

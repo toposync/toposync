@@ -389,6 +389,35 @@ class Services:
         return {"ok": True}
 
 
+def test_capture_passes_dispatch_guard_without_changing_rejection_or_guarding_stop():
+    async def run():
+        camera, _, _, services, _ = environment()
+        await camera.acquire()
+        original = services.call
+
+        def guard():
+            raise PanoramaCaptureError("attention_target_changed_before_dispatch")
+
+        async def call(name, **kwargs):
+            if name == "cameras.control.submit":
+                if kwargs["command"]["kind"] == "stop":
+                    assert "dispatch_guard" not in kwargs
+                else:
+                    assert kwargs["dispatch_guard"] is guard
+                    kwargs["dispatch_guard"]()
+            return await original(name, **kwargs)
+
+        services.call = call
+        camera.dispatch_guard = guard
+        try:
+            with pytest.raises(PanoramaCaptureError, match="attention_target_changed_before_dispatch"):
+                await camera.move_velocity(pan=.1, timeout_s=.1)
+            await camera.stop()
+        finally:
+            await camera.close()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("failure", [None, "capabilities", "cancel"])
 def test_discovery_overlaps_independent_reads_and_drains_them_before_return(failure):
     async def run():
@@ -436,6 +465,38 @@ def test_discovery_overlaps_independent_reads_and_drains_them_before_return(fail
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("change", [None, "configuration", "automation", "control", "cancel"])
+def test_combined_acquisition_refreshes_once_and_preserves_guards(change):
+    async def run():
+        camera, configuration, client, services, _ = environment()
+        await camera.discover()
+        client.get_ptz_status.reset_mock()
+        client.get_ptz_status.return_value = OnvifPtzStatus(pan=.6, tilt=.7, zoom=None)
+        camera.lease = {"lease_id": "attention", "fence": 9}
+        services.active = camera.lease.copy()
+        if change == "configuration":
+            configuration["devices"][0]["onvif"]["xaddr"] = "http://replacement"
+        elif change == "automation":
+            camera._read_motion_automation = AsyncMock(return_value={"auto_tracking": True, "automatic_return": False})
+        elif change == "control":
+            services.active = {"lease_id": "other", "fence": 10}
+        elif change == "cancel":
+            client.get_ptz_status.side_effect = asyncio.CancelledError()
+        try:
+            if change:
+                with pytest.raises(asyncio.CancelledError if change == "cancel" else PanoramaCaptureError):
+                    await camera.acquire_with_capabilities()
+            else:
+                result = await camera.acquire_with_capabilities()
+                assert result["position"]["pan"] == .6
+                client.get_ptz_status.assert_awaited_once()
+                assert services.calls[-1][0] == "cameras.control.snapshot"
+            assert not any(name in {"cameras.control.acquire", "cameras.control.submit"} for name, _ in services.calls)
+        finally:
+            await camera.close()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("change", ["pose", "configuration", "automation", "automation_unavailable"])
 def test_prepared_discovery_refreshes_dynamic_readings_and_rejects_changed_binding(change):
     async def run():
@@ -461,6 +522,60 @@ def test_prepared_discovery_refreshes_dynamic_readings_and_rejects_changed_bindi
         if change.startswith("automation"):
             assert result["motion_automation"]["auto_tracking"] is (True if change == "automation" else None)
         assert services.calls == []
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("change", [None, "expired", "clock_reversed", "source", "configuration", "control_lost", "unclosed", "automation"])
+def test_attention_reuses_only_closed_fresh_metadata_and_reads_current_state(monkeypatch, change):
+    async def run():
+        clock = [100.0]
+        monkeypatch.setattr("toposync_ext_cameras.panorama_capture.time.monotonic", lambda: clock[0])
+        previous, configuration, client, services, capture = environment()
+        await previous.acquire()
+        previous._capture_lease = SimpleNamespace(lease_id="capture")
+        if change != "unclosed":
+            await previous.close()
+        current = PanoramaCamera(camera_id="camera", source_id="other" if change == "source" else "wide",
+            owner_id="next", services=services, capture_service=capture,
+            dependencies=previous.dependencies, resolve_onvif=previous.resolve_onvif,
+            borrowed_control={"lease_id": "attention", "fence": 9})
+        services.active = {"lease_id": "other" if change == "control_lost" else "attention", "fence": 9}
+        clock[0] = 131.0 if change == "expired" else 99.0 if change == "clock_reversed" else 110.0
+        try:
+            reused = current.reuse_discovery_from(previous)
+            assert reused is (change not in {"expired", "clock_reversed", "source", "unclosed"})
+            assert current._capture_lease is None and current._renewal is None
+            assert current.lease == {"lease_id": "attention", "fence": 9}
+            if not reused:
+                assert current._capabilities is None
+                return
+            if change == "configuration":
+                configuration["devices"][0]["onvif"]["xaddr"] = "http://replacement"
+                with pytest.raises(PanoramaCaptureError, match="camera_configuration_changed"):
+                    await current.acquire()
+                return
+            client.get_ptz_status.return_value = OnvifPtzStatus(pan=.6, tilt=.7, zoom=None)
+            if change == "automation":
+                current._read_motion_automation = AsyncMock(return_value={"auto_tracking": True, "automatic_return": False})
+                with pytest.raises(PanoramaCaptureError):
+                    await current.acquire()
+                assert current._automation["auto_tracking"] is True
+                assert not any(name == "cameras.control.submit" for name, _ in services.calls)
+                return
+            if change == "control_lost":
+                with pytest.raises(PanoramaCaptureError, match="control_lost"):
+                    await current.acquire()
+                return
+            await current.acquire()
+            assert current._capabilities["position"]["pan"] == .6
+            assert previous._capabilities["position"]["pan"] == .2
+            assert client.get_profiles.await_count == 1
+            assert client.get_ptz_capabilities.await_count == 1
+            assert current._discovered_monotonic == 100.0
+            assert not any(name == "cameras.control.submit" for name, _ in services.calls)
+        finally:
+            await current.close()
+            await previous.close()
     asyncio.run(run())
 
 
@@ -845,6 +960,22 @@ def test_direct_fallback_is_exact_profile_ephemeral_and_does_not_forge_media_tim
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("source_fps, expected", [(None, 12.0), (5, 12.0), (25, 25.0), (60, 60.0)])
+def test_physical_capture_retains_source_rate_against_snapshot_demand(source_fps, expected):
+    async def run():
+        camera, configuration, _, _, capture = environment()
+        if source_fps is not None:
+            configuration["devices"][0]["sources"][0]["video"]["fps"] = source_fps
+        before = copy.deepcopy(configuration)
+        try:
+            await camera.frame(timeout_s=.05)
+            assert capture.requests[0].fps == expected
+            assert configuration == before
+        finally:
+            await camera.close()
+    asyncio.run(run())
+
+
 def test_frame_identity_distinguishes_capture_instances_with_reused_counters():
     async def run():
         camera, _, _, _, capture = environment()
@@ -1192,6 +1323,50 @@ def test_destination_capacity_preserves_original_and_creates_each_role_once(maxi
             assert len({item["idempotency_key"] for item in creations}) == len(creations)
         finally:
             await camera.close()
+    asyncio.run(run())
+
+
+def test_new_return_session_does_not_reuse_removed_preset_operation():
+    async def run():
+        first, _, _, services, _ = environment()
+        original_call = services.call
+        operations = {}
+
+        async def call(name, **kwargs):
+            if name == "cameras.ptz.set_preset":
+                key = kwargs["idempotency_key"]
+                if key in operations:
+                    from fastapi import HTTPException
+                    if operations[key] not in services.presets:
+                        raise HTTPException(409, "Preset created by this Idempotency-Key was removed")
+                    return operations[key]
+                result = await original_call(name, **kwargs)
+                operations[key] = result
+                return result
+            return await original_call(name, **kwargs)
+
+        services.call = call
+        second, _, _, _, _ = environment()
+        second.services = services
+        intents = []
+
+        async def persist(value):
+            intents.append(value)
+
+        for camera in (first, second):
+            await camera.acquire()
+            camera._capabilities["absolute_supported"] = False
+            try:
+                saved = await camera.save_return(before_create=persist)
+                assert await camera.save_return(before_create=persist) == saved
+                await camera.remove_return(saved)
+            finally:
+                await camera.close()
+        assert len(operations) == 2
+        assert len(intents) == 2
+        assert {item["idempotency_key"] for item in intents} == set(operations)
+        assert services.presets == []
+
     asyncio.run(run())
 
 
@@ -1674,3 +1849,21 @@ def test_all_motion_acquisitions_require_current_automation_qualification(observ
         finally:
             await camera.close()
     asyncio.run(run())
+
+
+def test_velocity_update_uses_its_fresh_guard_without_replacing_initial_guard():
+    async def scenario():
+        camera, _, _, services, _ = environment()
+        await camera.acquire()
+        try:
+            initial, fresh = lambda: None, lambda: None
+            camera.dispatch_guard = initial
+            await camera.move_velocity(pan=.05, dispatch_guard=fresh)
+            submit = [kwargs for name, kwargs in services.calls if name == "cameras.control.submit"][-1]
+            assert submit["dispatch_guard"] is fresh and camera.dispatch_guard is initial
+            await camera.move_velocity(pan=.1)
+            submit = [kwargs for name, kwargs in services.calls if name == "cameras.control.submit"][-1]
+            assert submit["dispatch_guard"] is initial
+        finally:
+            await camera.close()
+    asyncio.run(scenario())

@@ -166,7 +166,8 @@ function selectedStreamHarness() {
   const reducer = ["asRecord", "notificationMatchesDataFilter", "upsertNotificationInState"].map(name => source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source)).join("\n");
   let state = { byId: {}, visibleIds: [] }, lease = null, resolveHistory, eventSource, timerId = 0;
   const timers = new Map();
-  const app = { AbortController, console: { warn() {} }, backendAvailable: true, activeNotificationId: "selected",
+  const invalidations = [];
+  const app = { AbortController, Event, window: { dispatchEvent: event => invalidations.push(event.type) }, console: { warn() {} }, backendAvailable: true, activeNotificationId: "selected",
     withoutEphemeralImage, notificationMatchesFilter: () => true, sortNotificationIdsByCreatedDesc: ids => [...ids],
     notificationsFilterRef: { current: {} }, activeImageSessionRef: { current: null }, activeNotificationFetchAbortRef: { current: null },
     setNotificationsState: updater => { state = updater(state); },
@@ -186,7 +187,7 @@ function selectedStreamHarness() {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText, app);
   const cleanup = app.executeEffect();
-  return { app, cleanup, timers, eventSource, state: () => state, lease: () => lease,
+  return { app, cleanup, timers, eventSource, invalidations, state: () => state, lease: () => lease,
     history: n => resolveHistory(n), send: n => eventSource.onmessage({ data: JSON.stringify({ notification: n }) }) };
 }
 
@@ -217,6 +218,56 @@ test("actual selected SSE effect drops malformed/oversized events and global CLO
   h.app.upsert(closed, "update"); assert.equal(h.lease(), null);
   h.send(notification(4)); assert.equal(h.lease(), null);
   h.cleanup();
+});
+
+test("selected stream invalidation clears pixels and tells the global history to discard pending reads", () => {
+  const h = selectedStreamHarness(); h.send(notification()); assert.ok(h.lease());
+  h.eventSource.onmessage({ data: JSON.stringify({ op: "invalidate", notification_id: "selected" }) });
+  assert.equal(h.lease(), null);
+  assert.deepEqual(h.invalidations, ["toposync:activity-changed"]);
+  h.cleanup();
+});
+
+test("global stream invalidation cancels stale reads and coalesces resync without a retry loop", () => {
+  const source = ts.createSourceFile("App.tsx", fs.readFileSync(path.resolve(__dirname, "../src/ui/App.tsx"), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let effect;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "useEffect"
+      && node.arguments[0]?.getText(source).includes('new EventSource(resolveToposyncUrl("/api/notifications/stream"))')) effect = node.arguments[0].getText(source);
+    ts.forEachChild(node, visit);
+  }
+  visit(source); assert.ok(effect);
+  const reads = [new AbortController(), new AbortController(), new AbortController()];
+  const listeners = new Map(), timers = new Map();
+  let stream, timerId = 0, abortedLists = 0, clearedPixels = 0, revision = 0;
+  let state = { byId: { private: {} }, visibleIds: ["private"] }, selected = "private", history = {};
+  const app = {
+    backendAvailable: true, console: { warn() {} },
+    EventSource: class { constructor() { stream = this; } close() { this.closed = true; } },
+    window: { addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) },
+    resolveToposyncUrl: value => value,
+    abortNotificationListRequests: () => { abortedLists++; },
+    activeNotificationFetchAbortRef: { current: reads[0] }, activeNotificationRefreshAbortRef: { current: reads[1] }, historySourceRead: { current: reads[2] },
+    activeImageSessionRef: { current: { clear() { clearedPixels++; } } },
+    setNotificationsState: value => { state = value; }, setHistorySource: value => { history = value; }, setActiveNotificationId: value => { selected = value; },
+    notificationsFilterRef: { current: {} }, notificationsResolvedOnServerRef: { current: false },
+    notificationHistoryRefreshMode: () => "automatic",
+    setNotificationsSyncRevision: update => { revision = update(revision); },
+    setTimeout: (fn, delay) => { assert.equal(delay, 500); timers.set(++timerId, fn); return timerId; },
+    clearTimeout: id => timers.delete(id),
+  };
+  vm.runInNewContext(ts.transpileModule(`this.executeEffect = ${effect}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, app);
+  const cleanup = app.executeEffect();
+  stream.onmessage({ data: '{"op":"invalidate"}' });
+  listeners.get("toposync:activity-changed")();
+  assert.ok(reads.every(read => read.signal.aborted));
+  assert.equal(abortedLists, 2); assert.equal(clearedPixels, 2);
+  assert.equal(JSON.stringify(state), '{"byId":{},"visibleIds":[]}'); assert.equal(selected, null); assert.equal(history, null);
+  assert.equal(timers.size, 1);
+  const callback = [...timers.values()][0]; timers.clear(); callback();
+  assert.equal(revision, 1); assert.equal(timers.size, 0);
+  stream.onerror({}); assert.equal(timers.size, 0, "disconnect clears without starting polling");
+  cleanup(); assert.equal(stream.closed, true); assert.equal(listeners.size, 0);
 });
 
 for (const [name, mutate] of [

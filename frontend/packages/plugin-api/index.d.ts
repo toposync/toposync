@@ -129,6 +129,9 @@ export type Notification3DOverlay = {
 };
 
 export type Notification2DPin = {
+  /** Selected event image, using the same observation as the spatial anchor. */
+  image?: { url: string; anchor: [number, number] };
+  companions?: ReadonlyArray<{ x: number; z: number; image: { url: string; anchor: [number, number] } }>;
   /** World-space anchor coordinates. The pin tip lands here. */
   x: number;
   z: number;
@@ -211,10 +214,31 @@ export type PipelineReviewPanel = {
   render: (graph: unknown) => import("react").ReactNode;
 };
 
+/** Evidence for prepared pixels; receipt time does not certify physical exposure. */
+export type PipelineReferenceEvidence = {
+  source_identity: string;
+  preparation_revision: string;
+  sample: { capture_instance: string; generation: number; sequence: number };
+  observed_at: number;
+  freshness_basis: "capture" | "receipt";
+  historical_fallback: false;
+  prepared_region: boolean;
+};
+
+export type PipelineReferenceFrame = { blob: Blob; evidence: PipelineReferenceEvidence; receipt: string };
+
+export type PipelineReferenceCapture =
+  | { available: true; capture: (signal?: AbortSignal) => Promise<PipelineReferenceFrame>;
+      /** Optional upstream graph snapshot for isolated extension tests; never includes downstream destinations. */
+      inputPipeline?: unknown }
+  | { available: false; reason: "read_only" | "remote_execution" | "invalid_graph" | "no_camera_source" | "no_camera_selected" | "no_pipeline_name" };
+
 export type PipelineOperatorPanel = {
   id: string;
   operatorId: string;
   placement?: "replace" | "after";
+  renderSummary?: (config: Record<string, unknown>) => import("react").ReactNode;
+  renderStatus?: (status: Record<string, unknown>) => import("react").ReactNode;
   render: (args: {
     i18n: HostI18n;
     operatorId: string;
@@ -223,8 +247,15 @@ export type PipelineOperatorPanel = {
     /** Execution host chosen by this pipeline; older hosts may omit this field. */
     processingServerId?: string;
     cameraId?: string;
+    /** Optional host capability. Pending captures abort when this step or its inputs change. */
+    referenceCapture?: PipelineReferenceCapture;
     config: Record<string, unknown>;
     showAdvanced: boolean;
+    purpose?: "automatic" | "manual";
+    sources?: Array<{ camera_id: string; source_id: string; camera_name: string; source_name: string }>;
+    observationCategories?: string[];
+    observationCapability?: string;
+    onValidityChange?: (valid: boolean) => void;
     updateConfig: (patch: Record<string, unknown>) => void;
     replaceConfig: (next: Record<string, unknown>) => void;
   }) => import("react").ReactNode;
@@ -484,6 +515,89 @@ export type LiveViewPlayerProps = {
   context?: "thumbnail" | "large" | "fullscreen" | "pip" | "ptz" | "spatial_map";
   className?: string;
   style?: import("react").CSSProperties;
+};
+
+/** Allowlisted passive inspection. A complete snapshot replaces previous state. */
+export type InspectionRaster = {
+  index: number;
+  width: number;
+  height: number;
+  sampling: "nearest_pixel_centres";
+};
+
+export type InspectionVisual = {
+  layer: string;
+  kind: "points" | "polyline" | "polygon" | "raster";
+  points: Array<number[] | null>;
+  connections: number[][];
+  label: string | null;
+  subject_id: string | null;
+  local_id: string | null;
+  segment_id: string | null;
+  state: string | null;
+  sample_sequences: number[];
+  score: number | null;
+  score_kind: string | null;
+  raster: InspectionRaster | null;
+  access_scope: string;
+  properties: Record<string, string | number>;
+  related_subject_ids: string[];
+};
+
+export type InspectionNode = {
+  node_id: string;
+  physical_node_id: string;
+  received_from: { physical_node_id: string; producer_epoch: string } | null;
+  operator: string;
+  state: "waiting" | "received" | "started" | "analyzed" | "passed" | "filtered" | "emitted" | "delivered" | "dropped" | "error" | "expired" | "closed" | "completed";
+  reason: string | null;
+  sequence: number;
+  producer_epoch: string;
+  frame: Record<string, unknown> | null;
+  detections: Array<{ box: number[]; label: string; score: number; score_kind: string }>;
+  visuals: InspectionVisual[];
+  geometry: Record<string, unknown> | null;
+  motion: Record<string, number> | null;
+  expires_at: number | null;
+  image_available: boolean;
+  image_sequence: number | null;
+  received_count: number;
+  produced_count: number;
+  filtered_count: number;
+  processing_ms: number | null;
+  model_id: string | null;
+};
+
+export type InspectionDelivery = {
+  physical_edge_id: string;
+  producer_epoch: string;
+  source_node_id: string;
+  source_port: string;
+  target_node_id: string;
+  target_port: string;
+  state: "accepted" | "received" | "dropped" | "timeout" | "canceled" | "expired";
+  sequence: number;
+  frame: Record<string, unknown> | null;
+  expires_at: number | null;
+  accepted_count: number;
+  received_count: number;
+  rejected_count: number;
+};
+
+export type InspectionSnapshot = {
+  session: string;
+  pipeline: string;
+  revision: string;
+  sequence: number;
+  nodes: InspectionNode[];
+  deliveries: InspectionDelivery[];
+  dropped: number;
+  alignment: "analyzed_frame_only";
+  data_class: "diagnostic_private";
+  access_scope: "owner";
+  policy_revision: string | null;
+  previous_sequence: number | null;
+  gap: boolean;
 };
 
 export type NavigableViewportPoint = { x: number; y: number };

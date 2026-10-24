@@ -400,6 +400,7 @@ class CameraCaptureService:
         if not math.isfinite(bounded_interval) or not 0.02 <= bounded_interval <= 1.0:
             raise ValueError("Capture observation interval must be between 0.02 and 1 second")
 
+        requested_monotonic = time.monotonic()
         lease = await self.open(request, dependencies)
         started_monotonic = time.monotonic()
         started_at = time.time()
@@ -410,6 +411,7 @@ class CameraCaptureService:
         released = False
         terminal_metrics: dict[str, Any] = {}
         terminal_health: dict[str, Any] = {}
+        first_frame_elapsed = None
         try:
             while time.monotonic() < deadline:
                 frame = await self.get_latest(lease.lease_id, min_frame_ts=last_frame_ts)
@@ -429,10 +431,13 @@ class CameraCaptureService:
                     and identity[2] > 0
                     and identity != last_identity
                 ):
+                    if first_frame_elapsed is None:
+                        first_frame_elapsed = time.monotonic() - requested_monotonic
                     observed.append(
                         {
                             "offset_seconds": round(max(0.0, time.monotonic() - started_monotonic), 4),
                             "published_at": round(float(frame.frame_ts or 0.0), 6),
+                            "capture_instance": identity[0],
                             "generation": identity[1],
                             "sequence": identity[2],
                             "width": int(frame.width or 0),
@@ -448,13 +453,21 @@ class CameraCaptureService:
                     break
                 await asyncio.sleep(bounded_interval)
         finally:
+            release_started = time.monotonic()
             await self.release(lease.lease_id)
+        finished_monotonic = time.monotonic()
 
         offsets = [float(item["offset_seconds"]) for item in observed]
         gaps = [later - earlier for earlier, later in zip(offsets, offsets[1:])]
         return {
             "started_at_unix": round(started_at, 6),
-            "duration_seconds": round(max(0.0, time.monotonic() - started_monotonic), 4),
+            "duration_seconds": round(max(0.0, finished_monotonic - started_monotonic), 4),
+            "timing_clock": "process_monotonic",
+            "open_elapsed_seconds": round(max(0.0, started_monotonic - requested_monotonic), 4),
+            "first_frame_elapsed_seconds": round(first_frame_elapsed, 4) if first_frame_elapsed is not None else None,
+            "observation_elapsed_seconds": round(max(0.0, release_started - started_monotonic), 4),
+            "release_elapsed_seconds": round(max(0.0, finished_monotonic - release_started), 4),
+            "request_elapsed_seconds": round(max(0.0, finished_monotonic - requested_monotonic), 4),
             "requested_duration_seconds": bounded_duration,
             "sample_interval_seconds": bounded_interval,
             "released_while_observing": released,

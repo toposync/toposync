@@ -343,6 +343,31 @@ def test_visual_mapping_localizes_exact_frame_once_for_all_detections_without_nu
         assert result.payload["vision"][kind][0]["world_anchor"] == pytest.approx({"x": 3, "z": 0})
 
 
+def test_mapping_delivers_same_frame_geometry_for_subject_extent_without_projecting_head_to_ground():
+    import numpy as np
+    from toposync_ext_ptz_attention.framing import observe_framing
+    from toposync_ext_ptz_attention.models import AttentionTarget
+
+    def change(packet):
+        packet.payload["capture_evidence"]["published_at"] = 1000.
+        packet.artifacts["main"].metadata["image_geometry"]["capture_evidence"] = dict(packet.payload["capture_evidence"])
+        packet.payload["subject"] = {"bbox01": [.4, .4, .6, .5]}
+        return packet
+
+    localizations = []
+    result, calls = _visual_runtime_case(change_packet=change, mutate=localizations.append)
+    assert len(calls) == 1, "Framing must not run another localization or consult current device pose"
+    localizations[0]["rotation_matrix"][0][0] = 2
+    assert result.payload["mapping"]["visual_localization"]["rotation_matrix"][0][0] == 1
+    observation = observe_framing(result, result.payload["subject"]["bbox01"],
+        AttentionTarget(world_anchor=result.payload["world_anchor"]))
+    expected = np.array([1.1, 0, -.9])
+    expected /= np.linalg.norm(expected)
+    assert observation.panorama.center_ray == pytest.approx(expected)
+    assert observation.panorama.job_id == "panorama-one" and observation.panorama.revision == 3
+    assert result.payload["world_anchor"] == pytest.approx({"x": 3, "z": 0})
+
+
 @pytest.mark.parametrize("field,value", [("capture_evidence", {}), ("source_artifact_id", "different"), ("geometry_digest", "different"), ("revision", 4), ("source_id", "different")])
 def test_visual_mapping_rejects_cross_frame_or_cross_geometry_evidence(field, value):
     result, _ = _visual_runtime_case(mutate=lambda response: response.update({field: value}))
@@ -449,6 +474,67 @@ def test_mapped_detection_metadata_survives_installed_tracker():
         assert track["world_anchor"] == pytest.approx({"x": x, "z": 0}, abs=1e-8)
         assert track["metadata"]["world_projection"]["extrapolated"] is extrapolated
         assert track["metadata"]["world_projection"]["panorama_revision"] == job["revision"]
+
+
+@pytest.mark.parametrize("category", ["person", "car"])
+def test_moving_subject_keeps_world_trail_while_camera_rotates(category):
+    import numpy as np
+    import time
+    from toposync.runtime.pipelines.spatial_history import SpatialHistory
+    from toposync_ext_cameras.processing.panorama_mapping import map_world_to_ray, ray_to_image_pixel
+    from toposync_ext_vision.processing.tasks.tracking import VisionTrackRuntime
+
+    class Context:
+        async def run_blocking(self, function, /, *args, **kwargs):
+            kwargs.pop("concurrency_key", None)
+            return function(*args, **kwargs)
+
+    async def scenario():
+        tracker = VisionTrackRuntime({"tracker_id": "byte_world", "use_world_anchor": "always",
+            "default_interval_seconds": 0, "world_match_distance_meters": 3}, PipelineRuntimeDependencies())
+        history, identities, image_points = SpatialHistory(), set(), []
+        expected = [(3., 0.), (3.3, .2), (3.6, .4)]
+        started = time.time() - 1.5
+        for index, ((x, z), yaw) in enumerate(zip(expected, [0, .15, -.15], strict=True)):
+            angle = -math.pi / 4
+            rotation = np.array([[math.cos(yaw), -math.sin(yaw), 0],
+                [math.sin(yaw), math.cos(yaw), 0], [0, 0, 1]]) @ np.array([
+                [1, 0, 0], [0, math.cos(angle), -math.sin(angle)], [0, math.sin(angle), math.cos(angle)]])
+            job = _job()
+            pixel = ray_to_image_pixel(map_world_to_ray(job["solution"], x, z),
+                job["profile"]["lens"], rotation_matrix=rotation)
+            assert pixel is not None
+            u, v = pixel[0] / 100, pixel[1] / 100
+            image_points.append((u, v))
+
+            def update_packet(packet):
+                packet.payload["capture_evidence"]["sequence"] += index
+                packet.payload["capture_evidence"]["published_at"] = started + index * .5
+                packet.artifacts["main"].metadata["image_geometry"]["capture_evidence"] = dict(packet.payload["capture_evidence"])
+                packet.payload.update(frame_ts=started + index * .5, media={"ts": started + index * .5,
+                    "width": 101, "height": 101},
+                    pan_tilt_zoom_state={"geometry_safe": False, "move_status": "MOVING"},
+                    vision={"detections": [{"label": category, "label_id": 0, "score": .95,
+                        "model_id": "synthetic", "bbox01": [u-.04, v-.15, u+.04, v]}]})
+                return packet
+
+            # Mapping is exercised synchronously outside this tracker's event loop below.
+            mapped, _ = await asyncio.to_thread(_visual_runtime_case,
+                mutate=lambda result: result.update(rotation_matrix=rotation.tolist()),
+                change_packet=update_packet)
+            outputs = await tracker.process_packet(mapped, Context())
+            assert len(outputs) == 1
+            output = outputs[0]
+            identities.add(output.payload["subject"]["id"])
+            assert output.payload["subject"]["world_anchor"] == pytest.approx({"x": x, "z": z})
+            history.observe(output)
+        assert len(identities) == 1
+        assert len(set(image_points)) == 3
+        trail = history.snapshot()["trails"][0]
+        np.testing.assert_allclose([(p["x"], p["z"]) for p in trail["points"]], expected, atol=1e-8)
+        assert not history.snapshot()["had_mapping_gaps"]
+
+    asyncio.run(scenario())
 
 
 def _static_runtime_case(change=None):

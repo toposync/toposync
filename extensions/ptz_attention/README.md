@@ -12,11 +12,111 @@ boxes and legacy preferred destinations are rejected. Resolving through
 `cameras.panorama.resolve_target` is read-only and returns a normalized ray bound
 to source, composition, element, job and revision.
 
-`shadow` records decisions with zero motor commands. Optional discrete following
+The operator also preserves a subject's image box as `framing_observation` when
+its source, capture and image transformation are known. Ground coordinates remain
+the region/routing anchor. Status and decision details expose `observed_framing` with
+the box in the original source, extent, margin, boundary contact, publication age
+and whether it belongs to the selected source. An update without this evidence
+clears the current observation. Contact with a crop boundary remains visible even
+when the recovered box is inside the original image. This observation does not
+certify arrival, subject completeness or association with another lens. A single
+subject box is not used as evidence for a world-space group envelope.
+
+For `group_event`, an observed union is available only when every declared member
+is active and represented once, the world envelope count agrees, and all boxes
+have the same source, capture, pixel transform and visual localization. The group
+operator preserves each member's image provenance without storing extra pixels.
+Framing unions actual member boxes, not the padded display box, and carries
+`member_event_ids`; membership changes reset the sampled continuity. Missing,
+older, private or incompatible member evidence leaves the group observation
+unavailable instead of reducing the membership count. Different frames or
+transforms do not enter this synchronous path, which does not certify physical
+framing or independent identity.
+
+For asynchronous groups, `group_framing` carries each declared active member's
+own capture, image extent and panorama directions. Every member must be available,
+bound to the same optical reference and capture epoch; differing crops/resizes
+are reconstructed through their own pixel transforms. Conflicting poses for one
+capture, missing members and unknown geometry are rejected. The angular center
+comes from an envelope of all member corners in a common viewing hemisphere,
+without averaging ground anchors into a body target. This is a temporal estimate,
+not a simultaneous image box; `estimated_group_framing` reports individual ages
+separately from `observed_framing`.
+
+The oldest member controls freshness. New evidence from another member cannot
+extend its lifetime, remove it silently, rewind its capture or mutate an accepted
+frame. Navigation rechecks every member's age/reference and angular coverage before
+following pulses. Missing or expired members use the same stopped-grace/reacquisition
+path as lost single-subject framing. Group velocity prediction is disabled because
+one updated member is not a new simultaneous group observation. Arrival projects
+every member's historical corners into the stopped image and records failures
+without dropping members; it does not certify current visibility or association
+in a second lens. A group outside one viewing hemisphere is unavailable, and the
+current fixed-lens controller cannot make an oversized group fit by changing zoom.
+For panorama attention, the pipeline declares expected member identifiers for
+`group_event` even before framing is available. An incomplete group remains
+unresolved without acquiring control or faulting; a complete fresh update can
+start candidate confirmation. Missing metadata, a smaller list or replacement
+identifiers cannot downgrade that event into a point request. Newly requested
+members remain expected during grace, separately from the last qualified position.
+Malformed or absent member declarations mean an unknown group awaiting evidence,
+not an anonymous point. No additional user setting is required. Explicit generic
+world-point/envelope requests retain their existing pointing behavior; that is not
+group-framing acceptance.
+
+Once following has accepted panorama-bound framing, losing that evidence expires
+the current observation even if a ground anchor remains available. Acquisition
+uses the existing cancellation and verified-Stop path before grace; incomplete
+updates cannot extend that grace or reacquire using only the ground point. A fresh
+complete observation must pass candidate confirmation again. This also applies
+to individual subjects. Events that only supplied ground targets retain their
+existing behavior; historical framing retained during grace is not current proof.
+
+Per-event `observed_framing.continuity` counts distinct accepted observations and
+their publication-time span. It requires the selected source, publication age at
+most one second, no crop boundary contact and a diagnostic margin of five percent
+on each side. Missing/rejected evidence, closure, sample/delivery gaps over one
+second, or capture/geometry changes interrupt the span. Polling does not extend it;
+expired evidence reports zero. Ordinary camera pose changes do not reset it.
+This is a sampled box diagnostic, not continuous visibility, a verified identity,
+physical exposure timing or a campaign success percentage. It does not change
+movement admission or promote a projected box into a new observation.
+
+When visual mapping supplies the same frame's calibrated lens and rotation,
+the observation also carries the center and corner directions in panorama space,
+bound to mapping revision, source artifact and geometry digest. It uses the
+original image transformation and never substitutes current device pose or
+projects the subject's upper body onto the ground. Missing or incompatible
+geometry leaves the image observation available without panorama directions.
+The navigator can aim at this observed center while retaining the ground anchor
+for region validation and the returned destination. It checks the exact optical
+reference, center/corner support and observation age before navigation and before
+subsequent pulses, using the profile's existing following observation timeout.
+Frame updates at an unchanged target refresh evidence without requesting another
+approach. For fixed-lens navigation, changing only the observed extent also
+refreshes evidence without another approach to the same center. Crop contact
+remains reported; coalescing commands does not certify coverage or that the subject
+fits. Navigation still validates the current reference and corner coverage. A different center
+still requires following. Missing, expired or incompatible evidence during framed following stops
+that navigation; it never silently switches to aiming at the feet. Return uses
+only its own reference and rejects subject framing. These checks do not certify
+full subject visibility, group framing or association with another lens.
+
+When a target changes during image matching, the navigator can project its updated
+direction through the same fresh, stopped camera pose if held-out localization
+quality and capture identity still qualify it. This avoids waiting for the subject
+to stop updating. The measurement is labeled `projected_with_same_stopped_frame`;
+it is not a new detection in that frame. Invalid or changed camera observations
+require reobservation. Navigation reports `target_rebases` and `target_replans`.
+Bounded motion prediction can guide corrections from recent directions and
+observed cycle timing; arrival still uses the observed target. Synthetic reversals
+show a recovery cost, and physical moving-target acceptance remains pending.
+
+`shadow` records decisions with zero motor commands. Optional following
 uses fresh `capture_evidence`, stable capture instance/generation and increasing
 sequence/publication time to confirm target changes. Minimum dwell, movement
 budget, hard timeout and stale timeout remain active. Manual ownership interrupts
-preview and requires explicit resumption. It is not continuous motor tracking.
+preview and requires explicit resumption.
 
 `live_panorama` dispatches `cameras.panorama.navigate_attention` under the existing
 attention lease, without a second acquisition or new presets. Zoom stays fixed.
@@ -26,10 +126,41 @@ epoch. Cancellation drains navigation before fenced cleanup. Manual takeover
 never triggers a return. Interrupted sessions remain faulted until explicit,
 qualified recovery; process restart never guesses a movement.
 
+With `follow_view_updates`, `live_panorama` supplies the latest qualified ray to
+the visual navigator during an approach. `follow_interval_seconds` limits new
+approaches; `follow_observation_timeout_seconds` stops corrections when images
+expire. A fresh observation can restart confirmation after temporary loss;
+explicit CLOSE and changed capture generations cannot reopen that event.
+Higher-priority events cancel and drain the previous approach before taking
+control. This is bounded visual feedback, with physical latency dependent on
+capture, localization and the device's observed response.
+
+Serial panorama attention operations may reuse protocol discovery for up to
+30 seconds under the same lease, fence, source, mapping and geometry revision.
+Only a successfully stopped and closed operation supplies this metadata. Each
+operation still refreshes pose and native automation, checks current configuration
+and ownership, and obtains a new stopped image. The original discovery age is
+preserved across reuse; failures discard the entry. No control lease, capture
+consumer, image or Stop receipt is copied. `discovery_reused` in the navigation
+trace identifies the optimization; it does not certify a physical latency gain.
+Successful stopped operations can retain their measured local motor response in
+memory for up to five minutes, bound to the exact optical identity and panorama
+revision. Fresh localization invalidates an axis response beyond 15 degrees of
+view change. Reuse never substitutes for fresh arrival evidence, extends its own
+expiry, or survives a process restart. Uncertain stop or navigation failures
+discard it; observation expiry does not qualify a new response.
+
 Software tests do not qualify hardware. Live attention requires an exact private
 qualification record for the mapping revision, source identity, composition,
 source artifact and geometry, with independently verified arrival and return.
-This delivery does not create that record or promote cameras automatically.
+An explicitly requested
+`POST /api/cameras/cameras/{camera_id}/panorama/{job_id}/qualify-attention`,
+with `revision`, `home` and a distinct `target` in world coordinates, performs a
+supervised home→target→home trip. Only observed movement, arrival within 12
+pixels, home/return within 3 pixels and confirmed Stop can produce the record.
+Failure or cancellation removes qualification. Reads never qualify a device.
+Qualification of one source does not certify a second zoom lens or moving-target
+performance; both need observed image evidence.
 
 Settings > PTZ Attention creates panorama profiles by default. Previous view
 profiles and direct operator configurations remain available for explicit review.
@@ -37,3 +168,72 @@ Migrating a profile clears old destination choices in the editor; source mapping
 region and return must be selected and saved. Existing data is not inferred or
 rewritten during reads. SQLite retains profiles, decisions, sessions and recovery
 markers; runtime events remain in memory.
+
+Decision timing distinguishes event observation age (`event_to_decision_ms`, a
+wall-clock age of the latest intent) from elapsed controller time. It is not
+detector processing time or camera exposure latency. `candidate_elapsed_ms`
+starts when a valid candidate request enters the controller and survives UPDATE
+and reconfirmation; it includes resolution, selection waits and arbitration after
+the device lock is acquired. It does not include time waiting for that lock.
+`candidate_confirm_seconds` reports the configured confirmation wait, not a
+measured duration to subtract from that total. A fresh candidate after observation
+expiry starts a new interval. `command_elapsed_ms` starts at navigation dispatch,
+after lease acquisition, and includes preparation and verification, not just motor
+travel. These elapsed intervals use the controller's monotonic clock.
+
+Only verified arrival produces `candidate_to_arrival_ms` and
+`command_to_arrival_ms`; repeated arrivals for an existing candidate retain its
+original candidate interval. Fault decisions retain the interrupted command's
+identifier and event key and never imply arrival. Shadow decisions have no physical
+arrival metrics. Missing or interrupted acquisitions must remain failures or
+incomplete samples in an evaluation, never be dropped from the denominator.
+
+The existing session journal retains the mode, source, panorama binding, initial
+capture evidence and command identifier. Verified focus stores its decision
+identifier and timing before the session ends. `arrival_verified` describes event
+acquisition; `return_verified` is separate and requires a confirmed physical
+return. Shadow never sets either flag. Ending a session merges evidence instead
+of discarding it, so pause, preemption, fault and shutdown remain evaluable.
+`session_elapsed_ms` includes holding and cleanup; it is not acquisition latency.
+Decisions and sessions identify their controller monotonic `clock_scope`.
+On restart, open sessions retain their last evidence and end as
+`process_restarted`; no elapsed duration is invented across clock scopes. The
+physical recovery requirement is immutable through diagnostic updates. These
+records do not establish camera exposure time or independently certify tracking.
+
+### Bounded campaigns
+
+Profiles may set `campaign_ends_at` to a finite positive Unix timestamp, also
+editable as a local date and time in the policy form. Omitting it retains the
+existing continuous profile behavior. The end time is persisted; a monotonic
+budget within the running controller prevents clock rollback, UPDATE or pause
+from extending that campaign. Each physical acquisition passes its remaining
+budget as `maximum_duration_s` to the camera control service. The camera lease
+watchdog enforces that ceiling independently of attention ticks or browser polls.
+
+On expiry the profile is persisted as paused before cleanup, new attention is
+rejected, and Stop/release is attempted. An unconfirmed position or cleanup keeps
+the durable recovery requirement. Resume is refused after expiry, including
+after restart. A deadline does not prove arrival, Stop or return and does not
+retroactively cancel a command already transmitted. Restart has no trustworthy
+cross-process elapsed-time measurement; the persisted end uses civil time and
+existing physical recovery guards remain mandatory.
+
+The explicit **Return home** action remains available for recovery after expiry.
+It receives a separate lease budget of `settle_timeout_seconds`; it does not
+resume the campaign or accept targets. Repeated requests while returning reuse
+that attempt and cannot extend its budget. **Stop return** interrupts it while
+preserving the unconfirmed return. After verified recovery, edit the campaign
+end before resuming. This is a user command, not an automatic post-deadline return.
+Only the authorized return API opts into `allow_expired_recovery`; internal
+pipeline interlocks use the default refusal after expiry.
+
+The controller reserves `settle_timeout_seconds` plus one controller tick before
+the end for return. It pauses new attention and resumes observation of an existing
+return without restarting it, or begins a qualified return when focus was active.
+An idle campaign closes without moving; a delayed acquisition cannot start focus
+inside that reserved window. Late events leave the return state intact. This
+uses the configured operation budget, not a claim that hardware can meet it;
+the hard limit wins if return is still pending. Qualification of device-side motion timeout
+and real Stop/return is still required: process loss or an event-loop stall cannot
+be covered by an in-process watchdog alone.

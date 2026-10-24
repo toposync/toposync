@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import tomllib
-import pytest
 from pathlib import Path
 from types import ModuleType
+
+import pytest
+from packaging.requirements import Requirement
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +37,25 @@ def test_distribution_smoke_uses_shared_frontend_builds(monkeypatch) -> None:
     ]
 
 
+def test_distribution_smoke_accepts_manifest_declared_frontends() -> None:
+    smoke = _load_distribution_smoke_script()
+    payload = [
+        {
+            "id": identifier,
+            "frontend": {"remote_entry_url": smoke.EXPECTED_FRONTEND_REMOTES[identifier]},
+        }
+        if identifier in smoke.EXPECTED_FRONTEND_REMOTES
+        else {"id": identifier}
+        for identifier in smoke.EXPECTED_EXTENSION_IDS
+    ]
+
+    assert smoke._assert_extensions(payload) == sorted(smoke.EXPECTED_FRONTEND_REMOTES.values())
+    vision = next(item for item in payload if item["id"] == "com.toposync.vision")
+    vision.pop("frontend")
+    with pytest.raises(RuntimeError, match="missing frontend metadata"):
+        smoke._assert_extensions(payload)
+
+
 def test_distribution_workflow_validates_extension_wheels() -> None:
     workflow = (ROOT / ".github/workflows/distribution-smoke.yml").read_text(encoding="utf-8")
 
@@ -61,6 +82,22 @@ def test_distribution_smoke_requires_declared_vision_frontend(missing_vision_fro
             smoke._assert_extensions(payload)
     else:
         assert vision_path in smoke._assert_extensions(payload)
+
+
+@pytest.mark.parametrize("bundle", sorted((ROOT / "packages").glob("*/pyproject.toml")))
+def test_bundle_dependencies_accept_current_local_projects(bundle: Path) -> None:
+    manifests = [ROOT / "pyproject.toml", *ROOT.glob("extensions/*/pyproject.toml"),
+                 *ROOT.glob("packages/*/pyproject.toml")]
+    projects = [tomllib.loads(path.read_text())["project"] for path in manifests]
+    versions = {project["name"]: project["version"] for project in projects}
+    project = tomllib.loads(bundle.read_text())["project"]
+    for dependency in project["dependencies"]:
+        requirement = Requirement(dependency)
+        if requirement.name in versions:
+            assert requirement.specifier.contains(versions[requirement.name], prereleases=True), (
+                f"{project['name']} requires {requirement}, but the local version is "
+                f"{versions[requirement.name]}"
+            )
 
 
 def test_ptz_attention_build_configuration_is_sdist_portable() -> None:

@@ -100,6 +100,43 @@ def test_auth_login_logout_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         assert res.status_code == 200
 
 
+def test_signed_media_uses_its_token_without_extension_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from toposync_ext_streaming.api.routes import create_streaming_router
+    from test_streaming_webrtc import _EngineManagerStub, _UrlOpenResponse
+
+    client = _create_client(tmp_path, monkeypatch)
+    client.app.include_router(create_streaming_router())
+    with client:
+        _setup_owner(client)
+        client.app.state.streaming_engine_manager = _EngineManagerStub(data_dir=tmp_path)
+        monkeypatch.setattr(client.app.state.extensions, "auth_routes", lambda: [
+            ext_manager_mod.ExtensionAuthRoute(
+                extension_id="com.toposync.streaming", prefix="/api/streams",
+                action="core:extension:read",
+            )
+        ])
+        created = client.post("/api/streams/transmissions", json={
+            "name": "Signed media", "path": "test",
+            "outputs": [{"id": "hls", "protocol": "hls", "enabled": True}],
+        })
+        assert created.status_code == 200
+        urls = client.get(f"/api/streams/transmissions/{created.json()['id']}/urls")
+        signed_url = urls.json()["outputs"][0]["url"]
+        monkeypatch.setattr(
+            "toposync_ext_streaming.api.routes.urllib_request.urlopen",
+            lambda *args, **kwargs: _UrlOpenResponse(b"#EXTM3U\n"),
+        )
+        client.cookies.clear()
+        for query in ("", "?media_token=invalid"):
+            response = client.get("/api/streams/media/hls/test/index.m3u8" + query)
+            assert response.status_code == 401
+            assert response.json()["detail"] == "media_token_invalid"
+        assert client.get(signed_url).status_code == 200
+        assert client.get("/api/streams/transmissions").status_code == 401
+
+
 def test_event_grant_exclude_overrides_role(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

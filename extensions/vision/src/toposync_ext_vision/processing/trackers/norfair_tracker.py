@@ -185,6 +185,7 @@ class NorfairTrackerBackend:
                     metadata={
                         **dict(detection.metadata or {}),
                         "age": int(getattr(item, "age", 0)),
+                        "observation_state": "detection_associated",
                         "hit_counter": int(getattr(item, "hit_counter", 0)),
                         "last_distance": getattr(item, "last_distance", None),
                     },

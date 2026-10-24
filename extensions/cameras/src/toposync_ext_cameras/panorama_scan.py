@@ -18,11 +18,14 @@ import time
 import uuid
 import zipfile
 from collections import deque
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import cv2
 import numpy as np
+
+from toposync.runtime.pipelines.image_geometry import image_geometry
 
 from .panorama_capture import PanoramaCaptureError
 from .processing.panorama_stability import VisualStabilityDetector
@@ -55,6 +58,7 @@ MAX_FIRST_REFUSAL_BYTES = 64 * 1024**2
 MAX_FIRST_REFUSAL_METADATA_BYTES = 1024**2
 CONTINUOUS_CURSOR_VERSION = 4
 DEFAULT_CONTINUOUS_PULSE_SPEED = 0.1
+MAXIMUM_FOLLOWING_WINDOW_SECONDS = 6.0
 MINIMUM_CONTINUOUS_PULSE_SECONDS = 0.05
 MINIMUM_SEEK_PULSE_SECONDS = 0.12
 UNCONFIRMED_NO_EFFECT_PIXELS = 0.5
@@ -883,7 +887,7 @@ class _AttemptDiagnostic:
             "comparison_count": 0,
             "outcome": "in_progress",
         }
-        if kind == "movement":
+        if kind in {"movement", "return_reference"}:
             self.value["samples"] = []
 
     @staticmethod
@@ -943,7 +947,21 @@ class _AttemptDiagnostic:
             gray = _gray(frame["image"])
             encoded_ok, encoded = cv2.imencode(".png", gray, [cv2.IMWRITE_PNG_COMPRESSION, 1])
             if encoded_ok and self.replay_bytes + encoded.nbytes <= MAX_REPLAY_BYTES and len(self.replay) < 256:
+                evidence = {key: frame["capture_evidence"][key] for key in (
+                    "capture_instance", "generation", "sequence", "published_at",
+                    "received_monotonic", "physical_timestamp_verified", "captured_monotonic",
+                ) if key in (frame.get("capture_evidence") or {})}
+                height, width = frame["image"].shape[:2]
+                geometry = image_geometry(width, height, evidence)
+                horizontal, vertical = width / gray.shape[1], height / gray.shape[0]
+                # Preserve the actual resize, including rounded height and pixel centres.
+                geometry.update(image_size=list(gray.shape[::-1]), to_source=[
+                    [horizontal, 0, (horizontal - 1) / 2],
+                    [0, vertical, (vertical - 1) / 2], [0, 0, 1],
+                ])
                 self.replay.append((encoded, {
+                    "capture_evidence": evidence,
+                    "image_geometry": geometry,
                     "observed_seconds": now - self.start,
                     "received_monotonic": received,
                     "media_time": media,
@@ -981,6 +999,8 @@ class _AttemptDiagnostic:
                     else None
                 ),
             }
+            if self.value["kind"] == "return_reference":
+                sample.update(code=code, sequence=frame.get("sequence"), generation=generation)
             samples = self.value["samples"]
             samples.append(sample)
             if len(samples) > MAX_TELEMETRY_SAMPLES:
@@ -2280,6 +2300,21 @@ def _vertical_band_spacing(
     return reached_by_origin or reached_by_chain, evidence
 
 
+def _exact_velocity_supported(capabilities: dict, velocity: dict) -> bool:
+    spaces = capabilities.get("spaces", {}).get("continuous", [])
+    default = capabilities.get("defaults", {}).get("continuous")
+    selected = [space for space in spaces if space.get("normalized") is True and space.get("uri") == default]
+    if len(selected) != 1:
+        return False
+    for coordinate, value in (("x", velocity["pan"]), ("y", velocity["tilt"])):
+        bounds = selected[0].get(coordinate)
+        minimum = _finite(bounds.get("min")) if isinstance(bounds, dict) else None
+        maximum = _finite(bounds.get("max")) if isinstance(bounds, dict) else None
+        if minimum is None or maximum is None or _finite(value) is None or not minimum <= value <= maximum:
+            return False
+    return True
+
+
 class _Scan:
     def __init__(
         self,
@@ -2294,6 +2329,7 @@ class _Scan:
         self.directory = Path(output_dir).resolve()
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.progress, self.cancelled = progress, cancelled
+        self.replay_storage_guard = lambda: nullcontext(None)
         self.checkpoint = dict(checkpoint or {})
         recorded_policy = self.checkpoint.get("acquisition_policy")
         self.region_policy = region_policy(recorded_policy if recorded_policy is not None else acquisition_policy)
@@ -2354,29 +2390,73 @@ class _Scan:
             return
         identifier = f"replay-{outcome}-{uuid.uuid4().hex}"
 
-        def write() -> None:
-            # Decode one lossless diagnostic at a time, keeping the same NPZ
-            # replay format without a second uncompressed frame collection.
-            # Store without a second compression pass: serialization runs after
-            # the final observation, whose original freshness must be preserved.
-            # Frame count and the encoded in-memory evidence remain bounded.
-            with zipfile.ZipFile(self.directory / f"{identifier}.npz", "w", compression=zipfile.ZIP_STORED) as archive:
-                for index, (encoded, _) in enumerate(attempt.replay):
-                    frame = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
-                    with archive.open(f"frame_{index}.npy", "w") as member:
-                        np.lib.format.write_array(member, frame, allow_pickle=False)
-            _write_json(self.directory / f"{identifier}.json", {
-                "version": 1,
-                "analysis_width": ANALYSIS_WIDTH,
+        def write() -> bool:
+            destination = self.directory / f"{identifier}.npz"
+            temporary = destination.with_suffix(".partial")
+            metadata_path = destination.with_suffix(".json")
+            metadata_temporary = metadata_path.with_suffix(".json.tmp")
+            def discard(path: Path) -> None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass  # A residual file remains counted against the storage budget.
+
+            records = [record for _, record in attempt.replay]
+            metadata = {
+                "version": 1, "analysis_width": ANALYSIS_WIDTH,
                 "started_monotonic": attempt.start,
                 "complete": not attempt.value.get("replay_truncated", False),
                 "scope": "consumed_frames_not_all_decoder_frames",
-                "attempt": attempt.finish(),
-                "frames": [record for _, record in attempt.replay],
-            })
+                "attempt": attempt.finish(), "frames": records,
+            }
+            # PNG bytes in memory do not bound the decoded ZIP_STORED output.
+            # Include metadata, NPY headers and ZIP directory overhead before
+            # admitting each frame; retain only records whose pixels were saved.
+            metadata_reserve = len(json.dumps(metadata, allow_nan=False).encode()) + 4096
+            retained = []
+            try:
+                with self.replay_storage_guard() as available:
+                    # Decode one lossless diagnostic at a time, keeping the same NPZ
+                    # replay format without a second uncompressed frame collection.
+                    # Store without a second compression pass: serialization runs after
+                    # the final observation, whose original freshness must be preserved.
+                    # Frame count and the encoded in-memory evidence remain bounded.
+                    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as archive:
+                        for index, (encoded, record) in enumerate(attempt.replay):
+                            frame = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
+                            required = archive.fp.tell() + frame.nbytes + 1024 + len(retained) * 256 + metadata_reserve
+                            if available is not None and required > available:
+                                attempt.value["replay_storage_truncated"] = True
+                                break
+                            with archive.open(f"frame_{index}.npy", "w") as member:
+                                np.lib.format.write_array(member, frame, allow_pickle=False)
+                            retained.append(record)
+                    if not retained:
+                        attempt.value["replay_unavailable"] = "storage_budget"
+                        return False
+                    metadata.update(frames=retained, attempt=attempt.finish(),
+                        complete=metadata["complete"] and len(retained) == len(records))
+                    payload = json.dumps(metadata, allow_nan=False).encode()
+                    if available is not None and temporary.stat().st_size + len(payload) > available:
+                        attempt.value["replay_unavailable"] = "storage_budget"
+                        return False
+                    metadata_temporary.write_bytes(payload)
+                    temporary.replace(destination)
+                    metadata_temporary.replace(metadata_path)
+                return True
+            except OSError:
+                # Optional diagnostics cannot replace the movement outcome or
+                # interrupt Stop/recovery. Existing replays are never removed.
+                discard(destination)
+                discard(metadata_path)
+                attempt.value["replay_unavailable"] = "storage_write_failed"
+                return False
+            finally:
+                discard(temporary)
+                discard(metadata_temporary)
 
-        await asyncio.to_thread(write)
-        attempt.value["return_failure_replay_id" if correction_failed else "replay_id"] = identifier
+        if await asyncio.to_thread(write):
+            attempt.value["return_failure_replay_id" if correction_failed else "replay_id"] = identifier
 
     def _active_elapsed(self) -> float:
         now = self.active_finished if self.active_finished is not None and self.region_policy is None else time.monotonic()
@@ -2510,7 +2590,8 @@ class _Scan:
         self._stop_failed = True
         return False
 
-    async def _reference_window(self, *, timeout: float = ATTEMPT_SECONDS) -> dict:
+    async def _reference_window(self, *, timeout: float = ATTEMPT_SECONDS,
+                                observation_guard: Callable[[], None] | None = None) -> dict:
         """Observe a stationary reference; never publish it as a qualified capture.
 
         The initial return reference has no prior causal movement. This weaker
@@ -2558,6 +2639,8 @@ class _Scan:
                     continue
                 now = time.monotonic()
                 self.last_frame = frame
+                if observation_guard is not None:
+                    observation_guard()
                 if observation_start is None:
                     observation_start = now
                     detector.reset(now=now)
@@ -3269,7 +3352,13 @@ class _Scan:
         allow_stationary: bool = False,
         transition_estimator: Callable | None = None,
         stable_frame_observer: Callable[[dict], None] | None = None,
+        frame_observer: Callable[[dict], None] | None = None,
+        observation_guard: Callable[[], None] | None = None,
+        motion_stop_requested: Callable[[], str | None] | None = None,
+        motion_velocity_update: Callable[[dict], dict | None] | None = None,
         requested_velocity: dict[str, float] | None = None,
+        following_seconds: float | None = None,
+        maximum_following_speed: float | None = None,
         expected_frame: dict | None = None,
         movement_intent: dict[str, Any] | None = None,
         persist_recovery_return_intent: bool = False,
@@ -3278,6 +3367,31 @@ class _Scan:
     ) -> dict:
         """Observe the actual movement concurrently with its controller command."""
         self._check(budget=not self.returning)
+        if observation_guard is not None:
+            observation_guard()
+        if motion_velocity_update is not None and (
+            target is not None or requested_velocity is None or not 0 < duration <= 2
+            or self.returning or self.checkpoint.get("continuous_cursor") is not None
+            or self.checkpoint.get("control_verification") is not None
+            or not self.capabilities.get("velocity_supported")
+        ):
+            raise PanoramaCaptureError("visual_feedback_unavailable")
+        if following_seconds is not None and (
+            _finite(following_seconds) is None or not duration <= following_seconds <= MAXIMUM_FOLLOWING_WINDOW_SECONDS
+            or motion_velocity_update is None or motion_stop_requested is None
+            or frame_observer is None or observation_guard is None
+        ):
+            raise PanoramaCaptureError("visual_feedback_unavailable")
+        if maximum_following_speed is not None and (
+            _finite(maximum_following_speed) is None or not 0 < maximum_following_speed <= DEFAULT_CONTINUOUS_PULSE_SPEED
+            or following_seconds is None or not isinstance(requested_velocity, dict)
+            or set(requested_velocity) != {"pan", "tilt"}
+            or any(_finite(value) is None or abs(value) > maximum_following_speed for value in requested_velocity.values())
+            or sum(value != 0 for value in requested_velocity.values()) != 1
+        ):
+            raise PanoramaCaptureError("invalid_visual_feedback")
+        feedback_velocity_limits = {axis: maximum_following_speed if maximum_following_speed is not None and value else abs(value)
+            for axis, value in (requested_velocity or {}).items()}
         if not self.returning:
             await self._materialize_normal_return_epoch()
         command_start_pose = copy.deepcopy(self.last_pose)
@@ -3366,6 +3480,8 @@ class _Scan:
         precondition: dict[str, Any] | None = None
         if requested_velocity is not None:
             diagnostic.value["requested_velocity"] = dict(requested_velocity)
+            if maximum_following_speed is not None:
+                diagnostic.value["maximum_following_speed"] = maximum_following_speed
         if expected_frame is not None:
             precondition = await asyncio.to_thread(
                 _match, expected_frame["image"], baseline["image"]
@@ -3691,12 +3807,21 @@ class _Scan:
                 raise PanoramaCaptureError("correction_precondition_changed")
             self._check(budget=not self.returning)
         diagnostic.value["command_outcome"] = "pending"
+        window_deadline = time.monotonic() + following_seconds if following_seconds is not None else None
         operation = asyncio.create_task(issue_command())
         frames: deque[dict] = deque()
         terminal_frames: deque[dict] = deque()
         buffer_bytes = 0
         terminal_bytes = 0
         stopped = False
+        update_operation = None
+        velocity_updates = []
+        diagnostic.value["motion_velocity_updates"] = velocity_updates
+        velocity_context = {"velocity": dict(requested_velocity or {}), "accepted_monotonic": None}
+        velocity_deadline = None
+        if window_deadline is not None:
+            diagnostic.value["following_window_seconds"] = following_seconds
+            diagnostic.value["following_window_deadline_monotonic"] = window_deadline
         stop_operation: asyncio.Task[bool] | None = None
         pose_time = start - 1
         pose_matches = 0
@@ -3742,12 +3867,138 @@ class _Scan:
             if stop_operation is None:
                 stop_operation = asyncio.create_task(request_stop(reason))
 
+        async def issue_velocity_update(plan: dict, entry: dict) -> None:
+            nonlocal velocity_deadline
+            stage = "reservation"
+            entry["update_started_monotonic"] = time.monotonic()
+            try:
+                # Persist the intent before transport; each update consumes the same
+                # navigation and regional budgets as a fresh command.
+                if self.region_policy is not None:
+                    commands = self.checkpoint.setdefault("region_commands", [])
+                    limit = self.region_policy["maximum_commands"] - self.region_policy["return_commands_reserved"]
+                    if len(commands) >= limit:
+                        raise PanoramaCaptureError("region_budget_exhausted")
+                    commands.append(entry)
+                plan["reserve"](entry)
+                stage = "persistence"
+                persistence_started = time.monotonic()
+                await self._persist()
+                entry["persistence_seconds"] = time.monotonic() - persistence_started
+                stage = "pre_dispatch_guard"
+                now = time.monotonic()
+                next_deadline = velocity_deadline
+                if "duration_seconds" in plan:
+                    next_deadline = min(now + plan["duration_seconds"], window_deadline - .1)
+                remaining = min(2., next_deadline - now - .1)
+                if remaining < .05:
+                    entry["failure_constraint"] = "insufficient_pulse_time"
+                    raise PanoramaCaptureError("visual_feedback_expired")
+                def guard():
+                    nonlocal stage
+                    stage = "transport_dispatch_guard" if "transport_started_monotonic" in entry else "pre_dispatch_guard"
+                    entry.update(last_guard_monotonic=time.monotonic(),
+                        last_guard_frame_age_seconds=time.monotonic() - entry["frame_received_monotonic"],
+                        last_guard_remaining_seconds=velocity_deadline - time.monotonic())
+                    self._check()
+                    now = time.monotonic()
+                    if (stop_operation is not None or now >= velocity_deadline
+                            or next_deadline - now < remaining):
+                        entry["failure_constraint"] = ("stop_started" if stop_operation is not None else
+                            "pulse_deadline" if now >= velocity_deadline else "reserved_dispatch_time")
+                        raise PanoramaCaptureError("visual_feedback_expired")
+                    if not 0 <= time.monotonic() - entry["frame_received_monotonic"] <= .35:
+                        entry["failure_constraint"] = "frame_age"
+                        raise PanoramaCaptureError("visual_feedback_expired")
+                    plan["dispatch_guard"]()
+                    stage = "transport" if "transport_started_monotonic" in entry else "pre_dispatch_guard"
+                guard()
+                entry["transport_started_monotonic"] = time.monotonic()
+                stage = "transport"
+                receipt = await self.camera.move_velocity(**entry["velocity"], timeout_s=remaining, dispatch_guard=guard)
+                entry.update(state="accepted", acceptance_confirmed=True, accepted_monotonic=time.monotonic(),
+                    command_id=receipt.get("command_id"), timeout_seconds=remaining)
+                if "duration_seconds" in plan:
+                    # Acknowledgement never renews the outer window or hides transport time.
+                    velocity_deadline = min(next_deadline, now + remaining,
+                        entry["accepted_monotonic"] + max(0., receipt.get("pulse_remaining_seconds", remaining)))
+                    entry["deadline_monotonic"] = velocity_deadline
+                velocity_context.update(velocity=entry["velocity"], accepted_monotonic=entry["accepted_monotonic"])
+            except BaseException as error:
+                # A lost acknowledgement can hide a real command. Record the failed
+                # operation without claiming that the device never moved.
+                entry.update(state="cancelled" if isinstance(error, asyncio.CancelledError) else "failed",
+                    acceptance_confirmed=entry.get("acceptance_confirmed", False), failure_stage=stage,
+                    failure_code=error.code if isinstance(error, PanoramaCaptureError) else
+                        "cancelled" if isinstance(error, asyncio.CancelledError) else "internal_error",
+                    failed_monotonic=time.monotonic())
+                raise
+
         try:
             while time.monotonic() < observation_deadline:
                 self._check(budget=not self.returning)
+                # Target validity outlives the motor pulse: probes and settling
+                # must not spend their remaining budget on an obsolete subject.
+                if observation_guard is not None:
+                    observation_guard()
                 if operation.done():
                     operation.result()
+                    if velocity_deadline is None:
+                        receipt = diagnostic.value.get("command_receipt", {})
+                        velocity_deadline = start + (
+                            diagnostic.value.get("command_accepted_seconds", 0)
+                            + max(0., receipt["pulse_remaining_seconds"])
+                            if "pulse_remaining_seconds" in receipt else duration)
+                        velocity_context["accepted_monotonic"] = start + diagnostic.value.get("command_accepted_seconds", 0)
+                    if update_operation is not None and update_operation.done():
+                        update_operation.result()
+                        update_operation = None
+                    plan = None
+                    if (motion_velocity_update is not None and update_operation is None and not stopped
+                            and stop_operation is None
+                            and velocity_deadline - time.monotonic() >= .1):
+                        plan = motion_velocity_update({**velocity_context, "deadline_monotonic": velocity_deadline,
+                            **({"window_deadline_monotonic": window_deadline, "maximum_duration_seconds": duration,
+                                "observed_response_seconds": max(0., diagnostic.value.get("first_motion_transition_seconds", 0)
+                                    - diagnostic.value.get("command_accepted_seconds", 0))}
+                                if window_deadline is not None else {})})
+                    if motion_stop_requested is not None and not stopped and stop_operation is None:
+                        reason = motion_stop_requested()
+                        if reason is not None:
+                            if (not isinstance(reason, str) or not reason.startswith("visual_feedback_")
+                                    or len(reason) > 64 or any(c not in "abcdefghijklmnopqrstuvwxyz_" for c in reason)):
+                                raise PanoramaCaptureError("invalid_visual_feedback")
+                            diagnostic.value["motion_feedback_stop"] = reason
+                            start_stop(reason)
+                    if plan is not None and stop_operation is None and len(velocity_updates) < 8:
+                        velocity = plan.get("velocity", {})
+                        # Keep the axis and speed envelope. Reversal requires measured
+                        # support in a bounded window; renewal cannot lengthen a pulse.
+                        if (set(velocity) != {"pan", "tilt"}
+                                or any(_finite(v) is None or (v * requested_velocity.get(axis, 0) < 0
+                                    and not (window_deadline is not None and plan.get("reversal_qualified") is True))
+                                    or abs(v) > feedback_velocity_limits.get(axis, 0) for axis, v in velocity.items())
+                                or not any(velocity.values()) or not callable(plan.get("dispatch_guard"))
+                                or not callable(plan.get("reserve"))):
+                            raise PanoramaCaptureError("invalid_visual_feedback")
+                        if "duration_seconds" in plan and (
+                            window_deadline is None or _finite(plan["duration_seconds"]) is None
+                            or not .05 <= plan["duration_seconds"] <= duration
+                        ):
+                            raise PanoramaCaptureError("invalid_visual_feedback")
+                        if not _exact_velocity_supported(self.capabilities, velocity):
+                            raise PanoramaCaptureError("visual_control_resolution_unverified")
+                        entry = {"id": uuid.uuid4().hex, "state": "pending", "kind": "velocity_update",
+                            "velocity": dict(velocity), "returning": False,
+                            "measurement": copy.deepcopy(plan.get("measurement")),
+                            "capture_evidence": copy.deepcopy(plan["capture_evidence"]),
+                            "frame_received_monotonic": plan["frame_received_monotonic"]}
+                        velocity_updates.append(entry)
+                        update_operation = asyncio.create_task(issue_velocity_update(plan, entry))
                 if stop_operation is not None and stop_operation.done() and not stopped:
+                    if update_operation is not None:
+                        await asyncio.shield(update_operation)
+                        update_operation = None
                     if not stop_operation.result():
                         raise PanoramaCaptureError("stop_unconfirmed")
                     # Keep observing during the response, but require a new
@@ -3801,7 +4052,8 @@ class _Scan:
                         + max(0.0, receipt["pulse_remaining_seconds"])
                         if "pulse_remaining_seconds" in receipt else duration
                     )
-                    stop_due = target is None and duration > 0 and now - start >= pulse_deadline
+                    stop_due = target is None and duration > 0 and now >= (
+                        velocity_deadline if velocity_deadline is not None else start + pulse_deadline)
                     if stop_due:
                         start_stop("pulse_deadline")
                 # Continuous/preset moves settle from video. Repeated native
@@ -3836,6 +4088,13 @@ class _Scan:
                     diagnostic.value.setdefault(
                         "first_motion_transition_seconds", time.monotonic() - start
                     )
+                if frame_observer is not None and diagnostic.value.get("command_outcome") == "accepted":
+                    # Offer only; the consumer owns bounded asynchronous work.
+                    # This is a movement-window image, not arrival evidence.
+                    try:
+                        frame_observer(frame)
+                    except Exception:
+                        diagnostic.value["frame_observer_failed"] = True
                 diagnostic.value["stop_command_accepted"] = stopped
                 frames.append(frame)
                 buffer_bytes += frame["image"].nbytes
@@ -3870,6 +4129,11 @@ class _Scan:
                 while buffer_bytes + terminal_bytes + diagnostic.replay_bytes > FRAME_BUFFER_BYTES:
                     if len(frames) > 1 or (frames and len(terminal_frames) <= 1):
                         buffer_bytes -= frames.popleft()["image"].nbytes
+                    elif diagnostic.replay:
+                        # Keep control evidence before optional replay, preserving its initial anchor.
+                        encoded, _ = diagnostic.replay.pop(1 if len(diagnostic.replay) > 1 else 0)
+                        diagnostic.replay_bytes -= encoded.nbytes
+                        diagnostic.value["replay_truncated"] = True
                     elif terminal_frames:
                         terminal_bytes -= terminal_frames.popleft()["image"].nbytes
                     else:
@@ -3925,6 +4189,8 @@ class _Scan:
                             **late_capture,
                             "pose": self.last_pose,
                             "precondition_match": precondition,
+                            "motion_feedback_stop": diagnostic.value.get("motion_feedback_stop"),
+                            "motion_velocity_updates": velocity_updates,
                         }
                 if (
                     last_result["stable"]
@@ -3999,6 +4265,8 @@ class _Scan:
                         "pose": self.last_pose,
                         "match": matching,
                         "precondition_match": precondition,
+                        "motion_feedback_stop": diagnostic.value.get("motion_feedback_stop"),
+                        "motion_velocity_updates": velocity_updates,
                         "stable": True,
                         "stationary": False,
                     }
@@ -4125,6 +4393,8 @@ class _Scan:
                             "match": matching,
                             "native_stationary": native_no_effect,
                             "precondition_match": precondition,
+                            "motion_feedback_stop": diagnostic.value.get("motion_feedback_stop"),
+                            "motion_velocity_updates": velocity_updates,
                             "stable": False,
                             "stationary": True,
                         }
@@ -4164,6 +4434,8 @@ class _Scan:
                         **late_capture,
                         "pose": self.last_pose,
                         "precondition_match": precondition,
+                        "motion_feedback_stop": diagnostic.value.get("motion_feedback_stop"),
+                        "motion_velocity_updates": velocity_updates,
                     }
             raise PanoramaCaptureError(deadline_code())
         except PanoramaCaptureError as error:
@@ -4176,13 +4448,18 @@ class _Scan:
             diagnostic.value["outcome"] = "unexpected_exception"
             raise
         finally:
+            if update_operation is not None:
+                if not update_operation.done():
+                    update_operation.cancel()
+                await asyncio.gather(update_operation, return_exceptions=True)
             if not operation.done():
                 operation.cancel()
             await asyncio.gather(operation, return_exceptions=True)
             if stop_operation is not None:
                 # Do not abandon or duplicate an in-flight Stop on timeout,
                 # cancellation or observer failure. The executor bounds it.
-                await asyncio.shield(stop_operation)
+                stopped = await asyncio.shield(stop_operation)
+                diagnostic.value["stop_command_accepted"] = stopped
             elif not stopped:
                 await request_stop("attempt_cleanup")
             diagnostic.value["physical_state"] = self.physical_state
@@ -4576,11 +4853,14 @@ class _Scan:
         target: dict,
         *,
         allow_stationary: bool = False,
+        observation_guard: Callable[[], None] | None = None,
         expected_frame: dict | None = None,
         movement_intent: dict[str, Any] | None = None,
         connection_recovery_phase: str | None = None,
     ) -> dict:
         options = {"target": target, "allow_stationary": allow_stationary}
+        if observation_guard is not None:
+            options["observation_guard"] = observation_guard
         if expected_frame is not None:
             options["expected_frame"] = expected_frame
         if movement_intent is not None:
@@ -5316,6 +5596,13 @@ class _Scan:
         intent_type: str = "seek_pulse",
         intent_step: int | None = None,
         connection_recovery_phase: str | None = None,
+        transition_estimator: Callable | None = None,
+        frame_observer: Callable[[dict], None] | None = None,
+        observation_guard: Callable[[], None] | None = None,
+        motion_stop_requested: Callable[[], str | None] | None = None,
+        motion_velocity_update: Callable[[dict], dict | None] | None = None,
+        following_seconds: float | None = None,
+        maximum_following_speed: float | None = None,
     ) -> dict:
         # Start slowly enough to retain inter-frame correspondence on cameras
         # with fast motors. Duration adapts to measured overlap in _seek; speed
@@ -5328,7 +5615,19 @@ class _Scan:
         if duration is None or not 0 < duration <= 2.0:
             raise PanoramaCaptureError("invalid_movement_duration")
         speed = _finite(speed)
-        if speed is None or not 0 < speed <= DEFAULT_CONTINUOUS_PULSE_SPEED:
+        if speed is None or not 0 < speed <= 0.2:
+            raise PanoramaCaptureError("invalid_velocity")
+        if maximum_following_speed is not None and (
+            _finite(maximum_following_speed) is None or not speed <= maximum_following_speed <= DEFAULT_CONTINUOUS_PULSE_SPEED
+            or following_seconds is None
+        ):
+            raise PanoramaCaptureError("invalid_visual_feedback")
+        if speed > DEFAULT_CONTINUOUS_PULSE_SPEED and (
+            duration > 0.24 or expected_frame is None or self.physical_state != "stopped"
+            or self.returning or intent_type != "seek_pulse"
+            or self.checkpoint.get("continuous_cursor") is not None
+        ):
+            # A faster first probe needs a fresh baseline; it grants no response model.
             raise PanoramaCaptureError("invalid_velocity")
         if intent_type not in {
             "seek_pulse",
@@ -5382,13 +5681,21 @@ class _Scan:
             and not self.capabilities.get("velocity_supported")
         )
         if use_relative:
+            if motion_velocity_update is not None or following_seconds is not None:
+                raise PanoramaCaptureError("visual_feedback_unavailable")
+            if speed != DEFAULT_CONTINUOUS_PULSE_SPEED:
+                raise PanoramaCaptureError("visual_control_resolution_unverified")
             if self.capabilities.get("relative_supported") is not True:
                 raise PanoramaCaptureError("normalized_motion_unavailable")
             delta = {key: value * duration for key, value in velocity.items()}
             return await self._move(
                 lambda: self.camera.move_relative(**delta),
                 allow_stationary=True,
+                **({"frame_observer": frame_observer} if frame_observer else {}),
+                **({"observation_guard": observation_guard} if observation_guard else {}),
+                **({"motion_stop_requested": motion_stop_requested} if motion_stop_requested else {}),
                 expected_frame=expected_frame,
+                **({"transition_estimator": transition_estimator} if transition_estimator is not None else {}),
                 movement_intent={
                     "type": movement_type,
                     "axis": axis,
@@ -5408,31 +5715,21 @@ class _Scan:
         if duration < MINIMUM_CONTINUOUS_PULSE_SECONDS:
             raise PanoramaCaptureError("visual_control_resolution_unverified")
         if speed != DEFAULT_CONTINUOUS_PULSE_SPEED:
-            spaces = self.capabilities.get("spaces", {}).get("continuous", [])
-            default_space = self.capabilities.get("defaults", {}).get("continuous")
-            selected = [
-                space
-                for space in spaces
-                if space.get("normalized") is True and space.get("uri") == default_space
-            ]
-            requested = {"x": velocity["pan"], "y": velocity["tilt"]}
-            exact_velocity_supported = len(selected) == 1
-            if exact_velocity_supported:
-                for coordinate, value in requested.items():
-                    bounds = selected[0].get(coordinate)
-                    minimum = _finite(bounds.get("min")) if isinstance(bounds, dict) else None
-                    maximum = _finite(bounds.get("max")) if isinstance(bounds, dict) else None
-                    if minimum is None or maximum is None or not minimum <= value <= maximum:
-                        exact_velocity_supported = False
-                        break
-            if not exact_velocity_supported:
+            if not _exact_velocity_supported(self.capabilities, velocity):
                 raise PanoramaCaptureError("visual_control_resolution_unverified")
         return await self._move(
             lambda: self.camera.move_velocity(**velocity, timeout_s=duration),
             duration=duration,
             allow_stationary=True,
             requested_velocity=velocity,
+            **({"maximum_following_speed": maximum_following_speed} if maximum_following_speed is not None else {}),
+            **({"motion_velocity_update": motion_velocity_update} if motion_velocity_update else {}),
+            **({"following_seconds": following_seconds} if following_seconds is not None else {}),
+            **({"frame_observer": frame_observer} if frame_observer else {}),
+            **({"observation_guard": observation_guard} if observation_guard else {}),
+            **({"motion_stop_requested": motion_stop_requested} if motion_stop_requested else {}),
             expected_frame=expected_frame,
+            **({"transition_estimator": transition_estimator} if transition_estimator is not None else {}),
             movement_intent={
                 "type": movement_type,
                 "axis": axis,
@@ -8876,13 +9173,14 @@ class _Scan:
                 axis, matching, self.saved_return, capture.get("pose", {}), kind="persisted_pilot"
             )
 
-    async def _validate_return(self, reference: np.ndarray, frame: dict) -> dict:
+    async def _validate_return(self, reference: np.ndarray, frame: dict, *, maximum_error_pixels: float = 3) -> dict:
         comparison = dict(await asyncio.to_thread(_match, reference, frame["image"]))
         for key in ("overlap", "displacement", "shift_x", "shift_y"):
             if key in comparison and _finite(comparison[key]) is None:
                 comparison[key] = None
                 comparison["verified"] = False
                 comparison.setdefault("code", "visual_response_unavailable")
+        comparison["maximum_error_pixels"] = maximum_error_pixels
         _write_json(self.directory / "return-validation.json", comparison)
         overlap = _finite(comparison.get("overlap"))
         displacement = _finite(comparison.get("displacement"))
@@ -8891,7 +9189,7 @@ class _Scan:
             and overlap is not None
             and overlap >= 0.85
             and displacement is not None
-            and displacement <= 3
+            and displacement <= maximum_error_pixels
         ):
             await asyncio.to_thread(
                 _write_image, self.directory / "return-final.jpg", frame["image"]
@@ -8902,7 +9200,10 @@ class _Scan:
                 self.checkpoint["restored_return_epoch"] = epoch_value
         return comparison
 
-    async def _restore(self) -> None:
+    async def _restore(self, *, maximum_error_pixels: float = 3) -> None:
+        from .panorama_navigation import MAXIMUM_LIVE_CENTER_ERROR_PIXELS
+        if type(maximum_error_pixels) not in (int, float) or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
+            raise PanoramaCaptureError("invalid_target")
         cursor = self.checkpoint.get("continuous_cursor")
         if cursor is not None:
             cursor["resume_anchor_verified"] = False
@@ -8933,11 +9234,11 @@ class _Scan:
                     and initial_overlap is not None
                     and initial_overlap >= 0.85
                     and initial_displacement is not None
-                    and initial_displacement <= 3
+                    and initial_displacement <= maximum_error_pixels
                 ):
                     await self._confirm_stop()
                     if self.physical_state == "stopped":
-                        await self._validate_return(reference, self.last_frame)
+                        await self._validate_return(reference, self.last_frame, maximum_error_pixels=maximum_error_pixels)
                     if self.physical_state == "restored":
                         return
             target = (
@@ -8945,7 +9246,7 @@ class _Scan:
                 if self.saved_return.get("kind") == "absolute"
                 else None
             )
-            # Once the strict 3 px gate above has failed, recall the saved
+            # Once the requested visual gate above has failed, recall the saved
             # destination at most once for this deliberate return epoch. A
             # persisted planned intent is deliberately ambiguous after an
             # interruption: it may have reached the device, so a retry observes
@@ -9052,7 +9353,7 @@ class _Scan:
                     await self._confirm_stop()
                     if self.physical_state != "stopped" or self.last_frame is None:
                         raise
-                    finish_comparison = await self._validate_return(reference, self.last_frame)
+                    finish_comparison = await self._validate_return(reference, self.last_frame, maximum_error_pixels=maximum_error_pixels)
                     if self.physical_state == "restored":
                         return
                     finish_overlap = _finite(finish_comparison.get("overlap"))
@@ -9091,7 +9392,7 @@ class _Scan:
                 await self._confirm_stop()
                 if self.physical_state != "stopped" or self.last_frame is None:
                     raise PanoramaCaptureError("stop_unconfirmed")
-                finish_comparison = await self._validate_return(reference, self.last_frame)
+                finish_comparison = await self._validate_return(reference, self.last_frame, maximum_error_pixels=maximum_error_pixels)
                 if self.physical_state == "restored":
                     return
                 finish_overlap = _finite(finish_comparison.get("overlap"))
@@ -9155,7 +9456,7 @@ class _Scan:
             if visual_return:
                 from .panorama_navigation import correct_reference
 
-                result = await correct_reference(self, reference, result)
+                result = await correct_reference(self, reference, result, maximum_error_pixels=maximum_error_pixels)
             absolute_trace_value = self.checkpoint.get("absolute_return_corrections", [])
             absolute_trace = absolute_trace_value if isinstance(absolute_trace_value, list) else []
             self.checkpoint["absolute_return_corrections"] = absolute_trace
@@ -9185,7 +9486,7 @@ class _Scan:
                 else "stopped"
             )
             for correction in range(remaining_absolute_corrections + 1):
-                comparison = await self._validate_return(reference, result["frame"])
+                comparison = await self._validate_return(reference, result["frame"], maximum_error_pixels=maximum_error_pixels)
                 if self.physical_state == "restored":
                     self.checkpoint["absolute_return_correction_state"] = "complete"
                     await self._persist()
@@ -9409,7 +9710,7 @@ class _Scan:
                     # The travel may be untrackable even when the preset arrives.
                     # Only a fresh stopped window matching the saved reference
                     # can establish restoration; command acceptance cannot.
-                    await self._validate_return(reference, self.last_frame)
+                    await self._validate_return(reference, self.last_frame, maximum_error_pixels=maximum_error_pixels)
             if return_issue is not None and self.physical_state != "restored":
                 self.issues.append(return_issue)
 

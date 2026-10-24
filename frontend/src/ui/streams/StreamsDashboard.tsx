@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type Hls from "hls.js";
 import type { LiveViewFrame } from "@toposync/plugin-api";
 import { usePresentedFrame } from "./usePresentedFrame";
+import { PipelineInspectionPanel } from "./PipelineInspectionPanel";
 
 import {
   isAbortError,
@@ -1747,6 +1748,7 @@ export function StreamTilePlayer({
   stillUrl,
   runtimeHealth,
   active,
+  inspectionActive,
   ptzEnabled,
   lowLatencyRequested,
   qualityPreference,
@@ -1789,6 +1791,7 @@ export function StreamTilePlayer({
   stillUrl: string | null;
   runtimeHealth?: StreamingRuntimeTransmissionHealth;
   active: boolean;
+  inspectionActive: boolean;
   ptzEnabled: boolean;
   lowLatencyRequested: boolean;
   qualityPreference: StreamQualityPreference;
@@ -1812,7 +1815,9 @@ export function StreamTilePlayer({
   const frameRef = useRef<HTMLDivElement | null>(null);
   const playbackSessionIdRef = useRef<string | null>(null);
   const onRefreshUrlsRef = useRef(onRefreshUrls);
+  const hlsAuthRenewedRef = useRef<string | null>(null);
   const posterObjectUrlRef = useRef<string | null>(null);
+  const [inspectionPaired, setInspectionPaired] = useState(false);
 
   const [status, setStatus] = useState<TilePlaybackStatus>("idle");
   const [transport, setTransport] = useState<TilePlaybackTransport>("none");
@@ -1840,7 +1845,7 @@ export function StreamTilePlayer({
     if (activeTransport.current === 'hls' && (previous.hlsUrl !== hlsUrl || previous.hlsNativeUrl !== hlsNativeUrl))
       setHlsCredentialRevision(value => value + 1);
   }, [hlsUrl, hlsNativeUrl]);
-  usePresentedFrame(videoRef, active && status === "playing" && transport !== "jsmpeg", `${transmissionId}:${transport}:${endpointsIdentity}`, onFrame ? frame => {
+  usePresentedFrame(videoRef, active && !inspectionPaired && status === "playing" && transport !== "jsmpeg", `${transmissionId}:${transport}:${endpointsIdentity}`, onFrame ? frame => {
     const selectedId = transport === "mse" ? mseOutputId : transport === "webrtc" ? webrtcOutputId : hlsOutputId;
     const output = urls?.outputs.find(output => output.protocol === transport && output.output_id === selectedId);
     const resolutionMatches = frame && output?.resolution?.width === frame.width && output?.resolution?.height === frame.height;
@@ -2650,6 +2655,8 @@ export function StreamTilePlayer({
       let nativeRecovering = false;
       let healthyProbeRecoveries = 0;
       const onPlaying = () => {
+        if (cancelled) return;
+        hlsAuthRenewedRef.current = null;
         setFirstFrameReady(true);
         setStatus("playing");
         setErrorText(null);
@@ -2743,6 +2750,8 @@ export function StreamTilePlayer({
       hlsPlayer = hls;
 
       const onPlaying = () => {
+        if (cancelled) return;
+        hlsAuthRenewedRef.current = null;
         setFirstFrameReady(true);
         setStatus("playing");
         setErrorText(null);
@@ -3137,6 +3146,12 @@ export function StreamTilePlayer({
 
     const refreshSignedHlsAfterAuthError = async (message: string): Promise<boolean> => {
       if (!isHlsAuthProbeErrorMessage(message)) return false;
+      if (hlsAuthRenewedRef.current === transmissionId) {
+        setStatus("error");
+        setErrorText(message);
+        return true;
+      }
+      hlsAuthRenewedRef.current = transmissionId;
       const renewalMessage = i18n.t(
         "core.ui.streams.errors.hls_signed_url_renewing",
         {},
@@ -3716,7 +3731,7 @@ export function StreamTilePlayer({
   const posterVisible = playbackActive && Boolean(posterObjectUrl) && !firstFrameReady;
 
   return (
-    <div className="streamsPlayerFrame" ref={frameRef}>
+    <div className={`streamsPlayerFrame${inspectionPaired ? " isInspecting" : ""}`} ref={frameRef}>
       <canvas
         ref={jsmpegCanvasRef}
         className={["streamsJsmpegCanvas", transport === "jsmpeg" ? "isVisible" : "isHidden"].join(" ")}
@@ -3739,10 +3754,10 @@ export function StreamTilePlayer({
 
 	      <div className={["streamsTileOverlay", overlayVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsTileOverlayLeft" title={label}>
-          <span className={["streamsPlaybackDot", `is-${playbackDotStatus}`].join(" ")} />
+          {!inspectionPaired && <span className={["streamsPlaybackDot", `is-${playbackDotStatus}`].join(" ")} />}
           <span className="streamsTileOverlayTitle">{label}</span>
-          <span className="streamsTileOverlayMeta">{playbackStatusLabel}</span>
-          {webRtcFallbackActive ? (
+          {!inspectionPaired && <span className="streamsTileOverlayMeta">{playbackStatusLabel}</span>}
+          {!inspectionPaired && webRtcFallbackActive ? (
             <span className="streamsTileOverlayMeta" title={t("core.ui.streams.transport.hls_fallback_hint", {}, "Low latency unavailable; using HLS fallback.")}>
               {t("core.ui.streams.transport.hls_fallback", {}, "HLS fallback")}
             </span>
@@ -3750,6 +3765,7 @@ export function StreamTilePlayer({
         </div>
 
 	        {controls && <div className="streamsTileOverlayActions">
+          <PipelineInspectionPanel transmissionId={transmissionId} playerElement={frameRef} onPairedChange={setInspectionPaired} enabled={inspectionActive} />
           {variantOptions.length > 0 ? (
             <div className="streamsTileVariantControl" title={currentVariantLabel}>
               <select
@@ -3971,33 +3987,29 @@ function AvailableStreamsDashboard({
   useEffect(() => {
     if (!tabVisible || !isActive) return;
     let cancelled = false;
-    let firstLoadPending = true;
 
-    const loadLiveViews = async (isFirstLoad: boolean) => {
-      const shouldSetLoading = firstLoadPending || isFirstLoad;
-      if (shouldSetLoading) setLoading(true);
+    const loadLiveViews = async () => {
+      // Refresh in place so returning to the tab preserves player and inspection state.
       liveViewsRequestRef.current?.abort();
       const controller = new AbortController();
       liveViewsRequestRef.current = controller;
       try {
         const payload = await listStreamingCameraLiveViews({ signal: controller.signal });
         if (cancelled || controller.signal.aborted) return;
-        firstLoadPending = false;
         setLiveViews(Array.isArray(payload) ? payload : []);
         setError(null);
       } catch (loadError) {
         if (cancelled || isAbortError(loadError)) return;
-        firstLoadPending = false;
         setError(asErrorMessage(loadError));
       } finally {
         if (liveViewsRequestRef.current === controller) liveViewsRequestRef.current = null;
-        if (!cancelled && !controller.signal.aborted && shouldSetLoading) setLoading(false);
+        if (!cancelled && !controller.signal.aborted) setLoading(false);
       }
     };
 
-    void loadLiveViews(true);
+    void loadLiveViews();
     const intervalId = window.setInterval(() => {
-      void loadLiveViews(false);
+      void loadLiveViews();
     }, TRANSMISSIONS_REFRESH_MS);
 
     return () => {
@@ -4463,6 +4475,7 @@ function AvailableStreamsDashboard({
                   stillUrl={stillUrl}
                   runtimeHealth={runtimeHealth}
                   active={tileActive}
+                  inspectionActive={playersActive}
                   ptzEnabled={ptzEnabled && controls}
                   lowLatencyRequested={lowLatencyRequested}
                   qualityPreference={qualityPreference}
@@ -4540,6 +4553,7 @@ function AvailableStreamsDashboard({
 
       {!embedded ? <div className={["streamsHud", uiVisible ? "isVisible" : "isHidden"].join(" ")}>
         <div className="streamsHudGroup">
+          {controls ? <PipelineInspectionPanel enabled={isActive} /> : null}
           <button
             type="button"
             className={["chipButton", "streamsHudModeButton", gridMode === "2x2" ? "isActive" : ""].filter(Boolean).join(" ")}

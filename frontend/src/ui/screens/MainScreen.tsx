@@ -1,6 +1,6 @@
 import type { GeographicView } from "../geographic/GeographicMap";
 import { StreamingAvailabilityContext } from "../streams/StreamingAvailability";
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CompositionElement,
@@ -47,6 +47,7 @@ import { HistoryPeriodFilter } from "../notifications/HistoryPeriodFilter";
 import { resolveNotificationPeriod, type NotificationPeriod, type NotificationTimeRange } from "../../util/notificationPeriod";
 import { VisualHistoryPreparation } from "../notifications/VisualHistoryPreparation";
 import { StreamsDashboard } from "../streams/StreamsDashboard";
+import { PipelineInspectionPanel } from "../streams/PipelineInspectionPanel";
 import { navigate, replace, usePathname } from "../router";
 
 type Props = {
@@ -81,6 +82,7 @@ type Props = {
   onNotificationsFilterChange: React.Dispatch<React.SetStateAction<NotificationsFilter>>;
   onNotificationsSearchRefresh: () => void;
   onSelectNotification: (notificationId: string) => void;
+  onNotificationDetailsOpenChange: (open: boolean) => void;
   onLoadMoreNotifications: () => void;
   onNotificationsViewed: () => void;
   api: HostApi;
@@ -417,6 +419,7 @@ export function MainScreen({
   onNotificationsFilterChange,
   onNotificationsSearchRefresh,
   onSelectNotification,
+  onNotificationDetailsOpenChange,
   onLoadMoreNotifications,
   onNotificationsViewed,
   api,
@@ -463,6 +466,15 @@ export function MainScreen({
   const [historyAssistantId, setHistoryAssistantId] = useState<string | null>(null);
   const previousHistorySelection = useRef<string | null>(null);
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
+  const closeNotificationDetails = () => {
+    setIsNotificationDetailsOpen(false);
+    if (historyAssistantId && previousHistorySelection.current) onSelectNotification(previousHistorySelection.current);
+    previousHistorySelection.current = null;
+  };
+  useLayoutEffect(() => {
+    onNotificationDetailsOpenChange(isNotificationDetailsOpen);
+    return () => onNotificationDetailsOpenChange(false);
+  }, [isNotificationDetailsOpen, onNotificationDetailsOpenChange]);
   const [notificationImageIndex, setNotificationImageIndex] = useState(0);
   const [failedNotificationImageUrls, setFailedNotificationImageUrls] = useState<Set<string>>(() => new Set());
   const [fullscreenNotificationImageOpen, setFullscreenNotificationImageOpen] = useState(false);
@@ -470,6 +482,14 @@ export function MainScreen({
   const selectedNotificationRef = useRef<HTMLButtonElement | null>(null);
   const [notificationsExpanded, setNotificationsExpanded] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(() => loadNotificationsOpen());
+  const notificationsToggleRef = useRef<HTMLButtonElement | null>(null);
+  const detailsWereOpen = useRef(false);
+  useEffect(() => {
+    if (detailsWereOpen.current && !isNotificationDetailsOpen && !notificationsOpen) {
+      notificationsToggleRef.current?.focus({ preventScroll: true });
+    }
+    detailsWereOpen.current = isNotificationDetailsOpen;
+  }, [isNotificationDetailsOpen, notificationsOpen]);
   const filter = notificationsFilter;
   const setFilter = onNotificationsFilterChange;
   const [isFilterPopoverOpen, setIsFilterPopoverOpen] = useState(false);
@@ -545,6 +565,7 @@ export function MainScreen({
     }
     streamsOverlayTimerRef.current = window.setTimeout(() => {
       streamsOverlayTimerRef.current = null;
+      if (document.activeElement?.closest(".streamsHud, .streamsTileOverlay, .streamsOverlayAutoHide")) return;
       setStreamsOverlayVisible(false);
     }, STREAMS_OVERLAY_IDLE_MS);
   }, [clearStreamsOverlayTimer, autoHideStreamsOverlay]);
@@ -595,11 +616,15 @@ export function MainScreen({
 
     showOverlays();
     window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("pointerdown", showOverlays);
+    window.addEventListener("focusin", showOverlays);
     window.addEventListener("keydown", onKeyDown);
     document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("pointerdown", showOverlays);
+      window.removeEventListener("focusin", showOverlays);
       window.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       clearStreamsOverlayTimer();
@@ -1252,6 +1277,7 @@ export function MainScreen({
         >
           <Icon name="diagram-project" />
         </button>
+        {!isLiveCameraRenderMode(renderMode) ? <PipelineInspectionPanel /> : null}
         {!isLiveCameraRenderMode(renderMode) ? (
           <button
             className="iconButton iconButtonPrimary"
@@ -1291,6 +1317,7 @@ export function MainScreen({
                     if (!activeNotification) return;
                     setNotificationImageIndex(0);
                     setIsNotificationDetailsOpen(true);
+                    if (activeNotification.type === "occurrences.activity") setNotificationsOpen(false);
                   }}
                   disabled={!activeNotification}
                 >
@@ -1598,6 +1625,7 @@ export function MainScreen({
           <div className="notificationsCollapsedRail">
             <button
               className="iconButton notificationsToggleButton"
+              ref={notificationsToggleRef}
               type="button"
               aria-label={t("core.ui.notifications.aria_open", {}, "Open notifications")}
               title={t("core.ui.notifications.aria_open", {}, "Open notifications")}
@@ -1743,14 +1771,14 @@ export function MainScreen({
         }) ?? <p role="status">{t("core.ui.notifications.assistant_unavailable")}</p>}
       </Modal> : null}
 
+      {isNotificationDetailsOpen && activeNotification?.type === "occurrences.activity" && <aside className="activityPlaybackDock" aria-label={t("core.ui.notifications.details.title", {}, "Notification details")} onKeyDown={event => { if (event.key === "Escape") closeNotificationDetails(); }}>
+        <div className="modalHeader"><strong>{activeNotification.title}</strong><button className="iconButton" type="button" autoFocus onClick={closeNotificationDetails} aria-label={t("core.modal.aria.close")}><Icon name="xmark" /></button></div>
+        <div className="modalBody">{activeNotificationRenderer?.renderDetails?.(activeNotification)}</div>
+      </aside>}
       <Modal
-        open={isNotificationDetailsOpen}
+        open={isNotificationDetailsOpen && activeNotification?.type !== "occurrences.activity"}
         title={t("core.ui.notifications.details.title", {}, "Notification details")}
-        onClose={() => {
-          setIsNotificationDetailsOpen(false);
-          if (historyAssistantId && previousHistorySelection.current) onSelectNotification(previousHistorySelection.current);
-          previousHistorySelection.current = null;
-        }}
+        onClose={closeNotificationDetails}
         panelClassName="notificationDetailsModalPanel"
         bodyClassName="notificationDetailsModalBody"
       >

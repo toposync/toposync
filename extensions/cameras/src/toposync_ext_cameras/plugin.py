@@ -17,7 +17,7 @@ import urllib.parse
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
@@ -67,6 +67,7 @@ from .pipeline_templates import (
     build_pipeline_graph_v2,
     build_person_vehicle_interaction_graph,
     build_cat_activity_graph,
+    build_visual_state_graph,
     CameraObservationRegion,
     CAT_ACTIVITY_RECIPES,
 )
@@ -94,6 +95,7 @@ from .panorama_region import COVERAGE_REGION_POLICY as REGION_POLICY
 from .source_health import get_global_source_health_store
 from .view_resolver import resolve_ptz_target_view
 from .settings import (
+    CamerasExtensionSettings,
     camera_settings_authorization_selectors,
     camera_source_has_ptz,
     flatten_camera_device_for_ui,
@@ -137,6 +139,7 @@ CLIENT_CLOSED_REQUEST_STATUS = 499
 DEFAULT_CAMERA_DETECTION_MODEL_ID = "rfdetr_det_medium"
 PIPELINE_NAME_MAX_LENGTH = 120
 CAMERA_PIPELINE_PRESETS = (
+    "visual_state",
     "audio_anomaly",
     "area_presence",
     "area_entry",
@@ -227,6 +230,7 @@ async def _raise_if_request_disconnected(request: Request) -> None:
 
 NOTIFICATION_PRIORITIES: set[NotificationPriority] = {"low", "medium", "high"}
 PRESET_PIPELINE_NAME_PARTS = {
+    "visual_state": "sensor_visual",
     "audio_anomaly": "som_acima_da_referencia",
     "area_presence": "presenca_em_area_definida",
     "area_entry": "entrada_em_area_definida",
@@ -243,6 +247,7 @@ PRESET_PIPELINE_NAME_PARTS = {
     "person_vehicle_interaction": "interacao_pessoa_veiculo",
 }
 PRESET_PIPELINE_LABELS = {
+    "visual_state": "Sensor visual",
     "audio_anomaly": "Som acima da referência",
     "area_presence": "Presença em área",
     "area_entry": "Entrada em área",
@@ -460,6 +465,7 @@ class OnvifDiscoverResponse(BaseModel):
 class CameraCaptureObservationRequest(BaseModel):
     duration_s: float = Field(default=5.0, ge=0.5, le=30.0)
     sample_interval_s: float = Field(default=0.05, ge=0.02, le=1.0)
+    fps: float | None = Field(default=None, ge=1.0, le=60.0)
 
 
 class ControlPointMapQuery(BaseModel):
@@ -744,6 +750,7 @@ class AudioPeerSource(BaseModel):
 class CameraPipelinePresetRequest(BaseModel):
     onvif_optimization: CameraOnvifOptimization | None = None
     preset: Literal[
+        "visual_state",
         "audio_anomaly",
         "area_presence",
         "area_entry",
@@ -1519,7 +1526,10 @@ class CamerasExtension(BaseExtension):
         from .audio_pipeline import register_audio_operator
         from .pipelines.visual_region import register_visual_region_operator
         from .pipelines.region_occurrence import register_region_occurrence_operator
+        from .pipelines.frame_occurrence import register_frame_occurrence_operator
+        from .automatic import register_automatic_planner
 
+        register_automatic_planner(services)
         install_audio_routes(app)
         install_audio_clip_routes(app)
         registry = getattr(app.state, "pipeline_operator_registry", None)
@@ -1527,6 +1537,7 @@ class CamerasExtension(BaseExtension):
             register_camera_pipeline_operators(registry)
             register_visual_region_operator(registry)
             register_region_occurrence_operator(registry)
+            register_frame_occurrence_operator(registry)
             register_audio_operator(registry)
             register_area_occurrence_operator(registry)
             register_recent_onvif_event_operator(registry)
@@ -2083,6 +2094,21 @@ class CamerasExtension(BaseExtension):
         app.state.camera_onvif_capabilities = onvif_capabilities
         app.state.camera_onvif_event_manager = onvif_event_manager
         register_extension_shutdown_callback(app, onvif_event_manager.shutdown)
+
+        async def qualify_native_observation(*, configuration, selection):
+            from .onvif.capabilities import qualify_observation_signal
+            settings = CamerasExtensionSettings.model_validate(configuration.settings.extensions.get(EXTENSION_ID, {}))
+            for camera_id, binding in selection.sources.items():
+                camera = next((item for item in settings.devices if item.id == camera_id and item.enabled), None)
+                source = next((item for item in camera.sources if item.id == binding.source_id and item.enabled), None) if camera else None
+                if source is None or source.origin.profile_token != binding.profile_token:
+                    raise ValueError("Native observation source changed")
+                await qualify_observation_signal(camera_id=camera_id, source=source.model_dump(mode="json"),
+                    selection=binding.signal, catalog=onvif_capabilities, events=onvif_event_manager)
+        services.register("automatic.qualify.camera_native", qualify_native_observation)
+        from .automatic import observation_diagnostics
+        services.register("automatic.diagnostics.camera_observation", lambda **kwargs:
+            observation_diagnostics(**kwargs, events=onvif_event_manager, health=get_global_source_health_store()))
 
         async def _svc_onvif_events_list(*, camera_id: str) -> dict[str, Any]:
             return await onvif_event_manager.list_descriptors(str(camera_id or "").strip())
@@ -2929,6 +2955,7 @@ class CamerasExtension(BaseExtension):
             preset_token: str,
             camera_source_id: str | None = None,
             transport_context: Any | None = None,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
             cid = str(camera_id or "").strip()
             token = str(preset_token or "").strip()
@@ -2955,6 +2982,7 @@ class CamerasExtension(BaseExtension):
                         ptz_xaddr,
                         profile_token=profile_token,
                         preset_token=token,
+                        **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                     )
                 except OnvifError as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -3018,6 +3046,7 @@ class CamerasExtension(BaseExtension):
             tilt: float | None = None,
             zoom: float | None = None,
             transport_context: Any | None = None,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
             def _safe_optional_float(value: float | None) -> float | None:
                 if value is None:
@@ -3059,6 +3088,7 @@ class CamerasExtension(BaseExtension):
                         pan=safe_pan,
                         tilt=safe_tilt,
                         zoom=safe_zoom,
+                        **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                     )
                 except OnvifError as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -3068,6 +3098,7 @@ class CamerasExtension(BaseExtension):
             *, camera_id: str, camera_source_id: str | None = None,
             pan: float = 0.0, tilt: float = 0.0, zoom: float = 0.0,
             transport_context: Any | None = None,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
             client, endpoint, token, source_id, _ = await _resolve_ptz_operation_context(
                 camera_id=camera_id, camera_source_id=camera_source_id,
@@ -3077,7 +3108,8 @@ class CamerasExtension(BaseExtension):
             async with _get_onvif_ptz_lock(key):
                 _clear_ptz_preset_tracking(key)
                 try:
-                    await client.relative_move(endpoint, profile_token=token, pan=pan, tilt=tilt, zoom=zoom)
+                    await client.relative_move(endpoint, profile_token=token, pan=pan, tilt=tilt, zoom=zoom,
+                        **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}))
                 except OnvifError as exc:
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
             return {"ok": True}
@@ -3092,7 +3124,10 @@ class CamerasExtension(BaseExtension):
             timeout_s: float | None = None,
             transport_context: Any | None = None,
             allow_relative_fallback: bool = True,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
+            # A guarded proposal must not become a different movement after an uncertain reply.
+            allow_relative_fallback = allow_relative_fallback and dispatch_guard is None
             cid = str(camera_id or "").strip()
             (
                 client,
@@ -3175,6 +3210,7 @@ class CamerasExtension(BaseExtension):
                         tilt=safe_tilt,
                         zoom=safe_zoom,
                         timeout_s=device_timeout,
+                        **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                     )
                 except OnvifError as exc:
                     # Some devices reject ContinuousMove (HTTP 400) but support RelativeMove.
@@ -3435,6 +3471,7 @@ class CamerasExtension(BaseExtension):
             camera_source_id: str | None,
             command: dict[str, Any],
             transport_context: Any | None = None,
+            dispatch_guard: Callable[[], None] | None = None,
         ) -> dict[str, Any]:
             kind = str(command.get("kind") or "").strip()
             if kind == "goto_preset":
@@ -3443,6 +3480,7 @@ class CamerasExtension(BaseExtension):
                     camera_source_id=camera_source_id,
                     preset_token=str(command.get("preset_token") or "").strip(),
                     transport_context=transport_context,
+                    **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                 )
             if kind == "absolute_move":
                 return await _svc_ptz_absolute_move(
@@ -3452,6 +3490,7 @@ class CamerasExtension(BaseExtension):
                     tilt=command.get("tilt"),
                     zoom=command.get("zoom"),
                     transport_context=transport_context,
+                    **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                 )
             if kind == "continuous_move":
                 return await _svc_ptz_continuous_move(
@@ -3462,6 +3501,7 @@ class CamerasExtension(BaseExtension):
                     zoom=float(command.get("zoom") or 0.0),
                     timeout_s=float(command.get("timeout_s") or 0.5),
                     transport_context=transport_context,
+                    **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                     allow_relative_fallback=command.get("allow_relative_fallback", True),
                 )
             if kind == "relative_move":
@@ -3471,6 +3511,7 @@ class CamerasExtension(BaseExtension):
                     tilt=float(command.get("tilt") or 0.0),
                     zoom=float(command.get("zoom") or 0.0),
                     transport_context=transport_context,
+                    **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
                 )
             if kind == "stop":
                 return await _svc_ptz_stop(
@@ -3877,6 +3918,7 @@ class CamerasExtension(BaseExtension):
                         owner_id=f"observation:{uuid.uuid4().hex}",
                         camera_id=cid,
                         source_id=sid,
+                        fps=body.fps,
                     ),
                     _capture_dependencies(),
                     duration_s=body.duration_s,
@@ -3951,7 +3993,11 @@ class CamerasExtension(BaseExtension):
             _require_auth(request, action="core:settings:read")
             try:
                 catalog = await onvif_capabilities.inspect(camera_id, refresh=refresh)
-                return {**catalog, "recipe_optimization": RECIPE_OPTIMIZATION}
+                settings = CamerasExtensionSettings.model_validate(await _read_ext_settings(request))
+                camera = next((item for item in settings.devices if item.id == camera_id), None)
+                source_profiles = {source.id: source.origin.profile_token for source in camera.sources
+                                   if source.enabled and source.origin.profile_token} if camera else {}
+                return {**catalog, "source_profiles": source_profiles, "recipe_optimization": RECIPE_OPTIMIZATION}
             except HTTPException:
                 raise
             except Exception as exc:
@@ -5500,6 +5546,9 @@ class CamerasExtension(BaseExtension):
                     graph_uid=graph_uid, categories=area_categories, notification_title=notification_title,
                     notification_description=notification_description, notification_priority=notification_priority,
                 )
+            if preset == "visual_state":
+                return build_visual_state_graph(camera_id=camera_id, source_id=source_id, graph_uid=graph_uid,
+                    sensor_configuration=registry.get("vision.visual_state").definition.defaults)
             if preset in CAT_ACTIVITY_RECIPES:
                 return build_cat_activity_graph(
                     preset=preset, camera_id=camera_id, source_id=source_id, graph_uid=graph_uid,
@@ -6011,6 +6060,14 @@ class CamerasExtension(BaseExtension):
                     detail=f"preset must be one of: {', '.join(CAMERA_PIPELINE_PRESETS)}",
                 )
 
+            if preset == "visual_state":
+                if str(body.processing_server_id or "local").strip() != "local":
+                    raise HTTPException(400, "Visual sensors currently require local execution")
+                if body.enable_ptz_attention:
+                    raise HTTPException(400, "Visual sensors use passive observation")
+                if request.app.state.pipeline_operator_registry.get("vision.visual_state") is None:
+                    raise HTTPException(409, "Visual sensor operator is unavailable")
+
             if body.observation_region is not None and preset not in CAT_ACTIVITY_RECIPES:
                 raise HTTPException(400, "observation_region requires a cat activity recipe")
             if body.observation_region is not None and body.enable_ptz_attention:
@@ -6052,50 +6109,12 @@ class CamerasExtension(BaseExtension):
                     raise HTTPException(409, "Camera event optimization currently requires local processing")
                 if not selection.coverage_confirmed:
                     raise HTTPException(400, "Confirm event coverage and reopening latency for this source")
-                origin = source.get("origin") if isinstance(source.get("origin"), dict) else {}
-                if origin.get("type") not in {"onvif_profile", "rtsp"} or not origin.get("profile_token"):
-                    raise HTTPException(409, "Optimization requires an exactly bound ONVIF video profile")
-                catalog = await onvif_capabilities.inspect(cid)
-                profiles = [item for item in catalog.get("profiles", []) if item.get("token") == origin["profile_token"]]
-                if len(profiles) != 1:
-                    raise HTTPException(409, "The video profile could not be confirmed")
-                profile = profiles[0]
-                if origin.get("type") == "rtsp":
-                    try:
-                        matches = await onvif_capabilities.matches_stream(cid, profile_token=origin["profile_token"],
-                                                                         rtsp_url=str(origin.get("rtsp_url") or ""),
-                                                                         binding=(origin.get("metadata") or {}).get("onvif_profile_binding")
-                                                                         if isinstance(origin.get("metadata"), dict) else None)
-                    except Exception as exc:
-                        raise HTTPException(409, "The RTSP stream and ONVIF profile could not be matched") from exc
-                    if not matches:
-                        raise HTTPException(409, "The RTSP stream does not match the selected ONVIF profile")
-                expected_sources = {"VideoSourceToken": profile.get("video_source_token"),
-                                    "VideoSourceConfigurationToken": profile.get("video_source_configuration_token")}
-                if selection.topic == "VideoSource/MotionAlarm":
-                    expected_sources["Source"] = profile.get("video_source_token")
-                source_matches = [name for name in expected_sources if name in selection.source]
-                if not source_matches or any(not expected_sources[name] or selection.source[name] != expected_sources[name]
-                                             for name in source_matches):
-                    raise HTTPException(409, "Event origin does not match the selected video source")
-                descriptors = [item for item in catalog.get("events", [])
-                               if item.get("topic") == selection.topic and item.get("qualified_topic") == selection.qualified_topic
-                               and item.get("item_name") == selection.item_name and item.get("is_property") and item.get("is_boolean")]
-                # Only explicitly understood topic paths qualify; vendor labels are not evidence of category coverage.
-                if len(descriptors) != 1 or selection.topic not in {
-                    "RuleEngine/CellMotionDetector/Motion", "VideoSource/MotionAlarm",
-                    "RuleEngine/PeopleDetector/People", "RuleEngine/PeopleDetector/Person"}:
-                    raise HTTPException(409, "This event's detection semantics are not integrated")
-                if not selection.qualified_topic.startswith("{http://www.onvif.org/ver10/topics}"):
-                    raise HTTPException(409, "Vendor-specific event semantics have not been qualified")
+                from .onvif.capabilities import qualify_observation_signal
                 try:
-                    observed = await onvif_event_manager.snapshot(camera_id=cid, topic=selection.topic,
-                        item_name=selection.item_name, qualified_topic=selection.qualified_topic,
-                        source=selection.source, key=selection.key)
+                    await qualify_observation_signal(camera_id=cid, source=source, selection=selection,
+                        catalog=onvif_capabilities, events=onvif_event_manager)
                 except Exception as exc:
-                    raise HTTPException(409, "Selected camera event is unavailable; observe it again") from exc
-                if not observed.get("known") or not observed.get("available"):
-                    raise HTTPException(409, "Observe and synchronize the selected camera event first")
+                    raise HTTPException(409, "Selected camera event could not be qualified; observe its exact source again") from exc
 
             if body.audio_peer is not None:
                 peer = body.audio_peer
@@ -6212,7 +6231,7 @@ class CamerasExtension(BaseExtension):
             detection_model_id = (
                 str(body.model_id or "").strip() or DEFAULT_CAMERA_DETECTION_MODEL_ID
             )
-            if preset not in CAT_ACTIVITY_RECIPES and preset != "audio_anomaly":
+            if preset not in CAT_ACTIVITY_RECIPES and preset not in {"audio_anomaly", "visual_state"}:
                 await _ensure_camera_preset_detection_model_ready(
                     store,
                     processing_server_id=processing_server_id,

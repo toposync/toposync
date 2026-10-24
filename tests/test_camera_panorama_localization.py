@@ -46,7 +46,8 @@ def test_rotation_has_independent_pixel_oracle_and_held_out_validation():
 
 
 @pytest.mark.parametrize("case", ["rotation", "static", "foreground", "zoom", "missing_matcher", "dimensions"])
-def test_calibrated_transition_uses_observed_rotation_not_scene_change(case):
+@pytest.mark.parametrize("native", [False, True])
+def test_calibrated_transition_uses_observed_rotation_not_scene_change(case, native, monkeypatch):
     from types import SimpleNamespace
 
     lens, current, reference, _ = _correspondences()
@@ -64,6 +65,12 @@ def test_calibrated_transition_uses_observed_rotation_not_scene_change(case):
     )
     previous = np.zeros((540, 960), np.uint8)
     image = previous[:, :800] if case == "dimensions" else previous.copy()
+    if native:
+        localizer._contextual_matcher = None
+        descriptors = np.random.default_rng(17).integers(0, 255, (len(current), 128), dtype=np.uint8)
+        monkeypatch.setattr(localizer, "_features", lambda frame: (
+            reference if frame is previous else current,
+            None if case == "missing_matcher" else descriptors, None))
     result = localizer.calibrated_transition(previous, image)
     assert (result is not None) == (case == "rotation")
     if result is not None:
@@ -300,8 +307,42 @@ def test_diagnostics_reuse_the_original_decision_and_evidence(tmp_path, monkeypa
         diagnostic["diagnostics"]["candidates"][0]["current"][0][0] = -999
         diagnostic["rotation_matrix"][0][0] = -999
     diagnostic["capture_evidence"]["sequence"] = -999
-    assert localizer.locate_diagnostic(image, evidence) == original
+    repeated = localizer.locate_diagnostic(image, evidence)
+    for record in (original, repeated):
+        timing = record["diagnostics"].pop("call_timing")
+        assert timing["lock_wait_seconds"] >= 0 and timing["compute_seconds"] >= 0
+    assert repeated == original
     assert localizer.locate(image, evidence) == expected
+
+
+def test_diagnostic_timing_separates_lock_wait_from_computation(monkeypatch):
+    from toposync_ext_cameras.processing import panorama_localization
+
+    clock = [10.]
+    monkeypatch.setattr(panorama_localization.time, "monotonic", lambda: clock[0])
+
+    class Lock:
+        def __enter__(self):
+            clock[0] += .4
+
+        def __exit__(self, *args):
+            pass
+
+    localizer = PanoramaLocalizer.__new__(PanoramaLocalizer)
+    localizer._lock = Lock()
+    localizer.model_digest = "model"
+    localizer.references = []
+
+    def locate(*args):
+        clock[0] += .3
+        return {"status": "unlocalized", "reason": "insufficient_support"}
+
+    localizer._locate_frame = locate
+    result = localizer.locate_diagnostic(np.zeros((32, 32), np.uint8), {})
+    assert result["status"] == "unlocalized"
+    assert result["diagnostics"]["call_timing"] == pytest.approx({
+        "lock_wait_seconds": .4, "compute_seconds": .3,
+    })
 
 
 @pytest.mark.parametrize("change", ["sequence", "generation", "capture_instance", "bytes", "geometry", "shape"])
@@ -581,7 +622,7 @@ def test_batched_tracking_preserves_uneven_reference_pairs_and_ambiguity(monkeyp
 
 
 @pytest.mark.parametrize("cross_capture", [False, True])
-@pytest.mark.parametrize("change", ["movement", "transient", "epoch", "generation", "blank", "zoom", "ambiguous", "expired", "crop", "source_geometry"])
+@pytest.mark.parametrize("change", ["movement", "out_of_order", "repeated_sequence", "transient", "epoch", "generation", "blank", "zoom", "ambiguous", "expired", "crop", "source_geometry"])
 def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp_path, monkeypatch, change, cross_capture):
     from collections import OrderedDict
     import time
@@ -603,11 +644,13 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
     localizer._matching_retry_after = float("inf")  # No recognition or downloads in this unit test.
     key = ("capture", 1, np.eye(3).tobytes(), image.shape)
     anchor = {"gray": image.copy(), "pairs": pairs, "seen": time.monotonic(), "sequence": 1}
+    if change in {"out_of_order", "repeated_sequence"}:
+        anchor["sequence"] = 3 if change == "out_of_order" else 2
     if change == "expired":
         anchor["seen"] -= 6
     localizer._anchors = OrderedDict([(key, anchor)])
     def recognize(*args, **kwargs):
-        assert change not in {"movement", "ambiguous"}, "Measure eligible anchors before costly recognition"
+        assert change not in {"movement", "out_of_order", "repeated_sequence", "ambiguous"}, "Measure eligible anchors before costly recognition"
         if change == "transient":
             assert cross_capture and not np.any(args[0]), "Only lost cross-capture support needs global recovery"
         return {"status": "unlocalized", "reason": "panorama_visual_localization_failed"}
@@ -620,6 +663,8 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         current = cv2.warpAffine(image, np.float32([[1, 0, 2], [0, 1, 3]]), (960, 540))
     evidence = {"capture_instance": "new" if change == "epoch" or cross_capture else "capture",
                 "generation": 1, "sequence": 2}
+    if change in {"out_of_order", "repeated_sequence"}:
+        evidence["published_at"] = 10.0
     if change == "generation":
         evidence = {**evidence, "capture_instance": "capture", "generation": 2}
     geometry = None
@@ -634,6 +679,7 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
     options = {"reference_candidates": cross_capture and change != "epoch"}
     diagnostics = {}
     last_qualified = anchor["seen"]
+    last_sequence = anchor["sequence"]
     result = localizer._locate_frame(current, evidence, geometry, diagnostics, **options)
     if change == "transient":
         assert result["status"] == "unlocalized"
@@ -643,7 +689,7 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         evidence = {**evidence, "sequence": 3}
         current = cv2.warpAffine(image, np.float32([[1, 0, 2], [0, 1, 3]]), (960, 540))
         result = localizer._locate_frame(current, evidence, None, diagnostics, **options)
-    if change in {"movement", "transient"}:
+    if change in {"movement", "out_of_order", "repeated_sequence", "transient"}:
         assert result["status"] == "localized"
         assert diagnostics["photometry"] == ("cross_capture_correspondences" if cross_capture else "tracked_correspondences")
         assert result["capture_evidence"] == evidence
@@ -655,8 +701,11 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         assert np.array_equal(anchor["gray"], image)
         assert np.array_equal(anchor["pairs"][0][1], points.astype(np.float32))
         if cross_capture:
-            assert anchor["sequence"] == 1
+            assert anchor["sequence"] == last_sequence
             assert list(localizer._anchors) == [key]  # No identity relabel or anchor chain.
+        elif change in {"out_of_order", "repeated_sequence"}:
+            assert anchor["seen"] == last_qualified
+            assert anchor["sequence"] == last_sequence
     else:
         assert result["status"] == "unlocalized"
         if change == "ambiguous":

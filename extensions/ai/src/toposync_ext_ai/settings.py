@@ -49,12 +49,14 @@ class AiProfileConfig(BaseModel):
     name: str = ""
     provider_id: str = DEFAULT_OLLAMA_PROVIDER_ID
     model: str = DEFAULT_OLLAMA_MODEL
+    budget_group_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]+$", max_length=128)
     fallback_profile_ids: list[str] = Field(default_factory=list)
     capabilities: list[str] = Field(
         default_factory=lambda: ["vision", "structured_json", "bbox", "boolean_filter"]
     )
     timeout_seconds: float = Field(default=60.0, ge=1.0, le=600.0)
     max_image_side_px: int = Field(default=1280, ge=128, le=8192)
+    max_images_per_request: int = Field(default=1, strict=True, ge=1, le=65)
     jpeg_quality: int = Field(default=85, ge=30, le=100)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     enabled: bool = True
@@ -92,6 +94,14 @@ class AiLimitSettings(BaseModel):
     requests_per_month: int | None = Field(default=None, ge=1)
 
 
+class AiBudgetGroupConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]+$", min_length=1, max_length=128)
+    name: str = Field(default="", max_length=160)
+    limits: AiLimitSettings = Field(default_factory=AiLimitSettings)
+
+
 class OllayaConnectionSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -122,6 +132,8 @@ def validate_ai_settings_patch(
     """Validate the local connection on the host's shared settings save path."""
     if proposed.get("jev") is not None:
         proposed["jev"] = OllayaConnectionSettings.model_validate(proposed["jev"]).model_dump()
+    if "budget_groups" in proposed or "profiles" in proposed:
+        parse_ai_settings(proposed)
     return proposed
 
 
@@ -132,6 +144,7 @@ class AiExtensionSettings(BaseModel):
     providers: list[AiProviderConfig] = Field(default_factory=list)
     profiles: list[AiProfileConfig] = Field(default_factory=list)
     limits: AiLimitSettings = Field(default_factory=AiLimitSettings)
+    budget_groups: list[AiBudgetGroupConfig] = Field(default_factory=list, max_length=128)
     model_catalog_version: str = "builtin-2026-05-02"
     # Absence preserves process configuration; a saved disabled connection wins.
     jev: OllayaConnectionSettings | None = None
@@ -189,7 +202,15 @@ class AiExtensionSettings(BaseModel):
         wanted = str(profile_id or "").strip()
         return next((profile for profile in self.profiles if profile.id == wanted), None)
 
+    def budget_group_by_id(self, identifier: str | None) -> AiBudgetGroupConfig | None:
+        return next((group for group in self.budget_groups if group.id == identifier), None)
+
     def _dedupe_and_validate(self) -> None:
+        group_ids = {group.id for group in self.budget_groups}
+        if len(group_ids) != len(self.budget_groups):
+            raise ValueError("budget group identifiers must be unique")
+        if any(profile.budget_group_id is not None and profile.budget_group_id not in group_ids for profile in self.profiles):
+            raise ValueError("profile budget group is unavailable")
         provider_ids: set[str] = set()
         providers: list[AiProviderConfig] = []
         for provider in self.providers:

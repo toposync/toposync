@@ -8,18 +8,14 @@ const PRIORITY_COLOR: Record<NonNullable<Notification2DPin["priority"]>, string>
   low: "#9aa4b2",
 };
 
-const TRAIL_COLOR: Record<NonNullable<Notification2DPin["priority"]>, string> = {
-  high: "#ef4444",
-  medium: "#f59e0b",
-  low: "#9aa4b2",
-};
-
 type Props = {
   /** Screen-space anchor in pixels — pin tip lands here. */
   screenX: number;
   screenY: number;
   priority?: Notification2DPin["priority"];
   closed?: boolean;
+  image?: Notification2DPin["image"];
+  companions?: ReadonlyArray<{ screenX: number; screenY: number; image: NonNullable<Notification2DPin["image"]> }>;
   /** Optional trail points already projected to screen-space pixels. */
   trail?: ReadonlyArray<{ x: number; y: number }>;
   trails?: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>;
@@ -31,10 +27,9 @@ type Props = {
 // so the straight sides leave the tip and meet the arc tangentially — no kink.
 const PIN_PATH = "M 0 0 L -60.62 -105 A 70 70 0 1 1 60.62 -105 Z";
 
-export function Notification2DPinView({ screenX, screenY, priority, closed, trail, trails }: Props): React.ReactElement {
+export function Notification2DPinView({ screenX, screenY, priority, closed, trail, trails, image, companions }: Props): React.ReactElement {
   const tone = priority ?? "medium";
   const color = PRIORITY_COLOR[tone];
-  const trailColor = TRAIL_COLOR[tone];
   const reactId = useId();
   const gradId = `n2dp-grad-${reactId.replace(/:/g, "")}`;
 
@@ -45,16 +40,18 @@ export function Notification2DPinView({ screenX, screenY, priority, closed, trai
 
   return (
     <>
+      {[...(companions || []), ...(image ? [{ screenX, screenY, image }] : [])].map((item, index) =>
+        <img key={index} className="activityMapImage" src={item.image.url} alt="" style={{ left: item.screenX, top: item.screenY, transform: `translate(${-item.image.anchor[0] * 100}%, ${-item.image.anchor[1] * 100}%)` }} />)}
       {trailPath ? (
         <svg
           className="notification2dTrail"
           aria-hidden="true"
-          style={{ ["--notification2d-trail-color" as string]: trailColor }}
+          style={{ ["--notification2d-trail-color" as string]: color }}
         >
           <path d={trailPath} />
         </svg>
       ) : null}
-      <div
+      {!image && <div
         className={`notification2dPin${closed ? " isClosed" : ""}`}
         style={{
           left: screenX,
@@ -84,7 +81,7 @@ export function Notification2DPinView({ screenX, screenY, priority, closed, trai
           <path d={PIN_PATH} fill={`url(#${gradId})`} />
           <circle cx="0" cy="-140" r="20" fill="#ffffff" />
         </svg>
-      </div>
+      </div>}
     </>
   );
 }

@@ -216,12 +216,12 @@ function cameraSourceOptions(camera: CameraIndexItem | null | undefined): Array<
     .filter((item) => item.id);
 }
 
-function cameraById(cameras: CameraIndexItem[], cameraId: string): CameraIndexItem | null {
+function cameraById(cameras: CameraIndexItem[], cameraId: CameraLiveView["camera_id"]): CameraIndexItem | null {
   const normalized = String(cameraId || "").trim();
   return cameras.find((item) => String(item.id || "").trim() === normalized) ?? null;
 }
 
-function cameraSourceLabel(cameras: CameraIndexItem[], cameraId: string, sourceId: string): string {
+function cameraSourceLabel(cameras: CameraIndexItem[], cameraId: CameraLiveView["camera_id"], sourceId: CameraLiveVariant["camera_source_id"]): string {
   const camera = cameraById(cameras, cameraId);
   const source = (camera?.sources || []).find((item) => String(item.id || "").trim() === String(sourceId || "").trim());
   const name = String(source?.name || "").trim() || String(sourceId || "").trim() || "Fonte";
@@ -279,7 +279,7 @@ function generatedTransmissionLabel(transmission: Transmission, t: TranslateFn):
   return "";
 }
 
-function liveVariantConsequence(variant: CameraLiveVariant, cameras: CameraIndexItem[], cameraId: string, t: TranslateFn): string {
+function liveVariantConsequence(variant: CameraLiveVariant, cameras: CameraIndexItem[], cameraId: CameraLiveView["camera_id"], t: TranslateFn): string {
   const sourceLabel = cameraSourceLabel(cameras, cameraId, variant.camera_source_id);
   if (variant.preferred_transport === "webrtc") {
     return t("ext.streaming.live.consequence.low_latency", { source: sourceLabel }, `Usa ${sourceLabel} com menor latência quando disponível.`);
@@ -1945,7 +1945,7 @@ function StreamingSettingsPanelContent({
   const liveVariantCount = liveViewSummaries.reduce((total, summary) => total + summary.enabledVariantCount, 0);
 
   return (
-    <div className="streamingSettingsPanel">
+    <div className="settingsPanel streamingSettingsPanel">
       <div className="card streamingLiveHeroCard">
         <div className="cardBody">
           <div className="settingsDetailHeader">
@@ -2175,11 +2175,11 @@ function StreamingSettingsPanelContent({
                               </label>
                             </div>
                             <div className="streamingFormGrid">
-                              <label>
+                              {cameraLiveDraft.camera_id ? <label className="field">
                                 <span className="label">{t("ext.streaming.transmissions.camera_controls.source", {}, "Fonte da câmera")}</span>
                                 <select
                                   className="input"
-                                  value={variant.camera_source_id}
+                                  value={variant.camera_source_id ?? ""}
                                   onChange={(event) => updateCameraLiveDraftVariant(variant.id, { camera_source_id: event.target.value })}
                                 >
                                   {sourceOptions.map((option) => (
@@ -2188,8 +2188,8 @@ function StreamingSettingsPanelContent({
                                     </option>
                                   ))}
                                 </select>
-                              </label>
-                              <label>
+                              </label> : null}
+                              <label className="field">
                                 <span className="label">{t("ext.streaming.live.quality", {}, "Qualidade")}</span>
                                 <select
                                   className="input"
@@ -2208,7 +2208,7 @@ function StreamingSettingsPanelContent({
                                   <option value="diagnostic_low">{qualityProfileUiLabel("diagnostic_low", t)}</option>
                                 </select>
                               </label>
-                              <label>
+                              <label className="field">
                                 <span className="label">{t("ext.streaming.live.transport", {}, "Transporte")}</span>
                                 <select
                                   className="input"
@@ -2226,10 +2226,10 @@ function StreamingSettingsPanelContent({
                       })}
                     </div>
                     <div className="rowWrap" style={{ marginTop: 12, justifyContent: "space-between" }}>
-                      <button className="chipButton" type="button" disabled={cameraLiveGenerateBusy} onClick={() => void generateLiveViewsAction(cameraLiveDraft.camera_id)}>
+                      {cameraLiveDraft.camera_id ? <button className="chipButton" type="button" disabled={cameraLiveGenerateBusy} onClick={() => void generateLiveViewsAction(cameraLiveDraft.camera_id ?? undefined)}>
                         <i className="fa-solid fa-rotate" aria-hidden="true" />{" "}
                         {t("ext.streaming.live.regenerate_one", {}, "Reconciliar esta publicação")}
-                      </button>
+                      </button> : null}
                       <button className="dangerButton" type="button" disabled={cameraLiveDraftBusy} onClick={() => void deleteActiveCameraLiveView()}>
                         {t("ext.streaming.transmissions.delete", {}, "Excluir")}
                       </button>

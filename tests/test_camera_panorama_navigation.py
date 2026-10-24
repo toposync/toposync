@@ -12,6 +12,7 @@ import pytest
 from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
 from toposync_ext_cameras.panorama_navigation import (
     _continuous_pulse_plan,
+    _matched_target_displacement,
     _fine_correction_has_measured_response,
     _qualified_navigation_pulse_limit,
     correction_step,
@@ -25,6 +26,36 @@ from toposync_ext_cameras.panorama_navigation import (
 )
 from toposync_ext_cameras.processing.panorama_localization import PanoramaLocalizer
 from toposync_ext_cameras.processing.panorama_mapping import _rotation_basis
+
+
+@pytest.mark.parametrize("case", ["rotation", "unverified", "local_support", "missing", "singular", "nan", "outside", "wrong_size"])
+@pytest.mark.parametrize("scale", [1, 4])
+def test_target_displacement_uses_valid_same_position_geometry(case, scale):
+    lens = {"width": 960 * scale, "height": 540 * scale, "fx": 560 * scale,
+            "fy": 560 * scale, "cx": 479.5 * scale, "cy": 269.5 * scale, "distortion": []}
+    matrix = np.array([[560., 0, 479.5], [0, 560., 269.5], [0, 0, 1.]])
+    angle = .0034
+    rotation = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
+    homography = matrix @ rotation @ np.linalg.inv(matrix)
+    point = np.array([361.717903, 297.450046])
+    target = _rotation_basis(np.eye(3)) @ np.linalg.solve(matrix, np.r_[point, 1.])
+    matching = {"verified": True, "support_scope": "distributed_scene", "analysis_size": [960, 540],
+                "homography": homography.tolist()}
+    if case == "unverified": matching["verified"] = False
+    if case == "local_support": matching["support_scope"] = "banded_command_transition"
+    if case == "missing": matching.pop("homography")
+    if case == "singular": matching["homography"] = np.zeros((3, 3)).tolist()
+    if case == "nan": matching["homography"][0][0] = float("nan")
+    if case == "outside": matching["homography"][0][2] = 2000
+    if case == "wrong_size": matching["analysis_size"] = [0, 540]
+    result = _matched_target_displacement(matching, target, lens, {"rotation_matrix": np.eye(3)})
+    if case != "rotation":
+        assert result is None
+        return
+    grid = np.float64([[960*x, 540*y] for y in (.2, .5, .8) for x in (.2, .5, .8)])
+    displacement = cv2.perspectiveTransform(grid[None], homography)[0] - grid
+    assert result == pytest.approx(1.9869122838459596)
+    assert result < 2 < np.percentile(np.linalg.norm(displacement, axis=1), 95)
 
 
 @pytest.mark.parametrize("case", ["useful", "nearby", "behind", "minor_gain", "nan", "wrong_rotation", "unsupported"])
@@ -330,7 +361,8 @@ def test_navigation_duration_adapts_to_diagonal_displacement_and_never_exceeds_s
 
 
 @pytest.mark.parametrize('duration', [.6, 1.2])
-def test_extended_navigation_pulse_uses_existing_fresh_image_precondition(duration):
+@pytest.mark.parametrize('calibrated', [False, True])
+def test_extended_navigation_pulse_uses_existing_fresh_image_precondition(duration, calibrated):
     import time
     frame = {'received_monotonic': time.monotonic()}
     calls = []
@@ -345,9 +377,150 @@ def test_extended_navigation_pulse_uses_existing_fresh_image_precondition(durati
     scanner = SimpleNamespace(last_frame=frame, checkpoint={}, _check=lambda: None,
                               _persist=persist, _pulse=pulse, capabilities={'velocity_supported': True},
                               physical_state='stopped')
-    navigator = VisualNavigator(scanner, None)
+    estimator = lambda before, after: None
+    navigator = VisualNavigator(scanner, SimpleNamespace(calibrated_transition=estimator) if calibrated else None)
     asyncio.run(navigator._pulse('pan', duration))
-    assert calls == ([{'expected_frame': frame}] if duration > .6 else [{}])
+    expected = {'expected_frame': frame} if duration > .6 else {}
+    if calibrated:
+        expected['transition_estimator'] = estimator
+    assert calls == [expected]
+
+
+@pytest.mark.parametrize("shifted", [False, True])
+def test_target_guard_survives_persistence_wait_and_is_removed_after_rejection(shifted):
+    import time
+    from toposync_ext_cameras.panorama_navigation import _TargetDispatchChanged
+    current = [True]
+    dispatched = []
+    camera = SimpleNamespace(dispatch_guard=None)
+    frame = {"received_monotonic": time.monotonic()}
+
+    def guard():
+        if not current[0]:
+            if shifted:
+                raise _TargetDispatchChanged("target_shifted", .5, 9.)
+            raise PanoramaCaptureError("attention_target_lost")
+
+    async def persist():
+        current[0] = False
+
+    async def pulse(*args, **options):
+        if camera.dispatch_guard is not None:
+            camera.dispatch_guard()
+        dispatched.append(args)
+        return {"frame": frame}
+
+    scanner = SimpleNamespace(camera=camera, last_frame=frame, checkpoint={}, _check=lambda: None,
+        _persist=persist, _pulse=pulse, capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, None)
+    navigator.dispatch_guard = guard
+    with pytest.raises(PanoramaCaptureError, match="attention_target_changed_before_dispatch" if shifted else "attention_target_lost"):
+        asyncio.run(navigator._pulse("pan", .1))
+    assert dispatched == [] and camera.dispatch_guard is None
+    if shifted:
+        assert navigator.trace[-1]["dispatch_rejection"] == {
+            "reason": "target_shifted", "frame_age_seconds": .5, "target_shift_pixels": 9.}
+        assert navigator.trace[-1]["state"] == "rejected_before_transport"
+
+
+def test_cancelled_navigation_pulse_records_interruption_without_claiming_transport_outcome():
+    import time
+    previous_guard = lambda: None
+    camera = SimpleNamespace(dispatch_guard=previous_guard)
+
+    async def persist():
+        pass
+
+    async def pulse(*args, **options):
+        raise asyncio.CancelledError()
+
+    scanner = SimpleNamespace(camera=camera, last_frame={"received_monotonic": time.monotonic()},
+        checkpoint={}, _check=lambda: None, _persist=persist, _pulse=pulse,
+        capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, None)
+    navigator.dispatch_guard = lambda: None
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(navigator._pulse("pan", .12))
+    assert camera.dispatch_guard is previous_guard
+    command, = scanner.checkpoint["navigation_commands"]
+    assert command["state"] == "interrupted"
+    assert command["failure_code"] == "capture_cancelled"
+    assert "command_outcome" not in command
+    assert "stationary_verified" not in command
+
+
+@pytest.mark.parametrize("failure", [None, "small", "small_pose", "stationary", "support", "overlap", "nonfinite", "cancel"])
+@pytest.mark.parametrize("speed,duration", [(.2, .12), (.2, .24), (.1, .6)])
+def test_velocity_qualification_updates_default_gain_only_after_observed_success(failure, speed, duration):
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560,
+        "cx": 479.5, "cy": 269.5, "distortion": []}
+    match = {"verified": True, "support_scope": "distributed_scene", "overlap": .9,
+        "analysis_size": [960, 540], "homography": [[1., 0, 4.], [0, 1., 0], [0, 0, 1.]]}
+    if failure == "small": match["homography"][0][2] = .5
+    if failure == "support": match["support_scope"] = "localized_command_transition"
+    if failure == "overlap": match["overlap"] = .7
+    baseline = {"received_monotonic": time.monotonic(), "capture_evidence": {"sequence": 1}}
+    observed = {"received_monotonic": time.monotonic(), "capture_evidence": {"sequence": 2}}
+    calls = []
+
+    async def pulse(axis, sign, duration, **options):
+        calls.append((axis, sign, duration, options))
+        if failure == "cancel": raise asyncio.CancelledError()
+        return {"frame": observed, "stable": True, "stationary": failure == "stationary", "match": match}
+
+    scanner = SimpleNamespace(last_frame=baseline, checkpoint={}, _check=lambda: None,
+        _persist=AsyncMock(), _pulse=pulse, capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, SimpleNamespace(lens=lens))
+    navigator.response["pan"] = np.array([.1, .2])
+    navigator.locate = AsyncMock(return_value={"rotation_matrix": np.eye(3)})
+    navigator._error = lambda target, located: np.array([0., 0.]) if not calls else np.array([
+        float("nan") if failure == "nonfinite" else .002 if failure == "small_pose" else .008, 0.])
+    if failure:
+        with pytest.raises(asyncio.CancelledError if failure == "cancel" else PanoramaCaptureError):
+            asyncio.run(navigator.qualify_velocity("pan", -1, speed, duration))
+        assert navigator.trace[-1]["response_qualified"] is False
+    else:
+        result = asyncio.run(navigator.qualify_velocity("pan", -1, speed, duration))
+        assert result["response_qualified"] is True
+        assert result["response"] == pytest.approx([-.008/duration, 0.])
+        assert result["duration_seconds"] == duration
+        assert result["capture_evidence"] == {"sequence": 2}
+        assert result["speed"] == speed and result["direction"] == -1
+    assert callable(calls[0][3].pop("frame_observer"))
+    assert calls == [("pan", -1, duration, {"speed": speed, "expected_frame": baseline} if speed > .1 else {})]
+    assert navigator.response["pan"] == pytest.approx([-.008 / duration, 0.] if speed == .1 and not failure else [.1, .2])
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+@pytest.mark.parametrize("distributed_support", [False, True])
+def test_default_velocity_preparation_reuses_measured_response_and_overlap_budget(direction, distributed_support):
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    match = {"verified": True, "support_scope": "distributed_scene", "overlap": .9,
+        "analysis_size": [960, 540], "homography": [[1., 0, -direction * 56.], [0, 1., 0], [0, 0, 1.]],
+        "inliers": 120 if distributed_support else 95, "source_features": 140, "target_features": 140,
+        "displacement": 56.}
+    calls = []
+    async def pulse(axis, sign, duration, **options):
+        calls.append((axis, sign, duration, options))
+        return {"frame": {"received_monotonic": time.monotonic(), "capture_evidence": {"sequence": 2}},
+            "stable": True, "match": match}
+    scanner = SimpleNamespace(last_frame={"received_monotonic": time.monotonic()}, checkpoint={},
+        _check=lambda: None, _persist=AsyncMock(), _pulse=pulse,
+        capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, SimpleNamespace(lens=lens))
+    navigator.locate = AsyncMock(return_value={"rotation_matrix": np.eye(3)})
+    navigator._error = lambda *_: np.array([-direction * .1, 0.]) if calls else np.zeros(2)
+    result = asyncio.run(navigator.qualify_velocity("pan", direction, .1, .6))
+    assert callable(calls[0][3].pop("frame_observer"))
+    assert calls == [("pan", direction, .6, {})]
+    assert result["response_qualified"] is True
+    assert navigator.response["pan"] == pytest.approx([-.1 / .6, 0.])
+    assert navigator.direction_responses[("pan", direction)][0] == .6
+    assert navigator.direction_responses[("pan", direction)][1] == pytest.approx([-direction * .1, 0.])
+    assert navigator.pulse_limits["pan"] == (1.2 if distributed_support else .6)
+    assert result["following_pulse_limit_seconds"] == navigator.pulse_limits["pan"]
 
 
 def test_navigation_consumes_confirmed_fresh_observation_without_renewing_ranked_frame():
@@ -533,9 +706,11 @@ def test_navigation_checks_fresh_image_arrival_before_rejecting_a_small_response
             return reference
 
         def locate(self, *_args):
+            angle = .001 * scanner.pulses
+            c, s = np.cos(angle), np.sin(angle)
             return {
                 "status": "localized",
-                "rotation_matrix": np.eye(3).tolist(),
+                "rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]],
                 "reference_id": "reference",
                 "analysis_width": 960,
                 "validation_matches": 24,
@@ -557,6 +732,8 @@ def test_navigation_checks_fresh_image_arrival_before_rejecting_a_small_response
     assert result["verified"] is True
     assert result["commands"] == 1
     assert result["measurement"]["method"] == "target_patch_correlation"
+    assert result["frame_geometry"]["capture_evidence"]["sequence"] == 2
+    assert result["frame_geometry"]["rotation_matrix"][0][2] == pytest.approx(np.sin(.001))
 
 
 def test_navigation_without_frame_identity_does_not_probe_a_motor():
@@ -697,6 +874,66 @@ def test_navigation_converges_or_refuses_unattainable_motor_precision(target_yaw
     )
 
 
+@pytest.mark.parametrize("response_ratio", [1., 3.08, -1., .0871122299, .2])
+@pytest.mark.parametrize("stopped", [True, False])
+def test_navigation_checks_low_velocity_response_before_another_correction(response_ratio, stopped):
+    lens = {"width": 960, "height": 540, "fx": 573.3, "fy": 573.3,
+            "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"velocity_supported": True, "axes": {"pan": True}},
+                              checkpoint={}, last_frame={"capture_evidence": {}},
+                              physical_state="stopped" if stopped else "unknown")
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+                                target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            # Recorded planning error/gain before the failed fine return.
+            self.error = np.array([-.005886505, 0.])
+            self.response = {"pan": np.array([-.28619564, 0.])}
+            self.speeds = []
+
+        async def locate(self):
+            return {**reference, "reference_id": "reference"}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            pixels = np.tan(self.error) * lens["fx"]
+            return {"error_pixels": pixels.tolist(), "center_error_pixels": float(np.linalg.norm(pixels)),
+                    "analysis_width": 960}
+
+        async def _pulse(self, axis, amount, *, speed=.1):
+            assert self.commands == 0, "A contradicted speed model must not authorize another pulse"
+            self.commands += 1
+            self.speeds.append(speed)
+            self.trace.append({"axis": axis, "amount": amount, "speed": speed, "state": "observed"})
+            self.error += self.response[axis] * amount * speed / .1 * response_ratio
+
+    navigator = Navigator()
+    if response_ratio == 1. or response_ratio == .2 and stopped:
+        result = asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=3))
+        assert result["verified"] and result["measurement"]["center_error_pixels"] <= 3
+    else:
+        with pytest.raises(PanoramaCaptureError, match="visual_response_inconsistent"):
+            asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=3))
+        assert navigator.trace[-1]["response_qualified"] is False
+        assert navigator.trace[-1]["failure_code"] == "visual_response_inconsistent"
+    assert "observed_error_radians" in navigator.trace[-1]
+    assert "motion_match" in navigator.trace[-1]
+    assert navigator.trace[-1]["response_pixel_delta"] >= 0
+    assert navigator.speeds == [.025]
+    assert navigator.trace[-1]["response_ratio"] == pytest.approx(abs(response_ratio))
+    if response_ratio == .2 and stopped:
+        assert not navigator.response
+        assert navigator.trace[-1]["arrival_after_unmodeled_velocity"] is True
+        assert navigator.trace[-1]["response_qualified"] is False
+    else:
+        assert navigator.response["pan"] == pytest.approx([-.28619564, 0.])
+
+
 def test_minimum_pulse_is_used_only_when_observed_response_predicts_improvement():
     # Ideal correction is 22 ms, but a 50 ms pulse still improves this error.
     response = np.array([[.28], [0]])
@@ -718,6 +955,19 @@ def test_continuous_micro_pulse_uses_legal_duration_and_bounded_velocity():
     assert _continuous_pulse_plan(
         np.array([-320.0, 0.0]), np.array([4.0, 0.0]), 0.08
     ) == pytest.approx((0.08, 0.1, 0.08))
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_fine_pulse_quantization_does_not_plan_a_target_crossing(direction):
+    # Frente return: the 50 ms floor at default speed overshot the requested correction.
+    error = direction * np.array([3.1869606454823156, .07042337115018427])
+    response = np.array([-.12022948398630345, -.0013143753309662071]) * 573.3
+    requested = direction * .03695734173046558
+    plan = _continuous_pulse_plan(response, error, requested)
+    assert plan == pytest.approx((abs(requested) * 4, .025, requested))
+    predicted = error + response * plan[2]
+    assert error @ predicted >= 0
+    assert np.linalg.norm(predicted) < np.linalg.norm(error)
 
 
 def test_reference_return_qualifies_lower_velocity_from_the_resulting_image(monkeypatch):
@@ -840,9 +1090,14 @@ def test_axis_response_is_aged_from_its_own_latest_measurement():
     navigator = VisualNavigator(scanner, SimpleNamespace(locate=lambda *_: {'status': 'localized', 'rotation_matrix': current.tolist()}))
     navigator.response = {'pan': np.array([1., 0.]), 'tilt': np.array([0., 1.])}
     navigator.response_rotations = {'pan': np.eye(3), 'tilt': current.copy()}
+    navigator.pulse_limits = {'pan': .3, 'tilt': .2}
+    navigator.direction_responses = {('pan', -1): (.3, np.array([-.1, 0.]))}
+    navigator.stationary_durations = {('pan', -1): .12}
     asyncio.run(navigator.locate())
     assert set(navigator.response) == {'tilt'}
     assert set(navigator.response_rotations) == {'tilt'}
+    assert navigator.pulse_limits == {'tilt': .2}
+    assert not navigator.direction_responses and not navigator.stationary_durations
     assert scanner.checkpoint['navigation_response_invalidations'] == [{
         'commands': 0, 'axis': 'pan', 'reason': 'view_rotation_exceeded',
         'angle_degrees': pytest.approx(np.degrees(.3)),
@@ -1971,7 +2226,8 @@ def test_expired_target_measurement_renews_stopped_observation_without_moving(fa
     assert navigator.commands == 0
 
 
-def test_live_navigation_uses_existing_fine_pulses_before_acceleration_can_overshoot():
+@pytest.mark.parametrize("arrival_limit", [3, 12])
+def test_live_navigation_uses_existing_fine_pulses_before_acceleration_can_overshoot(arrival_limit):
     """Replay the measured weak-to-strong gain and swallowed reversal near arrival."""
     from toposync_ext_cameras.panorama_scan import DEFAULT_CONTINUOUS_PULSE_SPEED
     import time
@@ -1989,7 +2245,7 @@ def test_live_navigation_uses_existing_fine_pulses_before_acceleration_can_overs
     class Navigator(VisualNavigator):
         def __init__(self):
             super().__init__(scanner, localizer, maximum_commands=16)
-            self.error = np.array([.011, .067])
+            self.error = np.array([.011 if arrival_limit == 12 else 0., .067])
             self.response = {"tilt": np.array([0., .03944])}
             self.pulses = []
             self.direction = -1
@@ -2014,11 +2270,112 @@ def test_live_navigation_uses_existing_fine_pulses_before_acceleration_can_overs
             self.direction = direction
 
     navigator = Navigator()
-    result = asyncio.run(navigator.aim([1, 0, 0]))
+    result = asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=arrival_limit))
     assert result["verified"] is True
-    assert result["measurement"]["center_error_pixels"] <= 12
-    assert 1 <= navigator.commands <= 4
+    assert result["measurement"]["center_error_pixels"] <= arrival_limit
+    assert 1 <= navigator.commands <= 6
     assert all(.05 <= abs(amount) <= .15 for amount, _ in navigator.pulses)
+
+
+@pytest.mark.parametrize("outcome", ["corrected", "repeated", "same_direction", "outside_envelope"])
+@pytest.mark.parametrize("continuous", [False, True])
+def test_live_return_allows_only_one_small_observed_target_crossing(outcome, continuous):
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"velocity_supported": continuous, "axes": {"pan": True}},
+        checkpoint={}, last_frame={"capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.error = np.array([.093, .0016])
+            self.response = {"pan": np.array([-.15, 0.])}
+
+        async def locate(self):
+            return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            pixels = np.tan(self.error) * 560
+            return {"error_pixels": pixels.tolist(), "center_error_pixels": float(np.linalg.norm(pixels)),
+                "analysis_width": 960}
+
+        async def _pulse(self, axis, amount, *, speed=.1):
+            self.commands += 1
+            self.trace.append({"axis": axis, "amount": amount, "speed": speed})
+            second = {"same_direction": .012, "outside_envelope": -.05}.get(outcome, -.0083)
+            self.error[0] = [.00673, second, .012 if outcome == "repeated" else .001][self.commands - 1]
+
+    navigator = Navigator()
+    operation = navigator.aim([1, 0, 0], maximum_error_pixels=3)
+    if continuous:
+        # These fixed endpoints contradict the scaled low-speed prediction.
+        # A bounded crossing cannot authorize reuse of that contradicted model.
+        with pytest.raises(PanoramaCaptureError, match="visual_response_inconsistent"):
+            asyncio.run(operation)
+        assert navigator.commands == 2 and navigator.trace[-1]["speed"] < .1
+        assert not any(item.get("bounded_overshoot_recovery") for item in navigator.trace)
+        return
+    if outcome == "corrected":
+        result = asyncio.run(operation)
+        assert result["measurement"]["center_error_pixels"] <= 3
+        assert navigator.commands == 3
+    else:
+        with pytest.raises(PanoramaCaptureError, match="visual_correction_diverged"):
+            asyncio.run(operation)
+        assert navigator.commands == (3 if outcome == "repeated" else 2)
+    assert sum(bool(item.get("bounded_overshoot_recovery")) for item in navigator.trace) == (
+        1 if outcome in {"corrected", "repeated"} else 0)
+
+
+@pytest.mark.parametrize("small_effect", [False, True])
+def test_unqualified_small_or_lower_velocity_effect_does_not_replace_measured_gain(small_effect):
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"velocity_supported": True, "axes": {"pan": True}},
+        checkpoint={}, last_frame={"capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.error = np.array([.008 if small_effect else .007, 0.])
+            self.response = {"pan": np.array([-.1 if small_effect else -.2, 0.])}
+            self.response_rotations = {"pan": np.eye(3)}
+            self.amounts = []
+
+        async def locate(self):
+            return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            pixels = np.tan(self.error) * 560
+            return {"error_pixels": pixels.tolist(), "center_error_pixels": float(np.linalg.norm(pixels)),
+                "analysis_width": 960}
+
+        async def _pulse(self, axis, amount, *, speed=.1):
+            assert (speed == .1) if small_effect else (speed < .1)
+            self.commands += 1
+            self.amounts.append(abs(amount))
+            self.trace.append({"axis": axis, "amount": amount, "speed": speed})
+            self.error = np.array([.0071 if small_effect and self.commands == 1 else .001, 0.])
+
+    navigator = Navigator()
+    result = asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=3))
+    assert result["verified"] and navigator.commands == (2 if small_effect else 1)
+    if small_effect:
+        assert navigator.trace[0]["response_qualified"] is False
+        assert navigator.amounts[1] <= navigator.amounts[0]
+    else:
+        np.testing.assert_array_equal(navigator.response["pan"], [-.2, 0.])
+        assert not navigator.direction_responses
 
 
 @pytest.mark.parametrize("change", [None, "probe", "reversal", "target", "support", "gain", "axis", "nonfinite"])
@@ -2145,8 +2502,74 @@ def test_live_navigation_prioritizes_arrival_error_over_motor_duration():
     assert navigator.pulses == ["tilt"]
 
 
-@pytest.mark.parametrize('stationary_verified,second_pulse_effective', [(True, True), (True, False), (False, False)])
-def test_live_probe_escalates_once_only_after_qualified_no_effect(stationary_verified, second_pulse_effective):
+@pytest.mark.parametrize("evidence", ["observed", "unverified", "low_overlap", "unstopped", "contradictory", "persistent", "method_disagreement", "projected"])
+def test_small_observed_probe_can_identify_axis_without_learning_its_unqualified_gain(evidence):
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"velocity_supported": True, "axes": {"pan": True}},
+        checkpoint={}, physical_state="unknown" if evidence == "unstopped" else "stopped",
+        last_frame={"capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.error = np.array([.08, 0.])
+            self.pulses = []
+
+        async def locate(self):
+            return {**reference, "reference_id": "reference"}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            pixels = np.tan(self.error) * 560
+            return {"error_pixels": pixels.tolist(), "center_error_pixels": float(np.linalg.norm(pixels)), "analysis_width": 960}
+
+        async def _pulse(self, axis, amount):
+            assert axis not in self.response, "A subminimum response cannot become a motor gain"
+            self.commands += 1
+            self.pulses.append(amount)
+            self.trace.append({"axis": axis, "amount": amount})
+            self.last_pulse_match = {"verified": evidence != "unverified",
+                "overlap": .7 if evidence == "low_overlap" else .99,
+                "displacement": 2.581331 if evidence == "method_disagreement" else (10. if evidence == "contradictory" else 1.17)}
+            if evidence == "projected":
+                self.last_pulse_match.update(displacement=2.430388, support_scope="distributed_scene",
+                    analysis_size=[960, 540], homography=[[.9970829756, 0, 3.2999380171],
+                        [-.0016362468, 1, .7830226549], [-.00000607141687, 0, 1.0029054644]])
+            self.error[0] -= .3 * amount if evidence in {"observed", "projected"} and self.commands > 1 else (1.866488 if evidence == "method_disagreement" else 1.17) / 560
+
+    navigator = Navigator()
+    if evidence in {"observed", "projected"}:
+        target = (_rotation_basis(np.eye(3)) @ np.array([-117.782097 / 560, 27.950046 / 560, 1.])
+                  if evidence == "projected" else [1, 0, 0])
+        result = asyncio.run(navigator.aim(target))
+        assert result["verified"] and result["measurement"]["center_error_pixels"] <= 12
+        assert navigator.pulses == [.12, .24]
+    else:
+        with pytest.raises(PanoramaCaptureError, match="visual_response_unavailable"):
+            asyncio.run(navigator.aim([1, 0, 0]))
+        assert navigator.pulses == ([.12, .24, .48] if evidence == "persistent" else [.12])
+        assert not navigator.response
+    assert navigator.trace[0]["response_qualified"] is False
+    first = navigator.trace[0]
+    assert first["response_pixel_delta"] > 0
+    assert first["observed_error_radians"][0] < .08
+    assert first["response"][0] < 0
+    if evidence == "method_disagreement":
+        assert first["response_pixel_delta"] < 2 < first["motion_match"]["displacement"]
+        assert first["motion_match"]["verified"] is True
+        assert navigator.commands == 1 and not navigator.response
+
+
+@pytest.mark.parametrize('stationary_verified,effective_pulse,initial_response', [
+    (True, 2, False), (True, 3, False), (True, None, False), (False, None, False), (True, 2, True), (True, 2, "opposite"),
+    (True, None, "opposite"), (False, None, "opposite"),
+])
+def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stationary_verified, effective_pulse, initial_response):
     from types import SimpleNamespace
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
@@ -2159,6 +2582,10 @@ def test_live_probe_escalates_once_only_after_qualified_no_effect(stationary_ver
             super().__init__(scanner, localizer, maximum_commands=16)
             self.error = np.array([0., -.025])
             self.pulses = []
+            if initial_response:
+                self.response['tilt'] = np.array([0., .3])
+                direction = -1 if initial_response == "opposite" else 1
+                self.direction_responses[('tilt', direction)] = (.05, np.array([0., .015 * direction]))
 
         async def locate(self):
             return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
@@ -2175,17 +2602,170 @@ def test_live_probe_escalates_once_only_after_qualified_no_effect(stationary_ver
             self.trace.append({"axis": axis, "amount": amount})
             self.pulses.append(amount)
             self.last_pulse_stationary = stationary_verified
-            if self.commands == 2 and second_pulse_effective:
+            if self.commands == effective_pulse:
                 self.error[1] += .012
                 self.last_pulse_stationary = False
 
     navigator = Navigator()
-    if second_pulse_effective:
+    if effective_pulse:
         assert asyncio.run(navigator.aim([1, 0, 0]))['measurement']['center_error_pixels'] <= 12
     else:
-        with pytest.raises(PanoramaCaptureError, match='visual_response_unavailable'):
+        code = 'visual_arrival_unconfirmed' if initial_response and not stationary_verified else 'visual_response_unavailable'
+        with pytest.raises(PanoramaCaptureError, match=code):
             asyncio.run(navigator.aim([1, 0, 0]))
-    assert navigator.pulses == ([.12, .24] if stationary_verified else [.12])
+    expected = [.12, .24] if effective_pulse == 2 else [.12, .24, .48]
+    if initial_response:
+        if effective_pulse:
+            assert len(navigator.pulses) == 2
+        elif not stationary_verified:
+            assert len(navigator.pulses) <= 6
+            assert all(amount == navigator.pulses[0] for amount in navigator.pulses)
+        else:
+            assert navigator.pulses[-1] == .48
+        assert .05 < navigator.pulses[0] <= .48
+        if stationary_verified:
+            assert all(first < second <= .48 for first, second in zip(navigator.pulses, navigator.pulses[1:]))
+    else:
+        assert navigator.pulses == (expected if stationary_verified else [.12])
+
+
+@pytest.mark.parametrize("initial_coverage", ["visible", "unreachable", "disconnected"])
+def test_moving_destination_replaces_initial_ray_before_visual_arrival(initial_coverage):
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    distant_reference = {"id": "distant", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(checkpoint={}, last_frame={"capture_evidence": {}})
+    latest = np.array([1., .1, 0.]); latest /= np.linalg.norm(latest)
+    requested_references = []
+    def target_reference(ray):
+        requested_references.append(np.asarray(ray))
+        if np.allclose(ray, latest) or initial_coverage == "visible":
+            return reference
+        return None if initial_coverage == "unreachable" else distant_reference
+    localizer = SimpleNamespace(lens=lens, references=[reference, distant_reference], model={"overlap_links": []},
+        target_reference=target_reference)
+    initial = [1, 0, 0] if initial_coverage == "visible" else [-1, 0, 0]
+    current = [initial]
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            await asyncio.sleep(0)
+            current[0] = latest.tolist()  # A newer observation arrived during localization.
+            return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
+        def _error(self, *_):
+            return np.zeros(2)
+        async def _target_measurement(self, target, *_):
+            assert np.allclose(target, latest)
+            return {"center_error_pixels": 0}
+        async def _pulse(self, *args, **kwargs):
+            pytest.fail("A visually centred updated target must not cause a pulse")
+    result = asyncio.run(Navigator(scanner, localizer).aim(initial, target_provider=lambda: current[0]))
+    assert result["verified"] and result["target_ray"] == pytest.approx(latest.tolist())
+    assert requested_references and all(np.allclose(ray, latest) for ray in requested_references)
+
+
+def test_live_control_measures_each_direction_and_compensates_observed_startup_delay():
+    from toposync_ext_cameras.panorama_scan import DEFAULT_CONTINUOUS_PULSE_SPEED
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"velocity_supported": True, "axes": {"tilt": True}},
+        checkpoint={}, last_frame={"capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.error = np.array([0., -.04])
+            self.pulses = []
+
+        async def locate(self):
+            return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            error = np.tan(self.error) * 560
+            return {"error_pixels": error.tolist(), "center_error_pixels": float(np.linalg.norm(error)),
+                "analysis_width": 960}
+
+        async def _pulse(self, axis, amount, *, speed=DEFAULT_CONTINUOUS_PULSE_SPEED):
+            assert speed == DEFAULT_CONTINUOUS_PULSE_SPEED
+            self.commands += 1
+            self.trace.append({"axis": axis, "amount": amount})
+            self.pulses.append(amount)
+            # Different gains by direction, both with a measured startup delay.
+            travel = max(0., abs(amount) - .12) * (.55 if amount > 0 else .35)
+            self.last_pulse_stationary = travel == 0
+            self.error[1] += np.copysign(travel, amount)
+
+    navigator = Navigator()
+    result = asyncio.run(navigator.aim([1, 0, 0], maximum_error_pixels=3))
+    assert result["measurement"]["center_error_pixels"] <= 3
+    assert navigator.pulses[:4] == pytest.approx([.12, .24, -.12, -.24])
+    assert any(.12 < pulse < .24 for pulse in navigator.pulses[4:])
+
+
+@pytest.mark.parametrize("expiry_stage", ["measurement", "pulse"])
+@pytest.mark.parametrize("recovers", [False, True])
+def test_expired_measurement_after_no_effect_renews_without_an_extra_pulse(expiry_stage, recovers):
+    from toposync_ext_cameras.panorama_navigation import _ExpiredQualifiedFrame
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(checkpoint={}, last_frame={"capture_evidence": {}},
+        capabilities={"velocity_supported": True, "axes": {"pan": True}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    class Navigator(VisualNavigator):
+        renewed = False
+        renewals = 0
+        async def locate(self):
+            return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
+        def _error(self, *_):
+            return np.array([.2, 0])
+        async def _target_measurement(self, *_):
+            if expiry_stage == "measurement" and self.commands and not self.renewed:
+                raise _ExpiredQualifiedFrame()
+            return {"center_error_pixels": 0 if self.renewed else 100}
+        async def _renew_localization_frame(self, error):
+            assert self.commands == 1
+            self.renewals += 1
+            self.renewed = recovers
+            return {"capture_evidence": {"sequence": 2}}
+        async def _pulse(self, axis, amount):
+            if expiry_stage == "pulse" and self.commands and not self.renewed:
+                raise _ExpiredQualifiedFrame()
+            self.commands += 1
+            self.last_pulse_stationary = True
+            self.trace.append({"axis": axis})
+    navigator = Navigator(scanner, localizer)
+    if recovers:
+        result = asyncio.run(navigator.aim([1, 0, 0]))
+        assert result["verified"] and navigator.renewed
+    else:
+        with pytest.raises(_ExpiredQualifiedFrame):
+            asyncio.run(navigator.aim([1, 0, 0]))
+    assert navigator.renewals == (2 if expiry_stage == "pulse" and not recovers else 1)
+    assert navigator.commands == 1
+
+
+@pytest.mark.parametrize("expires_during_persist", [False, True])
+def test_expired_pulse_is_rejected_before_transport(monkeypatch, expires_during_persist):
+    import toposync_ext_cameras.panorama_navigation as navigation
+    clock = [100. if expires_during_persist else 102.]
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: clock[0])
+    async def persist():
+        clock[0] = 102.
+    scanner = SimpleNamespace(last_frame={"received_monotonic": 99.5}, checkpoint={},
+        _check=lambda: None, _persist=persist, _pulse=AsyncMock(),
+        capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, None)
+    with pytest.raises(navigation._ExpiredQualifiedFrame):
+        asyncio.run(navigator._pulse("pan", .12))
+    scanner._pulse.assert_not_awaited()
+    assert navigator.commands == int(expires_during_persist)
+    if expires_during_persist:
+        assert navigator.trace[-1]["state"] == "rejected_before_transport"
 
 
 def test_navigation_leaves_overlap_route_as_soon_as_requested_target_is_visible(monkeypatch):
@@ -2250,6 +2830,10 @@ def test_navigation_defers_unknown_axis_while_known_response_makes_progress(init
 
         async def _pulse(self, axis, amount):
             assert self.commands < self.maximum_commands
+            planning = scanner.checkpoint["navigation_step"]
+            assert planning["planning_error_radians"] == pytest.approx(self.error)
+            assert planning["planning_response"] == (self.response[axis].tolist() if axis in self.response else None)
+            assert planning["fine_control"] is False
             self.commands += 1
             self.trace.append({'axis': axis, 'amount': amount})
             self.error += np.array([-.2, 0.] if axis == 'pan' else [0., .24]) * amount
@@ -2498,3 +3082,960 @@ def test_automatic_approach_requires_qualification_and_current_visual_arrival(re
     assert result["verified"] and result["measurement"]["center_error_pixels"] <= 12
     assert navigator.measurements > 1
     assert navigator.pulses[0] == (.5 if status == "qualified" else .12)
+
+
+@pytest.mark.parametrize("changed_during", ["correction_measurement", "arrival_measurement", "stationary_arrival", "continuous_updates"])
+def test_target_change_during_measurement_replans_without_old_pulse_or_arrival(changed_during):
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, last_frame={"capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    first = np.array([1., .1, 0.]); first /= np.linalg.norm(first)
+    latest = np.array([1., -.1, 0.]); latest /= np.linalg.norm(latest)
+    observed = [first]
+    measurements = []
+
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            if changed_during == "continuous_updates" and len(measurements) >= 12:
+                raise PanoramaCaptureError("capture_budget_exceeded")
+            return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
+
+        def _error(self, *_):
+            return np.array([.025 if changed_during == "continuous_updates" else .1, 0.])
+
+        async def _target_measurement(self, target, *_):
+            measurements.append(np.asarray(target).copy())
+            if changed_during == "continuous_updates":
+                observed[0] = latest if np.allclose(target, first) else first
+                return {"center_error_pixels": 14, "error_pixels": [14, 0], "analysis_width": 960}
+            if changed_during != "stationary_arrival" or self.commands:
+                observed[0] = latest  # New detection arrives while image matching yields.
+            error = 0 if np.allclose(target, latest) or changed_during == "arrival_measurement" or self.commands else 56
+            return {"center_error_pixels": error, "error_pixels": [error, 0], "analysis_width": 960}
+
+        async def _pulse(self, *args, **kwargs):
+            if changed_during != "stationary_arrival" or self.commands:
+                pytest.fail("The old direction must not dispatch a pulse")
+            self.commands += 1
+            self.last_pulse_stationary = True
+            self.trace.append({})
+
+    navigator = Navigator(scanner, localizer)
+    if changed_during == "continuous_updates":
+        with pytest.raises(PanoramaCaptureError, match="capture_budget_exceeded"):
+            asyncio.run(navigator.aim(first, target_provider=lambda: observed[0].tolist()))
+        assert len(measurements) == 12 and navigator.commands == 0 and not navigator.trace
+        assert scanner.checkpoint["navigation_target_replans"] == 12
+        return
+    result = asyncio.run(navigator.aim(first, target_provider=lambda: observed[0].tolist()))
+    assert result["target_ray"] == pytest.approx(latest)
+    pulses = int(changed_during == "stationary_arrival")
+    assert len(measurements) == 2 + pulses and np.allclose(measurements[-1], latest)
+    assert navigator.commands == pulses and len(navigator.trace) == pulses
+    assert scanner.checkpoint["navigation_target_replans"] == 1
+
+
+@pytest.mark.parametrize("velocity", [-.08, .02, .08])
+def test_fresh_qualified_pose_retargets_a_moving_subject_without_waiting_for_a_quiet_frame(velocity):
+    import math
+    import time
+
+    class FreshCommand(Exception):
+        pass
+
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped",
+        last_frame={"capture_evidence": {"capture_instance": "decoder", "generation": 1, "sequence": 1},
+            "received_monotonic": time.monotonic()})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    angle = [.15]
+    direction = lambda: [math.cos(angle[0]), math.sin(angle[0]), 0.]
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.measurements = 0
+            self.response = {"pan": np.array([-.5, 0.])}
+
+        async def locate(self):
+            if self.measurements > 4:
+                pytest.fail("Repeated analysis starved a continuously updating target")
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+
+        async def _target_measurement(self, target, located):
+            self.measurements += 1
+            measured = localized_axis_measurement(target, lens, located)
+            angle[0] += velocity  # Independent subject motion while matching the frame.
+            return measured
+
+        async def _pulse(self, axis, amount, **kwargs):
+            assert axis == "pan"
+            assert scanner.checkpoint["navigation_step"]["target_ray"] == pytest.approx(direction())
+            assert amount == pytest.approx(min(.6, angle[0] / .5 * .8), rel=.002)
+            assert self.measurements == 1
+            raise FreshCommand()
+
+    navigator = Navigator()
+    with pytest.raises(FreshCommand):
+        asyncio.run(navigator.aim(direction(), target_provider=direction))
+    assert scanner.checkpoint["navigation_target_rebases"] == 1
+
+
+@pytest.mark.parametrize("velocity,trajectory,maneuver_at", [(-.06, "constant", None), (.03, "constant", None), (.12, "constant", None),
+    (.12, "stop", .62), (.12, "reverse", .62), (.12, "variable_delay", None), (.12, "dispatch_delay", None),
+    (.12, "dispatch_expired", None), (.12, "dispatch_small_change", None),
+    (.12, "stop", .3), (.12, "stop", .9), (.12, "reverse", .3), (.12, "reverse", .9)])
+@pytest.mark.parametrize("prediction_enabled,prediction_support", [(False, "none"), (True, "valid"),
+    (True, "no_coverage"), (True, "velocity_disagreement")])
+def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monkeypatch, record_property, velocity, trajectory, maneuver_at, prediction_enabled, prediction_support):
+    """Ideal synthetic pan plant; no device, decoder or physical timing qualification."""
+    import math
+    import json
+    from toposync_ext_cameras import panorama_navigation as navigation
+
+    elapsed, camera_angle = [0.], [0.]
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 100. + elapsed[0])
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped", last_frame={})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference, coverage_mask=np.ones((40, 80), dtype=np.uint8))
+    if prediction_support == "no_coverage":
+        localizer.coverage_mask[:] = 0
+    if prediction_support == "velocity_disagreement":
+        original_predict = navigation.TargetMotion.predict
+        def uncertain_predict(self, *args):
+            candidate = original_predict(self, *args)
+            if candidate:
+                angle = math.atan2(candidate["ray"][1], candidate["ray"][0]) + .2
+                candidate["comparison_ray"] = [math.cos(angle), math.sin(angle), 0.]
+            return candidate
+        monkeypatch.setattr(navigation.TargetMotion, "predict", uncertain_predict)
+
+    def target_angle():
+        if trajectory in ("stop", "reverse"):
+            return .18 + velocity * min(elapsed[0], maneuver_at) - (velocity * max(0., elapsed[0] - maneuver_at) if trajectory == "reverse" else 0.)
+        return .18 + velocity * elapsed[0]
+
+    def direction():
+        return [math.cos(target_angle()), math.sin(target_angle()), 0.]
+
+    observation_sequence, observation_time = [0], [None]
+    def observation():
+        if observation_time[0] != elapsed[0]:
+            observation_sequence[0] += 1
+            observation_time[0] = elapsed[0]
+        return {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+            "capture_instance": "target-replay", "generation": 1, "sequence": observation_sequence[0],
+            "observed_monotonic": 100. + elapsed[0]}
+
+    class ReplayDeadline(Exception):
+        pass
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.response = {"pan": np.array([-.5, 0.])}
+            self.frames = 0
+            self.command_samples = []
+            self.dispatch_delayed = False
+            self.measurement_seconds = 0.
+            self.dispatch_rejections = []
+
+        async def locate(self):
+            if elapsed[0] >= 8:
+                raise ReplayDeadline("Tracking did not arrive within the eight-second replay window")
+            self.frames += 1
+            scanner.last_frame = {"received_monotonic": 100. + elapsed[0],
+                "capture_evidence": {"capture_instance": "replay", "generation": 1, "sequence": self.frames}}
+            c, s = math.cos(camera_angle[0]), math.sin(camera_angle[0])
+            return {"rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]], "reference_id": "reference",
+                "analysis_width": 960, "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+
+        async def _target_measurement(self, target, located):
+            # Independent image-space oracle for this ideal camera and world angle.
+            error = 560 * math.tan(math.atan2(target[1], target[0]) - camera_angle[0])
+            self.measurement_seconds = [.04, .18, .06, .12][self.commands % 4] if trajectory == "variable_delay" else .08
+            elapsed[0] += self.measurement_seconds
+            return {"center_error_pixels": abs(error), "error_pixels": [error, 0], "analysis_width": 960}
+
+        async def _pulse(self, axis, amount, **kwargs):
+            cycle_started = elapsed[0]
+            if trajectory.startswith("dispatch_") and not self.dispatch_delayed:
+                self.dispatch_delayed = True
+                elapsed[0] += {"dispatch_delay": .2, "dispatch_expired": 1.01, "dispatch_small_change": .02}[trajectory]
+            try:
+                self.dispatch_guard()
+            except navigation._TargetDispatchChanged as error:
+                self.dispatch_rejections.append(error.details)
+                raise
+            assert axis == "pan" and abs(amount) <= .6
+            assert self.commands < self.maximum_commands
+            planned = scanner.checkpoint["navigation_step"]["observed_target_ray"]
+            if trajectory == "dispatch_small_change":
+                assert abs(560 * (math.tan(target_angle() - camera_angle[0]) -
+                    math.tan(math.atan2(planned[1], planned[0]) - camera_angle[0]))) <= 6
+            else:
+                assert planned == pytest.approx(direction())
+            prediction = scanner.checkpoint["navigation_step"]["prediction"]
+            if prediction:
+                if self.command_samples:
+                    previous = self.command_samples[-1]
+                    assert prediction["cycle_seconds"] == pytest.approx(
+                        previous["time_after"] - previous["time"] + self.measurement_seconds)
+                else:
+                    # A rejected dispatch can leave measured subject history
+                    # before the first physical command, without a motor cycle.
+                    assert self.dispatch_rejections and prediction["motion_cycle_seconds"] == 0
+                    assert 0 < prediction["cycle_seconds"] <= .1
+                    assert prediction["horizon_seconds"] <= 1
+            self.command_samples.append({"time": cycle_started, "observed_angle": target_angle(),
+                "camera_angle_before": camera_angle[0], "amount": amount,
+                "measurement_seconds": self.measurement_seconds, "prediction": prediction})
+            camera_angle[0] += .5 * amount
+            # The subject keeps moving through actuation and settling.
+            elapsed[0] += abs(amount) + ([.1, .45, .05, .2][self.commands % 4] if trajectory == "variable_delay" else .1)
+            self.command_samples[-1].update(time_after=elapsed[0], camera_angle_after=camera_angle[0],
+                subject_angle_after=target_angle(),
+                error_after_pixels=560 * math.tan(target_angle() - camera_angle[0]))
+            self.commands += 1
+            self.trace.append({"axis": axis, "amount": amount})
+            self.last_pulse_stationary = False
+
+    navigator = Navigator()
+    options = {"target_observation_provider": observation} if prediction_enabled else {}
+    if trajectory == "variable_delay" and prediction_support != "valid":
+        with pytest.raises(ReplayDeadline):
+            asyncio.run(navigator.aim(direction(), target_provider=direction, **options))
+        assert abs(560 * math.tan(target_angle() - camera_angle[0])) > 12
+        assert scanner.checkpoint.get("navigation_target_predictions", 0) == 0
+        outcome = "rejected_replay_deadline"
+    elif velocity == .12 and (trajectory == "constant" or trajectory.startswith("dispatch_")) and prediction_support != "valid":
+        # This replay remains a known tracking failure; rejecting it is not mobile acceptance.
+        with pytest.raises(PanoramaCaptureError, match="visual_arrival_unconfirmed"):
+            asyncio.run(navigator.aim(direction(), target_provider=direction, **options))
+        assert abs(560 * math.tan(target_angle() - camera_angle[0])) > 12
+        assert scanner.checkpoint["navigation_target_rebases"] > 1
+        assert scanner.checkpoint.get("navigation_target_predictions", 0) == 0
+        outcome = "rejected_visual_arrival_unconfirmed"
+    else:
+        result = asyncio.run(navigator.aim(direction(), target_provider=direction, **options))
+        assert result["verified"] and result["target_ray"] == pytest.approx(direction())
+        assert abs(560 * math.tan(target_angle() - camera_angle[0])) <= 12
+        assert 0 < navigator.commands <= 12
+        outcome = "synthetic_arrival"
+        if velocity == .12 and (trajectory == "constant" or trajectory.startswith("dispatch_")):
+            assert scanner.checkpoint.get("navigation_target_predictions", 0) > 0
+        if trajectory in ("stop", "reverse"):
+            assert elapsed[0] > maneuver_at, "The replay must include the change, not finish before it"
+        if trajectory == "reverse" and prediction_support == "valid":
+            after_reversal = [sample for sample in navigator.command_samples if sample["time"] > maneuver_at]
+            if maneuver_at == .62:
+                assert after_reversal, "Preserve the original reversal recovery scenario"
+            if after_reversal:
+                assert after_reversal[0]["prediction"] is None
+            for sample in after_reversal:
+                if sample["prediction"]:
+                    ray = sample["prediction"]["ray"]
+                    assert math.atan2(ray[1], ray[0]) < sample["observed_angle"], "A new forecast must follow the reversed direction"
+    assert scanner.checkpoint["navigation_target_rebases"] >= 1
+    if trajectory in ("dispatch_delay", "dispatch_expired"):
+        assert scanner.checkpoint["navigation_target_replans"] == 1
+        rejection, = navigator.dispatch_rejections
+        if trajectory == "dispatch_expired":
+            assert rejection["reason"] == "frame_expired"
+            assert rejection["frame_age_seconds"] > 1
+            assert rejection["target_shift_pixels"] is None
+        else:
+            assert rejection["reason"] == "target_shifted"
+            assert 0 <= rejection["frame_age_seconds"] <= 1
+            assert rejection["target_shift_pixels"] > 6
+        assert navigator.command_samples[0]["time"] > .28, "Reject the first delayed command before dispatch"
+    if trajectory == "dispatch_small_change":
+        assert scanner.checkpoint.get("navigation_target_replans", 0) == 0
+    record_property("tracking_replay", json.dumps({"velocity_radians_per_second": velocity, "trajectory": trajectory,
+        "maneuver_at_seconds": maneuver_at,
+        "elapsed_seconds": elapsed[0], "commands": navigator.commands,
+        "final_error_pixels": abs(560 * math.tan(target_angle() - camera_angle[0])),
+        "rebases": scanner.checkpoint["navigation_target_rebases"], "outcome": outcome,
+        "prediction_enabled": prediction_enabled, "predictions": scanner.checkpoint.get("navigation_target_predictions", 0),
+        "prediction_support": prediction_support,
+        "command_samples": navigator.command_samples,
+        "physical_tracking_verified": False}))
+
+
+@pytest.mark.parametrize("invalid", ["pose_quality", "moving", "frame_replaced", "capture_changed", "expired"])
+def test_retarget_does_not_reuse_unqualified_or_changed_camera_observation(invalid):
+    import time
+
+    class NeedsObservation(Exception):
+        pass
+
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped",
+        last_frame={"capture_evidence": {"capture_instance": "decoder", "generation": 1, "sequence": 1},
+            "received_monotonic": time.monotonic()})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []}, target_reference=lambda _: reference)
+    observed = [[1., 0, 0]]
+
+    class Navigator(VisualNavigator):
+        measured = False
+
+        async def locate(self):
+            if self.measured:
+                raise NeedsObservation()
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 2 if invalid == "pose_quality" else 24,
+                "validation_p95_pixels": 1., "inlier_fraction": .8}
+
+        async def _target_measurement(self, *args):
+            self.measured = True
+            observed[0] = [.8, .6, 0]
+            if invalid == "moving":
+                scanner.physical_state = "moving"
+            elif invalid == "frame_replaced":
+                scanner.last_frame = dict(scanner.last_frame)
+            elif invalid == "capture_changed":
+                scanner.last_frame["capture_evidence"]["sequence"] = 2
+            elif invalid == "expired":
+                scanner.last_frame["received_monotonic"] -= 2
+            return {"center_error_pixels": 0}
+
+        async def _renew_localization_frame(self, *args):
+            raise NeedsObservation()
+
+        async def _pulse(self, *args, **kwargs):
+            pytest.fail("Unqualified camera observation must not drive retargeting")
+
+    navigator = Navigator(scanner, localizer)
+    with pytest.raises(NeedsObservation):
+        asyncio.run(navigator.aim(observed[0], target_provider=lambda: observed[0]))
+    assert scanner.checkpoint.get("navigation_target_rebases", 0) == 0 and navigator.commands == 0
+
+
+@pytest.mark.parametrize('resume', [False, True])
+@pytest.mark.parametrize('outcome', ['stronger', 'weak_again', 'view_changed', 'not_stopped', 'uncertain'])
+def test_return_small_observed_probe_has_one_equal_retry_with_shared_budget(monkeypatch, resume, outcome):
+    from toposync_ext_cameras import panorama_navigation as navigation
+    state = np.array([.2, -26.86])
+    entry = {'kind': 'probe', 'axis': 'tilt', 'amount': .08, 'velocity': .1,
+        'before_pixels': 30.77, 'after_pixels': 27.48,
+        'before_shift': [.2, -26.86], 'after_shift': [.3, -25.51],
+        'before_overlap': .945, 'after_overlap': .945, 'before_match_verified': True,
+        'verified': True, 'match_verified': True, 'state': 'observed',
+        'response_qualified': False, 'reason': 'visual_response_unavailable',
+        'modality': 'visual_continuous', 'return_epoch': 'final', 'correction_command_index': 1}
+    checkpoint = {}
+    if resume:
+        state[:] = entry['after_shift']
+        checkpoint = {'return_correction_state': 'rejected',
+            'return_corrections': [entry], 'return_correction_commands': [entry]}
+        if outcome == 'view_changed':
+            state[1] -= 5
+        if outcome == 'uncertain':
+            entry['state'] = 'planned'
+    pulses = []
+    frame = {'image': np.zeros((1, 1), np.uint8)}
+
+    def match(*args):
+        # Match the recorded difference between p95 displacement and median shift.
+        pixels = float(np.linalg.norm(state)) + (3.91 if len(pulses) == 0 and not resume else 1.97)
+        return {'verified': True, 'overlap': .95, 'displacement': pixels,
+                'shift_x': float(state[0]), 'shift_y': float(state[1])}
+
+    async def pulse(axis, direction, amount, **kwargs):
+        pulses.append((axis, direction, amount))
+        small = (len(pulses) == 1 and not resume) or outcome == 'weak_again'
+        state[1] += 1.35 if small else 10
+        return {'frame': frame}
+
+    monkeypatch.setattr(navigation, '_match', match)
+    scanner = SimpleNamespace(checkpoint=checkpoint, physical_state='unknown' if outcome == 'not_stopped' else 'stopped',
+        capabilities={'velocity_supported': True, 'axes': {'tilt': True}}, _pulse=pulse)
+    asyncio.run(navigation.correct_reference(scanner, frame['image'], {'frame': frame}))
+    if resume and outcome in {'view_changed', 'not_stopped', 'uncertain'}:
+        assert not pulses
+    elif not resume and outcome == 'not_stopped':
+        assert len(pulses) == 1
+    elif outcome == 'weak_again':
+        assert len(pulses) == (1 if resume else 2)
+        assert checkpoint['return_correction_state'] == 'rejected'
+        assert all(not row['response_qualified'] for row in checkpoint['return_corrections'])
+    else:
+        assert pulses[:1 if resume else 2] == [('tilt', 1, .08)] * (1 if resume else 2)
+    assert len(checkpoint['return_correction_commands']) <= navigation.MAXIMUM_FINE_CORRECTIONS
+    if resume:
+        assert checkpoint['return_correction_commands'][0] is entry
+
+
+@pytest.mark.parametrize('change', [
+    {'before_match_verified': False}, {'match_verified': False}, {'state': 'failed'},
+    {'velocity': .05}, {'amount': .16}, {'after_overlap': .84}, {'return_epoch': 'other'},
+    {'before_shift': [0, -25.5]}, {'after_shift': [0, -30]}, {'after_pixels': 31},
+    {'after_shift': [float('nan'), 1]}, {'modality': 'visual_relative'},
+])
+def test_small_return_probe_rejects_unqualified_or_non_improving_evidence(change):
+    from toposync_ext_cameras.panorama_navigation import _small_return_probe
+    entry = {'kind': 'probe', 'axis': 'tilt', 'amount': .08, 'velocity': .1,
+        'before_pixels': 30.77, 'after_pixels': 27.48,
+        'before_shift': [.2, -26.86], 'after_shift': [.3, -25.51],
+        'before_overlap': .945, 'after_overlap': .945, 'before_match_verified': True,
+        'verified': True, 'match_verified': True, 'state': 'observed',
+        'response_qualified': False, 'reason': 'visual_response_unavailable',
+        'modality': 'visual_continuous', 'return_epoch': 'final'}
+    assert _small_return_probe(entry, 'final')
+    assert not _small_return_probe({**entry, **change}, 'final')
+
+@pytest.mark.parametrize('limit', [.6, .9])
+def test_measured_direction_with_startup_delay_uses_existing_coarse_limit(limit):
+    from types import SimpleNamespace
+    lens = {'width': 960, 'height': 540, 'fx': 560, 'fy': 560, 'cx': 479.5, 'cy': 269.5}
+    reference = {'id': 'reference', 'rotation_matrix': np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={'velocity_supported': True, 'axes': {'tilt': True}},
+        checkpoint={}, last_frame={'capture_evidence': {}}, physical_state='stopped')
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={'overlap_links': []}, target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.error = np.array([0., -.4])
+            self.response['tilt'] = np.array([0., .225])
+            self.direction_responses[('tilt', 1)] = (.48, np.array([0., .108]))
+            self.stationary_durations[('tilt', 1)] = .12
+            self.pulse_limits['tilt'] = limit
+            self.pulses = []
+
+        async def locate(self):
+            return {'rotation_matrix': np.eye(3).tolist(), 'reference_id': 'reference'}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            error = np.tan(self.error) * 560
+            return {'error_pixels': error.tolist(), 'center_error_pixels': float(np.linalg.norm(error)), 'analysis_width': 960}
+
+        async def _pulse(self, axis, amount):
+            self.commands += 1
+            self.trace.append({'axis': axis, 'amount': amount})
+            self.pulses.append(amount)
+            self.error[1] += .3 * max(0, amount - .12)
+            self.last_pulse_stationary = False
+
+    navigator = Navigator()
+    result = asyncio.run(navigator.aim([1, 0, 0]))
+    assert result['measurement']['center_error_pixels'] <= 12
+    assert navigator.pulses[0] == limit
+    assert all(0 < amount <= limit for amount in navigator.pulses)
+    assert navigator.pulses[-1] <= .48
+
+
+@pytest.mark.parametrize('stage', ['target_measurement', 'localization_reference_refresh'])
+def test_cancelled_navigation_observation_preserves_timing(monkeypatch, stage):
+    from toposync_ext_cameras import panorama_navigation as navigation
+
+    async def cancelled(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    scanner = SimpleNamespace(checkpoint={}, _check=lambda: None,
+        last_frame={'image': np.zeros((2, 2)), 'received_monotonic': -100},
+        _reference_window=cancelled)
+    navigator = VisualNavigator(scanner, SimpleNamespace(measure_target=lambda *_: None))
+    if stage == 'target_measurement':
+        monkeypatch.setattr(navigation.asyncio, 'to_thread', cancelled)
+        operation = navigator._target_measurement(np.array([1., 0., 0.]), {})
+    else:
+        operation = navigator._locate_current()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(operation)
+    record, = scanner.checkpoint['navigation_observation_timings']
+    assert record['stage'] == stage
+    assert record['completed'] is False
+    assert record['elapsed_seconds'] >= 0
+    assert record['commands'] == 0
+
+
+@pytest.mark.parametrize('learned', [False, True])
+@pytest.mark.parametrize('change', ['same_probe', 'reverse', 'axis', 'duration', 'near', 'expired', 'coverage', 'unqualified_direction'])
+def test_coarse_command_replans_current_target_without_dispatching_changed_command(monkeypatch, change, learned):
+    from toposync_ext_cameras import panorama_navigation as navigation
+
+    clock = [100.]
+    monkeypatch.setattr(navigation.time, 'monotonic', lambda: clock[0])
+    lens = {'width': 960, 'height': 540, 'fx': 560, 'fy': 560, 'cx': 479.5, 'cy': 269.5}
+    reference = {'id': 'reference', 'rotation_matrix': np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={'axes': {'pan': True, 'tilt': True}, 'velocity_supported': True},
+        checkpoint={}, physical_state='stopped', last_frame={'received_monotonic': 100., 'capture_evidence': {'sequence': 1}})
+    changed = [False]
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={'overlap_links': []},
+        target_reference=lambda _: None if changed[0] and change == 'coverage' else reference)
+    first = np.array([1., .3, .1]); first /= np.linalg.norm(first)
+    latest = np.array({'reverse': [1., -.6, .1], 'axis': [1., .02, .6], 'duration': [1., .15, .1], 'near': [1., .01, .01]}.get(change, [1., .6, .1]))
+    latest /= np.linalg.norm(latest)
+    target = [first]
+    monkeypatch.setattr(navigation, 'reference_probe_direction',
+        lambda axis, ray, rotation, observations: None if change == 'unqualified_direction'
+        else (1 if ray[1 if axis == 'pan' else 2] > 0 else -1))
+
+    class Dispatched(Exception):
+        pass
+
+    class Rejected(Exception):
+        pass
+
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            if changed[0]:
+                raise Rejected()
+            return {**reference, 'reference_id': 'reference', 'analysis_width': 960,
+                'validation_matches': 24, 'validation_p95_pixels': 1., 'inlier_fraction': .8}
+
+        async def _target_measurement(self, ray, located):
+            return navigation.localized_axis_measurement(ray, lens, located)
+
+        async def _pulse(self, axis, amount, **options):
+            changed[0] = True
+            target[0] = latest
+            clock[0] += 1.01 if change == 'expired' else .2
+            self.dispatch_guard()
+            assert axis == 'pan' and amount == (.6 if learned else navigation.DEFAULT_NAVIGATION_PROBE_SECONDS)
+            raise Dispatched()
+
+    navigator = Navigator(scanner, localizer)
+    if learned:
+        navigator.response = {'pan': np.array([-.2, 0.]), 'tilt': np.array([0., -.2])}
+    equivalent = change == 'same_probe' or (learned and change == 'unqualified_direction') or (not learned and change == 'duration')
+    with pytest.raises(Dispatched if equivalent else Rejected):
+        asyncio.run(navigator.aim(first, target_provider=lambda: target[0]))
+    if equivalent:
+        replan = scanner.checkpoint['navigation_step']['dispatch_replan']
+        assert replan['same_command'] and replan['target_shift_pixels'] > 6
+        assert replan['target_ray'] == pytest.approx(latest)
+        assert scanner.checkpoint.get('navigation_target_replans', 0) == 0
+    else:
+        assert scanner.checkpoint['navigation_target_replans'] == 1
+        assert 'dispatch_replan' not in scanner.checkpoint['navigation_step']
+
+
+def test_feedback_shortened_pulse_remeasures_latest_target_without_learning_full_pulse_gain():
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped",
+        last_frame={"received_monotonic": time.monotonic(), "capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    current = [np.array([np.cos(.2), np.sin(.2), 0.])]
+    samples = []
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+        async def _target_measurement(self, target, located):
+            samples.append(np.asarray(target).copy())
+            return localized_axis_measurement(target, lens, located)
+        async def _pulse(self, axis, amount, **kwargs):
+            assert self.motion_feedback_target is not None
+            assert self.commands == 0
+            self.commands += 1
+            self.trace.append({})
+            current[0] = np.array([1., 0., 0.])
+            self.last_pulse_feedback_stop = "visual_feedback_target_reached"
+            self.last_pulse_stationary = True  # Must not become an actuator boundary.
+    navigator = Navigator(scanner, localizer)
+    original_response = np.array([-.5, 0.])
+    navigator.response["pan"] = original_response.copy()
+    result = asyncio.run(navigator.aim(current[0], target_provider=lambda: current[0]))
+    assert result["verified"] and result["target_ray"] == pytest.approx(current[0])
+    assert len(samples) == 2 and not np.allclose(samples[0], samples[1])
+    assert navigator.response["pan"] == pytest.approx(original_response)
+    assert navigator.direction_responses == navigator.stationary_durations == {}
+    assert navigator.trace[0]["response_qualified"] is False
+    assert navigator.trace[0]["stationary_verified"] is False
+    assert navigator.motion_feedback_target is None and navigator.dispatch_guard is None
+
+
+@pytest.mark.parametrize("case", ["prepared", "missing_reverse", "expired_capacity", "stationary_target", "no_velocity", "expired_at_dispatch",
+    "long_static_plan", "uncertain_once", "uncertain_persistent"])
+@pytest.mark.parametrize("near", [False, True])
+def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeypatch, case, near):
+    import toposync_ext_cameras.panorama_navigation as navigation
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
+    lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}, "velocity_supported": case != "no_velocity"},
+        checkpoint={}, physical_state="stopped", last_frame={"received_monotonic": 10., "capture_evidence": {}})
+    refreshes = []
+    async def refresh_stopped_frame():
+        assert scanner.physical_state == "stopped" and not refreshes
+        refreshes.append(True)
+        return scanner.last_frame
+    scanner.refresh_stopped_frame = refresh_stopped_frame
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference, coverage_mask=np.ones((20, 40)))
+    motion = navigation.TargetMotion()
+    for index in range(3):
+        timestamp, angle = 9.2 + index * .4, .18 if case == "stationary_target" else .14 + index * .02
+        if case == "long_static_plan": angle += .14
+        if near: angle -= .12
+        observation = {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+            "capture_instance": "capture", "generation": 1, "sequence": index + 1, "observed_monotonic": timestamp}
+        target = np.array([np.cos(angle), np.sin(angle), 0.])
+        motion.observe(observation, target, timestamp)
+    class Planned(Exception):
+        pass
+    class Navigator(VisualNavigator):
+        def _predict_target(self, *args):
+            if case in {"uncertain_once", "uncertain_persistent"} and (not refreshes or case == "uncertain_persistent"):
+                self.target_prediction_uncertain = True
+                return None
+            return super()._predict_target(*args)
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .9}
+        async def _target_measurement(self, ray, located):
+            return localized_axis_measurement(ray, lens, located)
+        async def _pulse(self, axis, amount, **options):
+            extended = case in {"prepared", "expired_at_dispatch", "long_static_plan", "uncertain_once"}
+            assert scanner.checkpoint["navigation_step"]["following_acquisition"] is extended
+            assert (amount == pytest.approx(1.2)) if extended else amount < 1
+            if extended:
+                step = scanner.checkpoint["navigation_step"]
+                _, planned = self._correction_plan([axis], np.asarray(step["planning_error_radians"]), False)
+                initial_speed = options.get("speed", .1)
+                assert 0 < initial_speed <= .1
+                if step["fine_control"]:
+                    assert near and abs(amount) * initial_speed <= min(abs(planned), 1.2) * .1
+                else:
+                    assert abs(amount) * initial_speed == pytest.approx(min(abs(planned), 1.2) * .1)
+                if initial_speed < .1:
+                    assert options["maximum_following_speed"] == .1
+            assert self.following_seconds == (6. if extended else None)
+            if case == "expired_at_dispatch":
+                self.pulse_capacity["pan"]["observed_monotonic"] = -300.
+                with pytest.raises(PanoramaCaptureError, match="visual_response_unavailable"):
+                    self.dispatch_guard()
+            else:
+                self.dispatch_guard()
+            raise Planned()
+    navigator = Navigator(scanner, localizer)
+    navigator.response["pan"] = np.array([-.2, 0.])
+    navigator.direction_responses = {("pan", 1): (.6, np.array([-.12, 0.])),
+        ("pan", -1): (.6, np.array([.12, 0.]))}
+    navigator.pulse_limits["pan"] = 1.2
+    navigator.pulse_capacity["pan"] = {"limit_seconds": 1.2, "observed_monotonic": -300. if case == "expired_capacity" else 9.,
+        "rotation_matrix": np.eye(3), "response": navigator.response["pan"].copy(),
+        "pixel_budget": navigator._response_pixel_delta(np.zeros(2), navigator.response["pan"] * 1.2)}
+    if case == "missing_reverse": navigator.direction_responses.pop(("pan", -1))
+    with pytest.raises(Planned):
+        asyncio.run(navigator.aim(target, target_provider=lambda: target,
+            target_observation_provider=lambda: observation, target_motion=motion))
+
+    assert len(refreshes) == (1 if case in {"uncertain_once", "uncertain_persistent"} else 0)
+
+
+@pytest.mark.parametrize("support", ["qualified", "expired", "no_coverage", "insufficient_history"])
+def test_prepared_target_age_can_change_initial_acquisition_direction(monkeypatch, support):
+    import toposync_ext_cameras.panorama_navigation as navigation
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
+    lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}, "velocity_supported": True},
+        checkpoint={}, physical_state="stopped", last_frame={"received_monotonic": 10., "capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference, coverage_mask=np.ones((20, 40)))
+    if support == "no_coverage":
+        localizer.coverage_mask[:] = 0
+    motion = navigation.TargetMotion()
+    for index in range(3):
+        timestamp, angle = 8.7 + index * .4, -.11 + index * .04
+        observation = {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+            "capture_instance": "capture", "generation": 1, "sequence": index + 1,
+            "observed_monotonic": timestamp}
+        target = np.array([np.cos(angle), np.sin(angle), 0.])
+        if support != "insufficient_history" or index == 2:
+            motion.observe(observation, target, timestamp)
+    if support == "expired":
+        monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.4)
+    class Planned(Exception):
+        pass
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .9}
+        async def _target_measurement(self, ray, located):
+            return localized_axis_measurement(ray, lens, located)
+        async def _pulse(self, axis, amount, **options):
+            prediction = scanner.checkpoint["navigation_step"]["prediction"]
+            assert axis == "pan"
+            if support == "qualified":
+                assert amount > 0, "The observed target has already crossed the old direction"
+                assert prediction["observation_age_seconds"] == pytest.approx(.5)
+                assert prediction["horizon_seconds"] <= .8
+            else:
+                assert prediction is None and amount < 0
+            raise Planned()
+    navigator = Navigator(scanner, localizer)
+    navigator.response["pan"] = np.array([-.2, 0.])
+    with pytest.raises(Planned):
+        asyncio.run(navigator.aim(target, target_provider=lambda: target,
+            target_observation_provider=lambda: observation, target_motion=motion))
+
+
+def test_unqualified_probe_keeps_live_target_guard_until_observation_finishes():
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped",
+        last_frame={"received_monotonic": time.monotonic(), "capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    expired = False
+    target = np.array([np.cos(.2), np.sin(.2), 0.])
+    def provider():
+        if expired:
+            raise PanoramaCaptureError("following_observation_expired")
+        return target
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+        async def _target_measurement(self, ray, located):
+            return localized_axis_measurement(ray, lens, located)
+        async def _pulse(self, axis, amount, **kwargs):
+            nonlocal expired
+            assert self.motion_feedback_target is None, "No response exists yet for a probe"
+            assert self.observation_guard is not None
+            self.observation_guard()
+            expired = True
+            self.observation_guard()
+    navigator = Navigator(scanner, localizer)
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        asyncio.run(navigator.aim(target, target_provider=provider))
+    assert navigator.observation_guard is None and navigator.dispatch_guard is None
+
+
+@pytest.mark.parametrize("case", ["following", "static", "relative", "probe", "short_pulse", "unknown_direction", "prepared_history"])
+def test_following_window_requires_an_existing_overlap_qualified_coarse_correction(case):
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}, "velocity_supported": case != "relative"},
+        checkpoint={}, physical_state="stopped", last_frame={"received_monotonic": time.monotonic(), "capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []}, target_reference=lambda _: reference)
+    target = np.array([np.cos(.6), np.sin(.6), 0.])
+    target_options = {}
+    if case == "prepared_history":
+        from toposync_ext_cameras.panorama_target_motion import TargetMotion
+        motion = TargetMotion()
+        now = time.monotonic()
+        for index in range(3):
+            timestamp, angle = now - .2 + index * .1, .58 + index * .01
+            observation = {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+                "capture_instance": "capture", "generation": 1, "sequence": index + 1,
+                "observed_monotonic": timestamp}
+            motion.observe(observation, [np.cos(angle), np.sin(angle), 0.], now)
+        localizer.coverage_mask = np.ones((20, 40))
+        target_options = {"target_motion": motion, "target_observation_provider": lambda: observation}
+    class ReachedPulse(Exception):
+        pass
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+        async def _target_measurement(self, ray, located):
+            return localized_axis_measurement(ray, lens, located)
+        async def _pulse(self, axis, amount, **options):
+            assert self.following_seconds == (6. if case in {"following", "prepared_history"} else None)
+            if case in {"following", "prepared_history"}:
+                assert amount == 1.2 and self.motion_prediction is not None
+            if case == "prepared_history":
+                prediction = self.motion_prediction(await self.locate(), None)
+                assert prediction is not None and prediction[0]["sequence"] == 3
+                assert len(motion.samples) == 3
+            raise ReachedPulse()
+    navigator = Navigator(scanner, localizer)
+    if case != "probe":
+        navigator.response["pan"] = np.array([-.2, 0.])
+        navigator.pulse_limits["pan"] = .6 if case == "short_pulse" else 1.2
+        if case != "unknown_direction": navigator.direction_responses[("pan", 1)] = (.6, np.array([-.12, 0.]))
+    with pytest.raises(ReachedPulse):
+        asyncio.run(navigator.aim(target, **({"target_provider": lambda: target} if case != "static" else {}),
+                                 **target_options))
+    assert navigator.following_seconds is None and navigator.motion_prediction is None
+
+
+def test_short_home_corrections_preserve_bounded_coarse_capacity():
+    """Reproduce a .6 s probe followed by the observed short return corrections."""
+    navigator = VisualNavigator(SimpleNamespace(), SimpleNamespace(lens={"fx": 573., "fy": 572., "width": 960}))
+    navigator.last_pulse_match = {"verified": True, "support_scope": "distributed_scene", "inliers": 405,
+        "overlap": .91, "source_features": 600, "target_features": 590,
+        "analysis_size": [960, 540], "displacement": 77.875}
+    located = {"rotation_matrix": np.eye(3).tolist()}
+    initial = np.array([-.16983251534855937, .002932089205352469])
+    navigator._remember_axis_response("pan", .6, initial, located, initial * .6)
+    assert navigator.pulse_limits["pan"] == 1.2
+    for duration, response, displacement in [
+        (-.5557976724075718, [-.13956320588577967, .004338722846112336], 45.),
+        (-.15, [-.1565893424897448, .002125883455891403], 15.003625679016114),
+    ]:
+        navigator.last_pulse_match.update(displacement=displacement, overlap=.97)
+        vector = np.array(response)
+        navigator._remember_axis_response("pan", duration, vector, located, vector * duration)
+        assert 1 <= navigator.pulse_limits["pan"] <= 1.2
+        assert navigator._response_pixel_delta(np.zeros(2), vector * navigator.pulse_limits["pan"]) <= (
+            navigator._response_pixel_delta(np.zeros(2), initial * 1.2) + 1e-6)
+
+
+@pytest.mark.parametrize("case", ["short_only", "expired", "future", "rotated", "direction",
+    "unsupported", "weak_full", "faster", "too_fast", "nan_budget", "nan_response", "compatible"])
+def test_coarse_capacity_keeps_its_original_time_view_and_displacement(monkeypatch, case):
+    import toposync_ext_cameras.panorama_navigation as module
+    clock = [10.]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    navigator = VisualNavigator(SimpleNamespace(), SimpleNamespace(lens={"fx": 573., "fy": 572., "width": 960}))
+    navigator.last_pulse_match = {"verified": True, "support_scope": "distributed_scene", "inliers": 405,
+        "overlap": .91, "source_features": 600, "target_features": 590,
+        "analysis_size": [960, 540], "displacement": 60.}
+    located = {"rotation_matrix": np.eye(3)}
+    response = np.array([-.15, 0.])
+    if case != "short_only":
+        navigator._remember_axis_response("pan", .6, response, located, response * .6)
+        assert navigator.pulse_limits["pan"] == 1.2
+    clock[0] = 311. if case == "expired" else 9. if case == "future" else 20.
+    if case == "rotated":
+        # Small successive corrections must not walk the origin past its 15 degree bound.
+        for degrees in (8, 16):
+            angle = np.radians(degrees)
+            located["rotation_matrix"] = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
+            navigator._remember_axis_response("pan", -.15, response, located, response * -.15)
+    if case == "direction": response = np.array([0., -.15])
+    if case == "faster": response *= 1.5
+    if case == "too_fast": response *= 3
+    if case == "nan_response": response[0] = float("nan")
+    if case in {"unsupported", "weak_full"}: navigator.last_pulse_match["support_scope"] = "banded_command_transition"
+    if case == "nan_budget": navigator.pulse_capacity["pan"]["pixel_budget"] = float("nan")
+    navigator.last_pulse_match["displacement"] = 15.
+    navigator.trace.append({})
+    duration = .6 if case == "weak_full" else -.15
+    navigator._remember_axis_response("pan", duration, response, located, response * duration)
+    if case in {"compatible", "faster"}:
+        assert navigator.pulse_capacity["pan"]["observed_monotonic"] == 10.
+        assert navigator.pulse_capacity["pan"]["rotation_matrix"] == pytest.approx(np.eye(3))
+        expected = .8 if case == "faster" else 1.2
+        assert navigator.pulse_limits["pan"] == pytest.approx(expected, abs=2e-5)
+        assert navigator.trace[-1]["pulse_capacity"]["origin_age_seconds"] == 10.
+    else:
+        assert navigator.pulse_limits["pan"] == .6
+        assert "pan" not in navigator.pulse_capacity
+        assert navigator.trace[-1]["pulse_capacity"] is None
+
+
+@pytest.mark.parametrize("accelerated", [False, True])
+def test_extended_history_forecast_requires_agreement_with_recent_velocity(monkeypatch, accelerated):
+    import toposync_ext_cameras.panorama_navigation as navigation
+    from test_camera_panorama_target_motion import observation, direction
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 101.5)
+    motion = navigation.TargetMotion()
+    angles = [0., .002, .004, .006, .046, .086] if accelerated else [index * .013 for index in range(6)]
+    for index, angle in enumerate(angles):
+        motion.observe(observation(index + 1, 100 + index * .2), direction(angle), 100 + index * .2)
+    lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={}, checkpoint={})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        coverage_mask=np.ones((20, 40)), target_reference=lambda _: reference)
+    navigator = navigation.VisualNavigator(scanner, localizer)
+    assert motion.predict_rate(101.5) is not None, "Recent derivatives agree even after earlier acceleration"
+    located = {**reference, "analysis_width": 960, "validation_p95_pixels": 1.,
+        "validation_matches": 24, "inlier_fraction": .9}
+    result = navigator._predict_target(motion, located, 12., None)
+    assert (result is None) is accelerated
+    attempt = scanner.checkpoint["navigation_prediction_attempts"][-1]
+    assert attempt["outcome"] == ("velocity_disagreement" if accelerated else "accepted")
+    assert (attempt["velocity_disagreement_pixels"] > 6.) is accelerated
+
+
+@pytest.mark.parametrize('capacity', [.849335, .9627502441406248])
+@pytest.mark.parametrize('failure', [None, 'expired', 'view_changed', 'one_direction', 'over_budget', 'not_stopped'])
+def test_longer_response_probe_spends_only_current_bidirectional_capacity(capacity, failure):
+    import time
+    now = time.monotonic()
+    calls = []
+    lens = {'width': 960, 'height': 540, 'fx': 560, 'fy': 560, 'cx': 479.5, 'cy': 269.5}
+    match = {'verified': True, 'support_scope': 'distributed_scene', 'overlap': .9,
+        'analysis_size': [960, 540], 'homography': [[1., 0, -80.], [0, 1., 0], [0, 0, 1.]],
+        'inliers': 120, 'source_features': 140, 'target_features': 140, 'displacement': 80.}
+    baseline = {'received_monotonic': now}
+    async def pulse(axis, sign, duration, **options):
+        calls.append((axis, sign, duration, options))
+        return {'frame': {'received_monotonic': time.monotonic(), 'capture_evidence': {'sequence': 2}},
+            'stable': True, 'match': match}
+    scanner = SimpleNamespace(last_frame=baseline, checkpoint={}, _check=lambda: None,
+        _persist=AsyncMock(), _pulse=pulse, capabilities={'velocity_supported': True},
+        physical_state='moving' if failure == 'not_stopped' else 'stopped')
+    navigator = VisualNavigator(scanner, SimpleNamespace(lens=lens))
+    navigator.response['pan'] = np.array([-.2, 0.])
+    navigator.response_rotations['pan'] = np.eye(3)
+    navigator.direction_responses[('pan', 1)] = (.6, np.array([-.12, 0.]))
+    if failure != 'one_direction':
+        navigator.direction_responses[('pan', -1)] = (.14, np.array([.028, 0.]))
+    navigator.pulse_capacity['pan'] = {'limit_seconds': capacity,
+        'observed_monotonic': now - (301 if failure == 'expired' else 0),
+        'rotation_matrix': np.eye(3), 'response': navigator.response['pan'].copy(),
+        'pixel_budget': navigator._response_pixel_delta(np.zeros(2), navigator.response['pan'] * capacity)}
+    rotation = np.diag([-1., 1., -1.]) if failure == 'view_changed' else np.eye(3)
+    navigator.locate = AsyncMock(return_value={'rotation_matrix': rotation})
+    navigator._error = lambda *_: np.array([-.14, 0.]) if calls else np.zeros(2)
+    duration = capacity + .01 if failure == 'over_budget' else capacity
+    if failure:
+        with pytest.raises(PanoramaCaptureError):
+            asyncio.run(navigator.qualify_velocity('pan', 1, .1, duration))
+        assert not calls
+    else:
+        result = asyncio.run(navigator.qualify_velocity('pan', 1, .1, duration))
+        assert len(calls) == 1 and calls[0][:3] == ('pan', 1, duration)
+        assert calls[0][3]['expected_frame'] is baseline
+        assert result['response_qualified'] is True
+        assert result['duration_seconds'] == capacity
+        assert result['following_pulse_limit_seconds'] == 1.2
+        assert navigator.trace[0]['qualified_duration_limit_seconds'] == pytest.approx(capacity)
+
+
+@pytest.mark.parametrize("sample_count,age,cycle", [(2, 0., None), (6, .2, None), (6, 1.1, None), (6, .2, 1.)])
+def test_prediction_diagnostic_replays_original_inputs_and_stays_bounded(monkeypatch, sample_count, age, cycle):
+    import json
+    import toposync_ext_cameras.panorama_navigation as navigation
+    from test_camera_panorama_target_motion import observation, direction
+    motion = navigation.TargetMotion()
+    for index in range(sample_count):
+        timestamp = 100 + index * .2
+        motion.observe(observation(index + 1, timestamp), direction(index * .013), timestamp)
+    now = timestamp + age
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: now)
+    scanner = SimpleNamespace(checkpoint={})
+    # Prediction is captured before optical checks; this localizer deliberately has no coverage.
+    navigator = navigation.VisualNavigator(scanner, SimpleNamespace())
+    for _ in range(20):
+        assert navigator._predict_target(motion, {}, 12., cycle) is None
+    records = scanner.checkpoint["navigation_prediction_attempts"]
+    assert len(records) == 16
+    saved = json.loads(json.dumps(records[-1], allow_nan=False))
+    reconstructed = navigation.TargetMotion()
+    scope, capture, generation = saved["identity"]
+    for sequence, received, ray in saved["samples"]:
+        reconstructed.observe({"scope": scope, "capture_instance": capture, "generation": generation,
+            "sequence": sequence, "observed_monotonic": received}, ray, received)
+    replay = (reconstructed.predict_rate(saved["observed_monotonic"]) if cycle is None
+        else reconstructed.predict(saved["observed_monotonic"], saved["requested_cycle_seconds"]))
+    assert replay == saved["candidate"]
+    assert saved["outcome"] == ("coverage_unavailable" if replay else "motion_prediction_unavailable")
+    motion.samples[-1][2][:] = 0
+    motion.observe(None, None, now)
+    assert json.loads(json.dumps(records[-1], allow_nan=False)) == saved

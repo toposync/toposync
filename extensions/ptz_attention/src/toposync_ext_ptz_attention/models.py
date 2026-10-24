@@ -15,6 +15,7 @@ ControllerState = Literal[
     "IDLE",
     "CANDIDATE",
     "ACQUIRING",
+    "FOLLOWING",
     "FOCUSED",
     "GRACE",
     "RETURNING",
@@ -125,6 +126,7 @@ class AttentionProfile(StrictModel):
     name: str
     mode: AttentionMode = "disabled"
     resume_mode: ResumableMode | None = None
+    campaign_ends_at: float | None = Field(default=None, gt=0, le=253402300799)
     camera_id: str
     source_id: str = ""
     ptz_device_id: str
@@ -148,6 +150,20 @@ class AttentionProfile(StrictModel):
     max_movements_per_minute: int = Field(default=6, ge=1, le=120)
     minimum_target_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     follow_view_updates: bool = False
+    follow_interval_seconds: float = Field(default=0.5, ge=0.2, le=60.0)
+    follow_observation_timeout_seconds: float = Field(default=2.0, ge=0.5, le=5.0)
+
+    @field_validator("campaign_ends_at", mode="before")
+    @classmethod
+    def _campaign_end(cls, value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("campaign_ends_at must be a finite positive timestamp")
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise ValueError("campaign_ends_at must be a finite positive timestamp")
+        return parsed
 
     @field_validator(
         "id",
@@ -209,9 +225,9 @@ class AttentionProfile(StrictModel):
         elif effective_mode == "live_panorama" or self.home_target is not None or self.attention_region:
             raise ValueError("panorama_element_id is required for panoramic targets")
         if self.follow_view_updates and (
-            effective_mode in {"live_preset", "live_panorama"} or self.candidate_confirm_seconds <= 0
+            effective_mode == "live_preset" or self.candidate_confirm_seconds <= 0
         ):
-            raise ValueError("following views requires shadow mode and positive confirmation time")
+            raise ValueError("following views requires shadow or live_panorama mode and positive confirmation time")
         if self.ptz_device_id != self.camera_id:
             raise ValueError("ptz_device_id must equal camera_id")
         if self.mode == "paused" and self.resume_mode is None:
@@ -250,6 +266,78 @@ class AttentionProfile(StrictModel):
         return self
 
 
+class PanoramaFraming(StrictModel):
+    job_id: str = Field(min_length=1, max_length=200)
+    revision: int = Field(strict=True, ge=1)
+    composition_id: str = Field(min_length=1, max_length=200)
+    source_artifact_id: str = Field(min_length=1, max_length=200)
+    geometry_digest: str = Field(min_length=1, max_length=200)
+    center_ray: tuple[float, float, float]
+    corner_rays: tuple[tuple[float, float, float], tuple[float, float, float],
+                       tuple[float, float, float], tuple[float, float, float]]
+
+    @model_validator(mode="after")
+    def _unit_directions(self):
+        for ray in (self.center_ray, *self.corner_rays):
+            if not all(math.isfinite(value) for value in ray) or abs(sum(value * value for value in ray) - 1) > 1e-6:
+                raise ValueError("framing directions must be finite and normalized")
+        return self
+
+
+class FramingObservation(StrictModel):
+    """Observed image extent, independent of a ground target or arrival proof."""
+
+    camera_id: str = Field(min_length=1, max_length=200)
+    source_id: str = Field(min_length=1, max_length=200)
+    capture_instance: str = Field(min_length=1, max_length=128)
+    generation: int = Field(strict=True, ge=0)
+    sequence: int = Field(strict=True, ge=1)
+    published_at: float = Field(gt=0, allow_inf_nan=False)
+    source_width: int = Field(strict=True, ge=2)
+    source_height: int = Field(strict=True, ge=2)
+    bbox01: tuple[float, float, float, float]
+    boundary_contact: bool = Field(strict=True)
+    panorama: PanoramaFraming | None = None
+    member_event_ids: tuple[str, ...] = ()
+
+    @field_validator("member_event_ids")
+    @classmethod
+    def _members(cls, value):
+        if len(set(value)) != len(value) or any(not item.strip() or len(item) > 512 for item in value):
+            raise ValueError("framing members must have unique nonempty event identifiers")
+        return value
+
+    @field_validator("bbox01")
+    @classmethod
+    def _box(cls, value):
+        return AttentionTarget._valid_bbox(value)
+
+
+class GroupFramingEstimate(StrictModel):
+    """Member history in one panorama, not a simultaneous image observation."""
+
+    members: dict[str, FramingObservation] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _member_reference(self):
+        first = next(iter(self.members.values()))
+        for name, member in self.members.items():
+            if (not name.strip() or len(name) > 512 or member.panorama is None or member.member_event_ids
+                    or first.panorama is None
+                    or any(getattr(member, key) != getattr(first, key) for key in
+                           ("camera_id", "source_id", "capture_instance", "generation", "source_width", "source_height"))
+                    or member.panorama.model_dump(exclude={"center_ray", "corner_rays"})
+                    != first.panorama.model_dump(exclude={"center_ray", "corner_rays"})):
+                raise ValueError("group framing requires complete members in one optical reference")
+        from toposync_ext_cameras.panorama_navigation import group_framing_rays
+        group_framing_rays(self.model_dump(mode="json"))
+        return self
+
+    @property
+    def oldest_published_at(self) -> float:
+        return min(member.published_at for member in self.members.values())
+
+
 class AttentionIntent(StrictModel):
     key: str
     event_id: str
@@ -266,6 +354,21 @@ class AttentionIntent(StrictModel):
     event_at: float
     received_at: float
     capture_evidence: dict[str, Any] | None = None
+    framing_observation: FramingObservation | None = None
+    group_framing: GroupFramingEstimate | None = None
+    group_member_event_ids: tuple[str, ...] | None = None
+
+    @field_validator("group_member_event_ids")
+    @classmethod
+    def _group_members(cls, value):
+        return FramingObservation._members(value) if value is not None else None
+
+    @property
+    def group_framing_complete(self) -> bool:
+        expected = self.group_member_event_ids
+        return expected is None or bool(expected and self.group_framing and self.target and self.target.world_envelope
+            and set(self.group_framing.members) == set(expected)
+            and self.target.world_envelope.member_count == len(expected))
 
     @field_validator(
         "key",
@@ -299,7 +402,7 @@ class AttentionIntent(StrictModel):
 
     @model_validator(mode="after")
     def _open_target(self) -> "AttentionIntent":
-        if self.lifecycle == "open" and self.target is None:
+        if self.lifecycle == "open" and self.target is None and self.group_member_event_ids is None:
             raise ValueError("target is required for open intents")
         return self
 
@@ -312,6 +415,8 @@ class PanoramaDestination(StrictModel):
     job_id: str
     revision: int = Field(strict=True, ge=1)
     ray: tuple[float, float, float]
+    framing: FramingObservation | None = None
+    group_framing: GroupFramingEstimate | None = None
 
     @field_validator("camera_id", "source_id", "composition_id", "element_id", "job_id")
     @classmethod
@@ -354,7 +459,16 @@ class ResolvedTarget(StrictModel):
         if self.panorama is None:
             return self.preset_token
         import json
-        return json.dumps(self.panorama.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        target = self.panorama.model_dump(mode="json", exclude={"framing", "group_framing"})
+        if self.panorama.framing and self.panorama.framing.panorama:
+            # Fixed-lens navigation aims at the center; extent-only changes refresh evidence.
+            target["framing"] = self.panorama.framing.panorama.model_dump(mode="json", exclude={"corner_rays"})
+        if self.panorama.group_framing:
+            from toposync_ext_cameras.panorama_navigation import group_framing_rays
+            group = self.panorama.group_framing.model_dump(mode="json")
+            target["group_framing"] = {"members": sorted(group["members"]),
+                "center_ray": group_framing_rays(group)[0].tolist()}
+        return json.dumps(target, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 class PtzAttentionRequestConfig(StrictModel):
@@ -433,6 +547,8 @@ class DecisionRecord(StrictModel):
 
 
 class DeviceStatus(StrictModel):
+    campaign_expired: bool = False
+    campaign_finishing: bool = False
     follow_view_updates: bool = False
     ptz_device_id: str
     profile_id: str
@@ -442,6 +558,9 @@ class DeviceStatus(StrictModel):
     active_preset_token: str = ""
     active_view_id: str = ""
     active_target: dict[str, Any] | None = None
+    observed_framing: dict[str, Any] | None = None
+    following_framing: dict[str, Any] | None = None
+    estimated_group_framing: dict[str, Any] | None = None
     active_priority: int | None = None
     candidate_event_key: str = ""
     candidate_preset_token: str = ""

@@ -30,6 +30,18 @@ are reserved contract fields until their runtime enforcement lands.
 - `OPEN` and `CLOSE` lifecycle packets must stay protected from lossy update
   compaction.
 
+## Configuration errors {/* #configuration-errors */}
+
+Invalid operator configuration returns HTTP 400. The existing `detail` string remains
+available to clients. When schema validation identifies individual fields, the response
+also includes `validation_errors`: an array with `node_id`, `operator_id`, `loc`, `type`
+and `msg`. The `loc` array contains field names and collection indexes, so clients do not
+need to parse the human-readable message. Form and JSON editing use the same compiler.
+
+Structured entries omit Pydantic's `input`, `ctx` and documentation URL. This does not
+change the legacy `detail` message. Errors without field-level schema information, such
+as an unknown operator, retain their existing response without `validation_errors`.
+
 ## Graph shape {/* #graph-shape */}
 
 ```json

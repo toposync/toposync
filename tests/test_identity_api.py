@@ -16,6 +16,31 @@ class VisionEntryPoint:
         return VisionExtension
 
 
+def test_recognition_options_match_extraction_without_loading_models_or_gallery(client, monkeypatch):
+    from toposync_ext_vision.identity.extraction import IdentityExtractor
+    from toposync_ext_vision.identity.pipelines import IdentityEvidenceConfig
+    from toposync_ext_vision.registry.manifests import build_default_model_registry
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Model execution must not occur while choosing calibration")
+
+    monkeypatch.setattr(IdentityExtractor, "process_specification", forbidden)
+    response = client.get("/api/vision/identities/recognition-options")
+    assert response.status_code == 200, response.text
+    choices = response.json()["choices"]
+    assert {item["species"] for item in choices} == {"person", "cat", "dog"}
+    registry = build_default_model_registry()
+    defaults = IdentityEvidenceConfig()
+    for choice in choices:
+        person = choice["species"] == "person"
+        model = registry.get_manifest(defaults.person_model_id if person else defaults.pet_model_id)
+        extractor = IdentityExtractor(model, face_detector=registry.get_manifest(defaults.face_detector_model_id) if person else None)
+        assert choice["embedding_space"] == extractor.embedding_space
+        assert set(choice) == {"species", "embedding_space", "model_name"}
+    client.post("/api/auth/logout")
+    assert client.get("/api/vision/identities/recognition-options").status_code == 401
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))

@@ -1,4 +1,332 @@
-# Panorâmica ao vivo — retorno preciso ainda reprovado, 04/10/2026
+# Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
+
+## Aquisição de alvo móvel perto do centro — 24/10/2026
+
+O navegador compartilhado também admite a janela de seguimento quando o alvo
+móvel já está na região de correção fina. Preserva o deslocamento equivalente
+planejado ao distribuir a correção pela janela qualificada; não aplica duas vezes
+a redução de velocidade. Movimento do alvo precisa de histórico válido, resposta
+nos dois sentidos e capacidade atual. Alvos parados e sondagens conservam o
+controle finito. Autoridade, geometria, frescor, parada e orçamentos não mudam.
+
+As regressões incluem travessias próximas do centro nos dois sentidos, vídeo e
+publicação atrasados, resposta vencida, sentido inverso ausente e previsão incerta.
+O resultado é de software; enquadramento e seguimento real de pessoas e veículos,
+Zoom e generalização física continuam sem aceite.
+
+## Aquisição móvel e reversão na janela compartilhada — 23/10/2026
+
+Um alvo com movimento comprovado pelo histórico pode entrar na janela contínua
+usando a duração já qualificada para o eixo, mesmo quando a correção estática seria
+curta demais para receber feedback. Exige velocidade contínua, resposta medida nos
+dois sentidos, capacidade atual, geometria e observações válidas. Correções finas,
+sondagens, alvos estáticos e capacidades ausentes conservam o caminho anterior.
+
+Após duas poses confirmarem o sentido, o ganho finito já medido pode orientar uma
+proposta inicial. A telemetria o identifica como estimativa, com idade original e
+sem velocidade de cruzeiro certificada. A medição de velocidade por três poses
+continua separada. O ganho anterior pode orientar propostas seguintes após o tempo
+de resposta; renovar o mesmo comando não reinicia essa espera. A pose atual usa
+movimento observado, sem atribuir a ela a velocidade antiga.
+
+Reversões exigem resposta medida no sentido solicitado; velocidades diferentes nos
+dois sentidos não são tratadas como iguais. A autoridade, o eixo, o envelope de
+velocidade, a janela de seis segundos, o limite de oito atualizações, os orçamentos
+e a parada permanecem compartilhados. Expiração da capacidade entre planejamento
+e despacho impede o comando. Não há novo controlador ou calibração obrigatória.
+
+Oito travessias sintéticas completas passaram, com publicação atrasada, atraso de
+vídeo e localização, aquisição curta ou longa e ambos os sentidos. Preservados os
+cenários anteriores de maior precisão. Isso ainda não comprova enquadramento real,
+Zoom, identidade, rastro mundial ou funcionamento em outras câmeras.
+
+## Idade do alvo na aquisição e no controle — 23/10/2026
+
+O navegador compartilhado alinha a observação do alvo com sua idade de publicação,
+separadamente da idade da pose da câmera. Usa a velocidade estimada pelo histórico
+existente, sem presumir que o atraso observado seja exclusivamente do motor ou do
+vídeo. Sem histórico, cobertura ou concordância suficientes, não extrapola.
+
+A primeira aquisição também pode usar o histórico preparado antes do movimento;
+não precisa esperar um ciclo mecânico para corrigir uma direção já ultrapassada
+pelo alvo. A previsão conserva o horizonte limitado pelo histórico e não certifica
+chegada, visibilidade ou capacidade de movimento. O planejamento e a autoridade
+existentes continuam responsáveis por qualificar cada comando.
+
+Regressões isoladas e seis cenários sintéticos de feedback aprovados. A travessia
+completa pelo centro e o enquadramento sustentado em hardware continuam pendentes;
+esta correção não constitui aceite móvel, Wide ou Zoom.
+
+## Histórico do alvo durante a preparação — 23/10/2026
+
+A aquisição de atenção aproveita a espera pela referência estacionária para
+observar o alvo já associado. O mesmo preditor recebe esse histórico ao entrar
+no navegador, conservando os timestamps e vínculos de captura originais.
+Consultas repetidas não criam amostras; mudança de captura invalida o histórico.
+Perda do alvo durante a preparação interrompe a navegação antes do primeiro
+movimento, mantendo a parada e a limpeza da sessão.
+
+Não há outro coletor, cache entre operações ou alteração de velocidade,
+estabilidade, tolerância ou duração. O histórico pode estar disponível no
+primeiro feedback; isso não resolve sozinho a chegada estática nem constitui
+aceite de aquisição preditiva ou seguimento físico sustentado.
+
+## Capacidade medida e suspensão com recuperação pendente — 23/10/2026
+
+Uma correção curta atualiza a resposta do eixo sem apagar a capacidade de pulso
+comprovada por uma sondagem completa. A capacidade conserva sua idade e orientação
+originais; expira em cinco minutos ou após mudança de vista de quinze graus.
+Resposta incompatível ou suporte visual insuficiente a invalidam. Resposta mais
+rápida reduz a duração para respeitar o deslocamento original; resposta mais lenta
+não aumenta esse limite. O traço registra origem e orçamento retido.
+
+Pausar durante uma falha suspende o perfil, para e libera o controle, mas conserva
+a falha e a obrigação de retorno. Retomada continua bloqueada até recuperação
+comprovada. Essa separação evita reinício automático após um retorno manual.
+Regressões de software aprovadas; seguimento físico sustentado ainda não aceito.
+
+## Renovação local pelo ciclo de atenção — 23/10/2026
+
+O acompanhamento panorâmico pode renovar uma sondagem normal previamente
+qualificada no mesmo ponto de monitoramento, sem repetir a ida a outro alvo.
+A consulta de disponibilidade é passiva. Quando a resposta vinculada expira,
+o controlador entra no retorno existente, adquire a concessão e executa
+sondagem e volta pelo navegador compartilhado. Durante essa operação, alvos
+não iniciam aquisição. A conclusão exige resposta medida, imagem de retorno
+recente, limite de enquadramento e controle parado sob a mesma posse.
+
+Somente o eixo, sentido, velocidade e duração já qualificados são reutilizados;
+mudar o ponto de monitoramento ou a referência invalida essa preparação.
+O limite de cinco minutos e a invalidação espacial permanecem. Respostas de
+outros eixos não recebem validade nova por essa sondagem. Câmeras sem essa
+qualificação mantêm o caminho anterior; não se pressupõem dois eixos ou Zoom.
+Pausa, prazo, limite de movimentos, falha e recuperação usam o ciclo existente.
+As decisões distinguem preparação solicitada e comprovada. Integração ainda
+pendente de ensaio físico; testes de software não constituem aceite móvel.
+
+## Capacidade reservada para confirmação e recuperação — 23/10/2026
+
+Os replays opcionais da navegação compartilham a cota existente com as imagens
+operacionais, reservando capacidade para as três etapas da qualificação, sua
+imagem final e uma recuperação. O orçamento considera os bytes descomprimidos
+gravados no arquivo, os metadados e os cabeçalhos; o tamanho PNG em memória
+não é usado como estimativa do tamanho final. A gravação compartilha a mesma
+exclusão com as imagens obrigatórias.
+
+Quando o espaço disponível termina, o replay conserva somente os quadros que
+couberam e declara que está incompleto; sem capacidade, registra indisponibilidade.
+Falhas de gravação do diagnóstico não substituem o resultado do movimento nem
+interrompem a recuperação. Replays anteriores são preservados. A cota total
+não aumentou; esta correção de armazenamento não constitui aceite físico móvel.
+
+## Preparação da resposta no ponto de monitoramento — 23/10/2026
+
+A qualificação de atenção aceita uma sondagem opcional na velocidade normal
+de 0,1, limitada a 0,6 segundo, depois da etapa de retorno. Ela reutiliza a
+medição visual e o cálculo de limite do navegador; somente deslocamento
+qualificado atualiza a resposta. O limite maior depende também de suporte
+geométrico distribuído e sobreposição suficiente. A restauração final permanece
+obrigatória. Sondagens mais rápidas conservam o limite de 0,24 segundo e não
+substituem o modelo da velocidade normal.
+
+Essa preparação evita depender de uma resposta medida em outra orientação;
+a invalidação por mudança de vista permanece. Ela não certifica seguimento:
+a entrada renovável, o enquadramento durante movimento e a lente Zoom ainda
+precisam de validação física conjunta. O produto continua usando o mesmo
+navegador, cache, autoridade e caminho de parada e recuperação.
+
+## Validade do alvo durante sondagem e estabilização — 23/10/2026
+
+Uma atualização rejeitada invalida o destino vivo até chegar nova observação
+qualificada; não restaura a direção inicial mais antiga. A posição anterior
+continua disponível para a política de espera após perda, sem autorizar movimento.
+A navegação verifica o alvo durante toda a observação, incluindo sondagens de
+resposta ainda desconhecida e estabilização após Stop, pelos mesmos caminhos de
+velocidade, movimento relativo e absoluto. Expiração interrompe a tentativa,
+mas preserva o Stop em andamento e registra seu resultado efetivo.
+
+O ensaio real do candidato anterior confirmou movimento, mas reprovou seguimento
+e Zoom. Correções de validade não certificam cadência ou enquadramento; estes
+continuam pendentes de nova campanha física com hipótese e orçamento próprios.
+
+## Progresso de enquadramento na atenção — 23/10/2026
+
+A navegação publica progresso visual vinculado ao comando, à concessão, à fonte
+e à revisão da panorâmica. A atenção conserva somente a observação mais recente,
+rejeita regressões de sequência e exige captura válida com no máximo um segundo.
+O estado `FOLLOWING` informa que a direção do alvo foi projetada perto do centro
+enquanto o comando ainda está em execução. A interface distingue essa estimativa
+da visibilidade do objeto e da chegada parada; ambas permanecem não confirmadas
+nesse progresso. O diagnóstico mede o tempo até o processamento do progresso,
+incluindo a espera do controlador; não o apresenta como latência física de exposição.
+
+Perda de observação, encerramento e prioridade maior continuam interrompendo a
+navegação. O prazo de aquisição não é prolongado, e o retorno mantém seus gates.
+`FOCUSED` ainda exige a resposta terminal e a confirmação de Stop existentes.
+O novo estado não certifica seguimento físico, lente Zoom nem visibilidade por
+mera projeção. Esses resultados precisam de imagens e telemetria em nova campanha.
+
+## Atualizações de velocidade dentro da correção — 23/10/2026
+
+Na atenção com alvo dinâmico, o mesmo scanner pode atualizar a velocidade sem
+aguardar uma parada entre esses comandos. A estimativa usa dois intervalos
+concordantes de orientação visual, com três imagens e vínculo de captura.
+O tempo é o recebimento local dos quadros; não certifica o instante físico de
+exposição nem a resposta da câmera fora do intervalo observado.
+
+Cada atualização usa guarda própria de alvo e imagem, consome orçamento e
+permanece no eixo, sentido, velocidade máxima e prazo da correção original.
+Velocidades fora do espaço ONVIF normalizado descoberto não são presumidas.
+O watchdog e a parada continuam no controlador existente. Comandos alterados
+não produzem calibração de pulso completo. Reversões exigem parada e novo cálculo.
+
+O mecanismo ainda termina cada correção com a prova de parada existente. Não
+constitui aceite de seguimento contínuo de uma ocorrência: é preciso distinguir
+o enquadramento durante movimento da chegada terminal, integrar essa evolução
+no ciclo de atenção e comprovar cadência, Wide, Zoom, rastro e recuperação em
+nova janela física. Os ensaios móveis anteriormente reprovados permanecem válidos.
+
+## Parada antecipada por observação visual — 23/10/2026
+
+Nas correções de atenção com alvo dinâmico e resposta já conhecida, a navegação
+pode interromper o pulso quando uma orientação visual recente indica centro
+alcançado, direção ultrapassada ou perda da validade da observação. O alvo
+continua sendo validado enquanto o primeiro resultado visual é processado.
+A interrupção reutiliza o Stop, a confirmação de estabilidade e a recuperação
+do scanner; não aumenta o prazo nem o orçamento do comando.
+
+Um pulso interrompido não qualifica ganho nem limite mecânico. A navegação
+relocaliza e mede o alvo atualizado antes de decidir a próxima correção ou
+confirmar chegada. Provas de chegada e retorno continuam exigindo parada.
+Essa intervenção antecipada ainda não implementa atualização contínua de
+velocidade; ganho de cadência, enquadramento móvel e Zoom exigem ensaio físico.
+
+## Observação visual durante aproximação móvel — 23/10/2026
+
+A navegação de atenção passa a preparar orientações visuais durante seus pulsos,
+reutilizando os quadros do scanner e o localizador da panorâmica. O processamento
+mantém um trabalhador e um quadro pendente substituível; o histórico limita-se
+às 32 observações mais recentes. Capturas vencidas, divergentes ou de outro
+decodificador não produzem geometria utilizável. O encerramento aguarda o
+trabalhador após a limpeza física, inclusive sob cancelamento.
+
+`navigation_motion_observations` distingue esse progresso visual da chegada:
+`arrival_verified=false` permanece explícito. O observador não envia comandos,
+não substitui Stop nem altera a confirmação final. Atualização contínua de
+velocidade e ganho físico de cadência ainda dependem da integração do controle
+e de ensaio real; essa preparação de observações não certifica seguimento.
+
+
+## Continuidade da reprodução MSE — 22/10/2026
+
+O serviço MSE preserva a porta alternativa já vinculada enquanto a porta
+solicitada não mudar. Consultas simultâneas de reprodução não devem reiniciar
+o serviço por confundir sua própria porta com um conflito. Alterações reais
+de fontes ou de porta continuam sendo aplicadas. A regressão cobre dois
+clientes concorrentes, mudança de fontes, mudança de porta e nova partida.
+Essa correção de disponibilidade não altera cobertura, calibração ou controle físico.
+
+## Preparação de atenção — reaproveitamento de descoberta, 20/10/2026
+
+A atenção panorâmica pode reutilizar metadados ONVIF recentes de uma operação
+anterior já parada e fechada, por até 30 segundos contados da descoberta original.
+O vínculo exige mesma concessão, fence, fonte, mapeamento e geometria. Configuração,
+pose, automação nativa, posse e imagem parada continuam sendo verificadas por operação.
+Nenhum consumidor de captura, quadro ou recibo de parada é transferido. Falhas
+descartam o reaproveitamento; a telemetria o identifica por `discovery_reused`.
+Essa redução de descoberta repetida tem cobertura de software, mas ainda não
+comprova ganho físico de latência, seguimento móvel, cobertura ou precisão.
+
+## Atenção física e ensaio local supervisionado — 20/10/2026
+
+Foi acrescentado um percurso explícito de qualificação da atenção, com ida e
+retorno observados sob a mesma posse de controle. O registro exige movimento
+real, vínculo exato com a referência, chegada até 12 pixels, retorno até 3 pixels
+e parada confirmada; leituras e testes sintéticos não produzem qualificação.
+
+O piloto da Frente completou um percurso real: chegada com erro de 11,37 pixels
+em 29,99 segundos e retorno com 0,44 pixel em 15,86 segundos, na análise de largura
+960. Houve tentativas anteriores reprovadas, preservadas fora do repositório.
+Uma rodada aprovada não comprova repetibilidade, enquadramento da lente Zoom nem
+acompanhamento de pessoas e veículos em movimento. A latência observada ainda
+é inadequada para passagem rápida.
+
+O modo panorâmico físico agora recebe atualizações qualificadas do alvo durante
+a aproximação. Observações vencidas interrompem correções; observações novas
+podem reiniciar a confirmação após perda temporária, sem reabrir CLOSE explícito.
+A ausência de resposta só permite ampliar sondagens após observação causal
+de imobilidade. Respostas com atraso inicial são tratadas separadamente por
+sentido, sem converter duração em ângulo nem reduzir tolerâncias.
+
+Os ensaios de integração também identificaram atualização ausente do estado
+ONVIF após a parada visual e evidência de chegada anterior à limpeza. A execução
+passa a confirmar ambos e medir o alvo na imagem final parada. Seguimento móvel,
+latência ponta a ponta e conservação do rastro mundial permanecem em validação
+física; este checkpoint não declara sua aprovação.
+
+A atenção passa a compartilhar com a panorâmica ao vivo a verificação de chegada
+recente sob o mesmo Stop. Quando o quadro parado ainda é o da chegada, sua idade
+é de até um segundo, a posse continua válida e o estado físico ONVIF é confirmado,
+essa evidência pode ser entregue sem repetir Stop, janela de estabilização e
+localização. A consulta de estado não renova a idade do quadro: imagem e comando
+são conferidos novamente depois dela. Retorno continua exigindo até 3 pixels;
+chegada, até 12. Qualquer perda dessas condições mantém a parada e a observação
+completas. O traço informa `final_stop_reused`; redução da latência física ainda
+precisa ser medida em campanha, sem extrapolar o resultado dos testes de software.
+
+O diagnóstico de atenção registra `preparation_elapsed_ms`: marcos cumulativos
+medidos por relógio monotônico na mesma operação, desde a preparação local até
+reserva, descoberta, aquisição, parada, referência, pose e localização. Diferenças
+entre marcos consecutivos medem as etapas; horários civis permanecem apenas para
+correlação. Falha mantém os marcos já concluídos, sem inventar os seguintes. Esses
+tempos não incluem espera anterior pelo controlador/referência nem certificam
+o instante físico de exposição da imagem.
+
+Passagens reais posteriores produziram pequenas correções mecânicas, mas não
+mantiveram ciclista e pessoa em movimento centralizados. A lente Zoom mostrou
+o alvo cortado na borda. Um percurso curto adicional passou com chegada de
+5,81 pixels em 2,82 segundos e retorno de 1,56 pixel em 5,12 segundos; outro
+percurso maior reprovou por divergência no retorno. Não há aprovação geral de
+repetibilidade nem de seguimento móvel.
+
+Foram corrigidos encerramento lento do decodificador, recusa de eventos fora da
+região interrompendo o controlador, perda da posição válida durante a espera por
+reaparecimento e substituição enganosa da causa de falha por reinício. A resposta
+do motor não é recalculada a partir de deslocamento abaixo da resolução visual
+nem transferida de uma velocidade reduzida para a velocidade normal. Respostas
+de operações aprovadas podem ser reutilizadas em memória por até cinco minutos,
+sob vínculo exato e limite de mudança de orientação, sem renovar sua validade por
+simples reutilização. A preparação e o histórico recente de navegação são
+registrados separadamente da confirmação de chegada.
+Uma única ultrapassagem pequena do alvo pode receber correção, com localização
+recente e dentro de 12 pixels; repetição ou afastamento continua interrompendo a
+operação. Isso não altera o limite de 3 pixels para aceitar o retorno.
+
+Testes sintéticos percorrem projeção, identidade e histórico mundial de pessoa e
+carro durante rotação da câmera; inspeção de quadro com pose visual qualificada
+não depende de posição numérica ONVIF estável. Isso não certifica o rastro completo
+de uma notificação real nem a calibração cruzada da lente Zoom.
+
+## Diagnóstico da atenção por eventos — 20/10/2026
+
+A atenção simulada preserva o alvo solicitado e distingue recusa pela região,
+referência indisponível, vínculo incompatível e qualificação física pendente.
+Um evento observado inicialmente recusado pode ser reavaliado em atualizações
+válidas; seu encerramento conserva o ciclo de vida. A confirmação de seguimento
+simulado continua durante mudanças do raio na mesma referência panorâmica.
+
+Relações espaciais aceitam a evidência geométrica de ambos os participantes na
+mesma referência panorâmica e revisão, sem fabricar confiança estatística.
+Localizações visuais precisam corresponder à captura individual; referências
+incompatíveis e confiança explicitamente baixa continuam sem alvo mundial
+qualificado. O teste integrado percorre mapeamento, rastreamento, agrupamento e
+relação, além dos casos de rejeição.
+
+A telemetria separa evento até decisão de comando até chegada verificada na fonte
+selecionada. Simulação não publica latência de chegada física. Uma chegada na lente
+Wide não qualifica enquadramento na lente Zoom. Estas mudanças não promovem
+qualificações, não habilitam seguimento mecânico contínuo e não alteram os critérios
+de reconstrução, cobertura, apontamento ou retorno.
 
 ## Edição de regiões de interesse — 12/10/2026
 

@@ -96,6 +96,7 @@ class _ByteWorldTrackState:
     keypoints: list[tuple[float, float, float]] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     world_anchor: dict[str, float] | None = None
+    world_velocity: dict[str, float] = field(default_factory=dict)
     appearance_embedding_artifact_name: str | None = None
     last_seen_ts: float = 0.0
     last_predicted_ts: float = 0.0
@@ -129,11 +130,13 @@ class ByteWorldTrackerBackend:
         self._world_match_distance_meters = max(0.0, float(world_match_distance_meters))
         self._tracks_by_stream: dict[str, dict[str, _ByteWorldTrackState]] = {}
         self._next_track_number_by_stream: dict[str, int] = {}
+        self._geometry_by_stream: dict[str, tuple[Any, ...]] = {}
 
     def reset_stream(self, stream_key: str) -> None:
         key = str(stream_key or "").strip()
         self._tracks_by_stream.pop(key, None)
         self._next_track_number_by_stream.pop(key, None)
+        self._geometry_by_stream.pop(key, None)
 
     def _now(self, frame_ts: float | None) -> float:
         if frame_ts is not None and math.isfinite(float(frame_ts)):
@@ -254,7 +257,11 @@ class ByteWorldTrackerBackend:
             and state.world_anchor
             and detection_world_anchor
         ):
-            distance = _world_distance(state.world_anchor, detection_world_anchor)
+            expected = state.world_anchor
+            if state.world_velocity and 0 < age_seconds <= min(1.0, self._close_after_seconds):
+                expected = {**expected, **{axis: expected[axis] + speed * age_seconds
+                    for axis, speed in state.world_velocity.items()}}
+            distance = _world_distance(expected, detection_world_anchor)
             if distance is not None:
                 world_confidence = min(
                     _world_confidence(state.world_anchor),
@@ -269,6 +276,11 @@ class ByteWorldTrackerBackend:
                     world_cost = distance / max(1e-6, radius)
                 elif world_confidence >= 0.70 or self._use_world_anchor == "always":
                     return None
+                elif world_confidence >= 0.45:
+                    if image_cost is None:
+                        return None
+                    # Conflicting world evidence must not rank better than a nearby match.
+                    world_cost = 1.0
 
         if image_cost is None and world_cost is None:
             return None
@@ -354,6 +366,13 @@ class ByteWorldTrackerBackend:
         state.mask_artifact_name = detection.mask_artifact_name
         state.keypoints = detection.keypoints
         state.metadata = dict(detection.metadata or {})
+        elapsed = now_ts - state.last_seen_ts
+        previous = state.world_anchor
+        state.world_velocity = {}
+        if (previous and world_anchor and 0 < elapsed <= min(1.0, self._close_after_seconds)
+                and min(_world_confidence(previous), _world_confidence(world_anchor)) >= 0.45):
+            state.world_velocity = {axis: (world_anchor[axis] - previous[axis]) / elapsed
+                for axis in ("x", "y", "z") if axis in previous and axis in world_anchor}
         state.world_anchor = world_anchor
         state.appearance_embedding_artifact_name = appearance_embedding_artifact_name
         state.bbox01 = state.filter_state.update(detection.bbox01)
@@ -367,6 +386,7 @@ class ByteWorldTrackerBackend:
         metadata = {
             **dict(state.metadata or {}),
             "hits": int(state.hits),
+            "observation_state": "detection_associated",
             "confidence_band": state.last_confidence_band,
         }
         if state.last_match_cost is not None:
@@ -404,6 +424,13 @@ class ByteWorldTrackerBackend:
         now_ts = self._now(frame_ts)
         states = self._tracks_by_stream.setdefault(key, {})
         runtime_metadata = dict(metadata or {})
+        geometry = tuple(runtime_metadata.get(name) for name in (
+            "composition_id", "calibrated_view_id", "panorama_revision", "geometry_digest",
+        ))
+        if key in self._geometry_by_stream and self._geometry_by_stream[key] != geometry:
+            # A changed coordinate frame cannot continue the previous world trail.
+            states.clear()
+        self._geometry_by_stream[key] = geometry
         camera_id = normalize_identifier(runtime_metadata.get("camera_id"), fallback=key) or key
         packet_world_anchor = _normalize_world_anchor(runtime_metadata.get("world_anchor"))
         appearance_embedding_artifact_name = (

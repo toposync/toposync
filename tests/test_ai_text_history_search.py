@@ -156,7 +156,7 @@ def test_relative_semantic_query_and_date_only_share_configured_timezone(tmp_pat
 
     search.config_store = Settings()
     calls = []
-    async def unavailable(query, limit, priorities, types, start, end, data_filter=None, notification_ids=None):
+    async def unavailable(query, limit, priorities, types, start, end, data_filter=None, notification_ids=None, read_filter=None):
         calls.append((query, start, end))
         raise httpx.ConnectError("offline")
     monkeypatch.setattr(search, "_semantic", unavailable)
@@ -196,7 +196,7 @@ def test_history_route_requires_notification_read(tmp_path: Path) -> None:
         assert client.get("/api/ai/history/search", params={"query":"gato"}).status_code == 403
         assert client.get("/api/ai/history/search", params={"query":"gato", "mode":"visual"}).status_code == 403
         assert client.get("/api/ai/history/search", params={"query":"   "}).status_code == 422
-        app.state.auth = SimpleNamespace(mode="bypass", requires_setup=lambda: False, authorize=lambda **kwargs: None)
+        app.state.auth = SimpleNamespace(mode="bypass", requires_setup=lambda: False, resolve_request=lambda request, **kwargs: None, authorize=lambda **kwargs: SimpleNamespace(bypass=True, role="owner"))
         match, _ = app.state.notifications.store.upsert(type="event", title="Gato", payload={"data": {"camera_id": "patio"}})
         app.state.notifications.store.upsert(type="event", title="Gato", payload={"data": {"camera_id": "garage"}})
         for mode in ("text", "visual"):

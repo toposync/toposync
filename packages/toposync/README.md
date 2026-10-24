@@ -17,6 +17,9 @@ This distribution installs:
 
 The official first-party vision runtime in this bundle is ONNX Runtime on CPU by default.
 
+Development bundles pin the matching local core and Vision versions. Build and install
+their wheels together; mixing these bundles with wheels from an older release is unsupported.
+
 Alternative first-party bundles:
 
 - `toposync-vision-cuda` for NVIDIA CUDA environments

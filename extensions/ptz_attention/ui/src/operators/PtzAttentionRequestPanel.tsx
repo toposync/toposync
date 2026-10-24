@@ -90,6 +90,7 @@ function PtzAttentionRequestPanel({
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [api, current.camera_id, current.preview_follow_views]);
 
+  const selectedProfile = profiles.find((profile) => profile.id === current.profile_id);
   const selectedCamera = catalog?.cameras.find((camera) => camera.id === current.camera_id) ?? null;
   const sources = (selectedCamera?.sources ?? []).filter((source) => source.enabled && source.kind === "video" && source.has_ptz);
   const selectedSource = sources.find((source) => source.id === current.source_id) ?? null;
@@ -118,6 +119,13 @@ function PtzAttentionRequestPanel({
         </select>
       </label>
       <div className="pipelinesStepHint">{t("ext.ptz_attention.panorama.profile_help")}</div>
+      {selectedProfile ? <div className="pipelinesStepHint" role="status">
+        {t("ext.ptz_attention.operator.profile_mode", {
+          mode: t(`ext.ptz_attention.profile.mode.${selectedProfile.mode}`),
+        })}
+        {selectedProfile.mode === "shadow"
+          ? ` ${t("ext.ptz_attention.wizard.mode.shadow.desc")}` : ""}
+      </div> : null}
       {!current.profile_id ? <details open={Boolean(current.camera_id)}><summary>{t("ext.ptz_attention.panorama.legacy_operator")}</summary>
       <label className="pipelinesCheckbox">
         <input type="checkbox" checked={Boolean(current.preview_follow_views)} onChange={(event) => updateConfig({ preview_follow_views: event.target.checked })} />

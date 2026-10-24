@@ -19,6 +19,14 @@ from typing import Any, Awaitable, Callable, Literal, TypeVar
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.responses import StreamingResponse
+from toposync.runtime.pipelines.inspection import PipelineInspectionStore
+from toposync.runtime.pipelines.capture_receipts import CaptureReceipts
+from toposync.runtime.pipelines.editing import PipelineEditRequest, PipelineRead, pipeline_revision, prepare_pipeline_duplicate
+from toposync.runtime.pipelines.inspection_api import install_inspection_routes
+from toposync.runtime.pipelines.demands import ResourceDemandRegistry
+from toposync.runtime.pipelines.demand_api import install_demand_routes
+from toposync.runtime.automatic_api import install_automatic_routes
+from toposync.runtime.automatic_runtime import AutomaticController
 from starlette.staticfiles import StaticFiles
 from starlette.types import Receive, Scope, Send
 from pydantic import BaseModel, Field
@@ -38,6 +46,7 @@ from toposync.runtime.config_store import (
     ConfigStore,
     Pipeline,
     PipelineAlreadyExistsError,
+    PipelineRevisionConflictError,
     PipelineValidationError,
     PROCESSING_SERVERS_KEY,
     ProcessingServer,
@@ -56,6 +65,8 @@ from toposync.runtime.extension_management import (
     remove_extension,
 )
 from toposync.runtime.notifications import NotificationsRuntime
+from toposync.runtime.notifications.access import NotificationAccess
+from toposync.runtime.notifications.activity_api import install_activity_routes
 from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.processing_diagnostics import collect_processing_server_diagnostics
 from toposync.runtime.pipelines import (
@@ -95,7 +106,9 @@ from toposync.runtime.pipelines.telemetry import (
 from toposync.runtime.pipelines.preview import (
     PipelinePreviewError,
     build_preview_registry,
+    freeze_reference_packet,
     prepare_preview_pipeline,
+    reference_capture_evidence,
     resolve_preview_packet_image,
 )
 from toposync.runtime.pipelines.operators_sinks import ImageStorageFormat, _encode_image_bytes
@@ -515,7 +528,7 @@ class ExtensionOperationResponse(BaseModel):
 
 
 class PipelinesListResponse(BaseModel):
-    pipelines: list[Pipeline]
+    pipelines: list[PipelineRead]
 
 
 class ProcessingServersListResponse(BaseModel):
@@ -830,6 +843,7 @@ class PipelinePreviewFallbackSnapshotRequest(BaseModel):
 
 class PipelinePreviewFrameRequest(BaseModel):
     pipeline: Pipeline
+    purpose: Literal["preview", "reference"] = "preview"
     fallback_snapshot: PipelinePreviewFallbackSnapshotRequest | None = None
     timeout_seconds: float = Field(default=12.0, ge=0.5, le=60.0)
     format: ImageStorageFormat = "png"
@@ -1151,11 +1165,12 @@ def _guess_media_type(path: str) -> str:
 def _build_preview_runtime_dependencies(
     request: Request,
     *,
+    pipeline: Pipeline,
     collector: Callable[[Any, str, str], Awaitable[None] | None],
 ) -> PipelineRuntimeDependencies:
     orchestrator = getattr(request.app.state, "pipelines_orchestrator", None)
     if orchestrator is not None and hasattr(orchestrator, "_build_runtime_dependencies"):
-        deps = orchestrator._build_runtime_dependencies(origin_inbox=None)
+        deps = orchestrator._build_runtime_dependencies(origin_inbox=None, pipelines=[pipeline])
     else:
         config_store: ConfigStore = request.app.state.config_store
         deps = PipelineRuntimeDependencies(
@@ -1332,7 +1347,15 @@ async def _lifespan(app: FastAPI):
     )
 
     notifications = NotificationsRuntime(data_dir=config_store.paths.data_dir)
+    await notifications.expire_occurrences()
+    await asyncio.to_thread(notifications.occurrences.recover)
     services.register("notifications.upsert", notifications.upsert)
+    services.register("occurrences.record", notifications.record_occurrence)
+    services.register("occurrences.capture", notifications.capture_occurrence)
+    services.register("occurrences.register_recorder", notifications.register_occurrence_recorder)
+    services.register("occurrences.unregister_recorder", notifications.unregister_occurrence_recorder)
+    services.register("occurrences.enrich", notifications.enrich_occurrence)
+    services.register("occurrences.enrichment_allowed", notifications.enrichment_allowed)
 
     async def _notifications_list_service(
         *,
@@ -1423,6 +1446,7 @@ async def _lifespan(app: FastAPI):
             prefer_latest=True,
         ),
     }
+    app.state.capture_receipts = CaptureReceipts()
     app.state.pipeline_preview_frame_limiter = _RequestConcurrencyLimiter(
         PIPELINE_PREVIEW_FRAME_CONCURRENCY,
         prefer_latest=True,
@@ -1439,6 +1463,37 @@ async def _lifespan(app: FastAPI):
     app.state.pipeline_graph_compiler = pipeline_compiler
     pipeline_stats_store = PipelineStatsStore()
     app.state.pipeline_stats_store = pipeline_stats_store
+    app.state.pipeline_inspection = PipelineInspectionStore()
+    def authorize_result(user_id: str, key: str, purpose: str) -> bool:
+        if user_id == "bypass" and auth.mode == "bypass":
+            return True
+        user = auth.store.get_user_by_id(user_id)
+        if user is None or user.is_disabled:
+            return False
+        principal = auth._principal_from_user(user)
+        if purpose == "inspection" and principal.role != "owner":
+            return False
+        purposes = ("read", "manual", "automatic", "player", "publication", "inspection") if purpose == "catalog" else (purpose,)
+        for selected in purposes:
+            try:
+                auth.authorize(context=AuthContext(principal=principal, mode=auth.mode, requires_setup=False),
+                               action=f"core:pipeline_results:{selected}", resource_type="core:pipeline_result", resource_selector=key)
+                return True
+            except HTTPException as error:
+                if error.status_code not in (401, 403):
+                    raise
+        return False
+
+    app.state.pipeline_demands = ResourceDemandRegistry(authorize_result, compiler=pipeline_compiler,
+        revocations_path=config_store.paths.data_dir / "pipeline-result-revocations.json")
+    app.state.pipeline_inspection.demand_registry = app.state.pipeline_demands
+    def invalidate_inspection(demand) -> None:
+        for token, session in list(app.state.pipeline_inspection.sessions.items()):
+            producer = app.state.pipeline_demands.outputs.get(demand.request.result_key)
+            if demand.id in session.demand_ids or (demand.reason == "incompatible_result_revision"
+                    and session.owner == demand.owner and producer is not None and session.pipeline == producer[0].name):
+                app.state.pipeline_inspection.close(token)
+    app.state.pipeline_demands.invalidated = invalidate_inspection
     pipeline_telemetry_store = create_default_pipeline_telemetry_store()
     app.state.pipeline_telemetry_store = pipeline_telemetry_store
     pipeline_telemetry_checkpoint = create_default_pipeline_telemetry_disk_checkpoint(
@@ -1462,6 +1517,9 @@ async def _lifespan(app: FastAPI):
         settings=storage_settings_from_core_settings(await config_store.get_settings()),
     )
     app.state.pipeline_storage_manager = pipeline_storage_manager
+    from .runtime.notifications.activity_media import ActivityMediaStore
+    notifications.activity_media = ActivityMediaStore(pipeline_storage_manager)
+    await asyncio.to_thread(notifications.activity_media.maintain)
 
     def _env_int(name: str, default: int) -> int:
         raw = str(os.getenv(name) or "").strip()
@@ -1508,7 +1566,18 @@ async def _lifespan(app: FastAPI):
 
     async def validate_pipeline_activation(pipeline: Pipeline, config: AppConfig) -> None:
         try:
-            compiled = pipeline_compiler.compile_pipeline(pipeline)
+            catalog = [item for item in config.pipelines if item.name != pipeline.name] + [pipeline]
+            compiled = pipeline_compiler.compile_many([pipeline], catalog=catalog).pipelines[0]
+            bound_node = None
+            if pipeline.graph.get("meta", {}).get("result_consumer"):
+                try:
+                    _, bound_node = app.state.pipeline_demands.validate_flow(pipeline)
+                except (ValueError, PermissionError) as error:
+                    raise PipelineValidationError("Manual result binding is unavailable") from error
+            if any(operator_registry.get(node.operator_id).runtime_factory is None
+                   and not (node.operator_id == "core.demand_required" and node.node_id == bound_node)
+                   for node in compiled.nodes):
+                raise PipelineValidationError("Reusable results require an explicit consumer demand")
             context = await _build_pipeline_diagnostics_context(
                 config_store, processing_server_id=pipeline.processing_server_id, config=config
             )
@@ -1528,6 +1597,12 @@ async def _lifespan(app: FastAPI):
 
     config_store.register_pipeline_activation_validator(validate_pipeline_activation)
 
+    automatic = AutomaticController(
+        store=config_store, services=services, operators=operator_registry,
+        demands=app.state.pipeline_demands, compiler=pipeline_compiler,
+    )
+    await automatic.prepare_config(await config_store.get_config())
+    app.state.automatic = automatic
     orchestrator = PipelinesOrchestrator(
         config_store=config_store,
         operator_registry=operator_registry,
@@ -1535,7 +1610,10 @@ async def _lifespan(app: FastAPI):
         notifications=notifications,
         files_dir=config_store.paths.files_dir,
         poll_interval_s=1.0,
+        automatic_controller=automatic,
         runtime_dependencies=PipelineRuntimeDependencies(
+            inspection_store=app.state.pipeline_inspection,
+            demand_registry=app.state.pipeline_demands,
             services=services,
             pipeline_stats_store=pipeline_stats_store,
             pipeline_telemetry_store=pipeline_telemetry_store,
@@ -1549,6 +1627,7 @@ async def _lifespan(app: FastAPI):
             artifact_global_counter=artifact_global_counter,
         ),
     )
+    automatic.revoke = orchestrator._prune_revoked_local_demands
     orchestrator.start()
     app.state.pipelines_orchestrator = orchestrator
 
@@ -1562,9 +1641,16 @@ async def _lifespan(app: FastAPI):
     if frontend_dir:
         app.mount("/", StaticFiles(directory=str(frontend_dir), html=False), name="frontend")
 
+    retention_task = asyncio.create_task(notifications.maintain_occurrences(), name="occurrence-retention")
     try:
         yield
     finally:
+        retention_task.cancel()
+        await asyncio.gather(retention_task, return_exceptions=True)
+        for token in list(app.state.pipeline_inspection.sessions):
+            app.state.pipeline_inspection.close(token)
+        for identifier in list(app.state.pipeline_demands.demands):
+            app.state.pipeline_demands.release(identifier, "application_stopped")
         try:
             await orchestrator.stop()
         except Exception:
@@ -1621,9 +1707,14 @@ class _NotificationStreamingResponse(StreamingResponse):
 def create_app() -> FastAPI:
     app = FastAPI(title="Toposync", version="0.1.0", lifespan=_lifespan)
 
+    @app.exception_handler(GraphCompileError)
     @app.exception_handler(PipelineValidationError)
-    async def pipeline_validation_error(_request: Request, exc: PipelineValidationError):
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    async def pipeline_validation_error(_request: Request, exc: PipelineValidationError | GraphCompileError):
+        content: dict[str, Any] = {"detail": str(exc)}
+        compilation = exc if isinstance(exc, GraphCompileError) else exc.__cause__
+        if isinstance(compilation, GraphCompileError) and compilation.validation_errors:
+            content["validation_errors"] = compilation.validation_errors
+        return JSONResponse(status_code=400, content=content)
 
     def _auth_context(request: Request) -> AuthContext:
         context = getattr(request.state, "auth_context", None)
@@ -1650,6 +1741,45 @@ def create_app() -> FastAPI:
             resource_type=resource_type,
             resource_selector=resource_selector,
         )
+
+    def _inspection_owner(request: Request) -> str:
+        _require(request, action="core:pipelines:read")
+        principal = _auth_context(request).principal
+        # Inspection may contain pixels; narrower source policies need their own projection.
+        if principal is None or principal.role != "owner":
+            raise HTTPException(status_code=403, detail="inspection_owner_required")
+        return principal.user_id
+
+    install_inspection_routes(app, _inspection_owner)
+
+    def _result_principal(request: Request) -> str:
+        return request.app.state.auth.require_authenticated(_auth_context(request)).user_id
+
+    install_demand_routes(app, _result_principal, lambda request: _require(request, action="core:access:manage"))
+    def _automatic_owner(request: Request) -> str:
+        actor = _inspection_owner(request)
+        if request.method != "GET":
+            _require(request, action="core:pipelines:write")
+        return actor
+
+    install_automatic_routes(app, _automatic_owner)
+
+    async def _refresh_result_access(request: Request, user_id: str) -> None:
+        registry = request.app.state.pipeline_demands
+        registry.expire()
+        request.app.state.pipeline_inspection.close_owner(user_id)
+        await request.app.state.pipelines_orchestrator._reconcile()
+
+    def _validate_client_pipeline(request: Request, pipeline: Pipeline) -> None:
+        if pipeline.name.startswith("demand_") or any(
+            str(node.get("operator", "")).startswith("core.demand_")
+            or "result_origin" in node.get("state", {})
+            or (node.get("operator") == "core.result_input" and node.get("config", {}).get("demand_id") is not None)
+            for node in pipeline.graph.get("nodes", [])
+        ):
+            raise HTTPException(400, "Consumer bindings are managed by the result demand API")
+        if pipeline.graph.get("meta", {}).get("outputs"):
+            _inspection_owner(request)
 
     def _require_extension_settings_authorization(
         request: Request,
@@ -1739,7 +1869,7 @@ def create_app() -> FastAPI:
                         status_code=401, content={"detail": "Authentication required"}
                     )
 
-            if is_api:
+            if is_api and not is_public_api:
                 ext_manager: ExtensionManager | None = getattr(
                     request.app.state, "extensions", None
                 )
@@ -1761,6 +1891,8 @@ def create_app() -> FastAPI:
                             break
 
         response = await call_next(request)
+        if path.startswith(("/api/notifications", "/api/ai/history", "/api/activity")):
+            response.headers["Cache-Control"] = "private, no-store" + (", no-transform" if "no-transform" in response.headers.get("Cache-Control", "") else "")
         auth.apply_context_cookies(response, context, request=request)
         return response
 
@@ -1873,7 +2005,11 @@ def create_app() -> FastAPI:
     @app.post("/api/auth/logout")
     async def auth_logout(request: Request) -> Response:
         auth: AuthRuntime = request.app.state.auth
-        auth.logout(request.cookies.get(auth.refresh_cookie_name))
+        principal = _auth_context(request).principal
+        owner = auth.logout(request.cookies.get(auth.refresh_cookie_name),
+                            access_token=request.cookies.get(auth.access_cookie_name))
+        if owner or principal is not None:
+            request.app.state.pipeline_inspection.close_owner(owner or principal.user_id)
         response = JSONResponse({"ok": True})
         auth.clear_session_cookies(response)
         return response
@@ -2251,6 +2387,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _refresh_result_access(request, user.id)
         return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
 
     @app.delete("/api/access/users/{user_id}")
@@ -2276,6 +2413,7 @@ def create_app() -> FastAPI:
             auth.store.delete_user(user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        await _refresh_result_access(request, user_id)
         return {"ok": True}
 
     @app.post("/api/access/users/{user_id}/grants", response_model=AuthUserPublic)
@@ -2303,6 +2441,7 @@ def create_app() -> FastAPI:
         user = auth.store.get_user_by_id(user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="Unknown user")
+        await _refresh_result_access(request, user.id)
         return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
 
     @app.delete("/api/access/users/{user_id}/grants", response_model=AuthUserPublic)
@@ -2318,6 +2457,7 @@ def create_app() -> FastAPI:
         user = auth.store.get_user_by_id(user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="Unknown user")
+        await _refresh_result_access(request, user.id)
         return AuthUserPublic.model_validate(auth.serialize_user(user, include_grants=True))
 
     @app.get("/api/system/paths")
@@ -2350,23 +2490,29 @@ def create_app() -> FastAPI:
         pip: PipOperationResult | None = None,
         error: str | None = None,
     ) -> ExtensionOperationResponse:
+        if ok:
+            await request.app.state.pipelines_orchestrator._reconcile()
+        catalog = await _extension_management_catalog(request)
+        return ExtensionOperationResponse(ok=ok, pip=pip, catalog=catalog, error=error)
+
+    async def _extension_management_catalog(request: Request) -> ExtensionManagementCatalog:
         config_store: ConfigStore = request.app.state.config_store
         ext_manager: ExtensionManager = request.app.state.extensions
         catalog = await build_extension_management_catalog(
             config_store=config_store,
             extension_manager=ext_manager,
         )
-        return ExtensionOperationResponse(ok=ok, pip=pip, catalog=catalog, error=error)
+        principal = _auth_context(request).principal
+        if principal is not None and principal.role == "owner":
+            dependents = request.app.state.automatic.extension_dependents(await config_store.get_config())
+            for item in catalog.items:
+                item.dependents = dependents.get(item.extension_id, [])
+        return catalog
 
     @app.get("/api/extensions/manage", response_model=ExtensionManagementCatalog)
     async def extensions_management_catalog(request: Request) -> ExtensionManagementCatalog:
         _require(request, action="core:extensions:list")
-        config_store: ConfigStore = request.app.state.config_store
-        ext_manager: ExtensionManager = request.app.state.extensions
-        return await build_extension_management_catalog(
-            config_store=config_store,
-            extension_manager=ext_manager,
-        )
+        return await _extension_management_catalog(request)
 
     @app.post(
         "/api/extensions/manage/install",
@@ -3421,7 +3567,7 @@ def create_app() -> FastAPI:
         _require(request, action="core:pipelines:read")
         config_store: ConfigStore = request.app.state.config_store
         pipelines = await config_store.list_pipelines()
-        return PipelinesListResponse(pipelines=pipelines)
+        return PipelinesListResponse(pipelines=[PipelineRead.from_pipeline(pipeline) for pipeline in pipelines])
 
     @app.get("/api/pipelines/operators", response_model=OperatorsListResponse)
     async def list_pipeline_operators(request: Request) -> OperatorsListResponse:
@@ -3472,6 +3618,14 @@ def create_app() -> FastAPI:
             marker=None,
         )
 
+    async def _pipeline_compile_catalog(request: Request, pipeline: Pipeline) -> list[Pipeline]:
+        if not any(node.get("operator") == "core.result_input" for node in pipeline.graph.get("nodes", [])):
+            return [pipeline]
+        # Expanded compilation exposes producer configuration, not just its public result.
+        _inspection_owner(request)
+        stored = await request.app.state.config_store.list_pipelines()
+        return [item for item in stored if item.name != pipeline.name] + [pipeline]
+
     @app.post("/api/pipelines/compile", response_model=PipelineCompileResponse)
     async def compile_pipeline_graph(
         request: Request, body: PipelineCompileRequest
@@ -3507,10 +3661,11 @@ def create_app() -> FastAPI:
                 compiled = await asyncio.to_thread(
                     compiler.compile_many,
                     [pipeline],
+                    catalog=await _pipeline_compile_catalog(request, pipeline),
                     cancel_check=check_cancelled,
                 )
             except GraphCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise PipelineValidationError(str(exc)) from exc
             check_cancelled()
             if not compiled.pipelines:
                 return PipelineCompileResponse(pipeline={}, shared_signatures={})
@@ -3584,10 +3739,11 @@ def create_app() -> FastAPI:
                 compiled = await asyncio.to_thread(
                     compiler.compile_many,
                     [pipeline.model_copy(update={"graph": graph})],
+                    catalog=await _pipeline_compile_catalog(request, pipeline.model_copy(update={"graph": graph})),
                     cancel_check=check_cancelled,
                 )
             except GraphCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise PipelineValidationError(str(exc)) from exc
 
             check_cancelled()
             if not compiled.pipelines:
@@ -3637,6 +3793,11 @@ def create_app() -> FastAPI:
         request: Request, body: PipelinePreviewFrameRequest
     ) -> Response:
         _require(request, action="core:pipelines:read")
+        reference_capture = body.purpose == "reference"
+        reference_owner = None
+        if reference_capture:
+            reference_owner = _inspection_owner(request)
+            _require(request, action="core:pipelines:write")
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
 
@@ -3644,12 +3805,12 @@ def create_app() -> FastAPI:
             check_cancelled()
             try:
                 preview_pipeline = prepare_preview_pipeline(
-                    pipeline=body.pipeline, registry=registry
+                    pipeline=body.pipeline, registry=registry, reference_capture=reference_capture
                 )
             except PipelinePreviewError as exc:
                 fallback_response = _pipeline_preview_fallback_response(
                     request,
-                    body.fallback_snapshot,
+                    None if reference_capture else body.fallback_snapshot,
                 )
                 if fallback_response is not None:
                     return fallback_response
@@ -3662,21 +3823,38 @@ def create_app() -> FastAPI:
             try:
                 compiled = compiler.compile_pipeline(preview_pipeline)
             except GraphCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise PipelineValidationError(str(exc)) from exc
 
             check_cancelled()
             loop = asyncio.get_running_loop()
             captured_image: asyncio.Future[Any] = loop.create_future()
+            last_capture_issue: str | None = None
 
             async def _collector(packet: Any, _node_id: str, _pipeline_name: str) -> None:
+                nonlocal last_capture_issue
                 if captured_image.done():
                     return
                 image = resolve_preview_packet_image(packet)
                 if image is None:
                     return
-                captured_image.set_result(image)
+                if reference_capture:
+                    try:
+                        reference_capture_evidence(packet, body.pipeline)
+                    except PipelinePreviewError as exc:
+                        last_capture_issue = exc.code
+                        return
+                    packet = freeze_reference_packet(packet)
+                    image = resolve_preview_packet_image(packet)
+                captured_image.set_result((image, packet))
 
-            deps = _build_preview_runtime_dependencies(request, collector=_collector)
+            deps = _build_preview_runtime_dependencies(request, pipeline=preview_pipeline, collector=_collector)
+            if reference_capture:
+                deps.pipeline_snapshot_store = None
+                deps.pipeline_stats_store = None
+                deps.pipeline_telemetry_store = None
+                deps.pipeline_storage_manager = None
+                deps.pipeline_observability_sink = None
+                deps.inspection_store = None
             preview_registry = build_preview_registry(registry)
             runtime = PipelineRuntime(
                 compiled=compiled,
@@ -3689,23 +3867,23 @@ def create_app() -> FastAPI:
                 check_cancelled()
                 await runtime.start()
                 try:
-                    image = await asyncio.wait_for(
+                    image, captured_packet = await asyncio.wait_for(
                         captured_image,
                         timeout=float(body.timeout_seconds),
                     )
                 except TimeoutError as exc:
                     fallback_response = _pipeline_preview_fallback_response(
                         request,
-                        body.fallback_snapshot,
+                        None if reference_capture else body.fallback_snapshot,
                     )
                     if fallback_response is not None:
                         return fallback_response
                     raise HTTPException(
                         status_code=504,
-                        detail=(
+                        detail=last_capture_issue or ("reference_capture_timeout" if reference_capture else (
                             "Timed out waiting for a preview frame. Check the camera source or leave the pipeline "
                             "running until this point so a stored snapshot can be collected."
-                        ),
+                        )),
                     ) from exc
             finally:
                 await runtime.stop()
@@ -3714,7 +3892,7 @@ def create_app() -> FastAPI:
             if image is None:
                 fallback_response = _pipeline_preview_fallback_response(
                     request,
-                    body.fallback_snapshot,
+                    None if reference_capture else body.fallback_snapshot,
                 )
                 if fallback_response is not None:
                     return fallback_response
@@ -3729,15 +3907,28 @@ def create_app() -> FastAPI:
             blob, _ext, mime_type = await asyncio.to_thread(
                 _encode_image_bytes,
                 image,
-                fmt=str(body.format or "png"),
+                fmt="png" if reference_capture else str(body.format or "png"),
                 jpeg_quality=int(body.jpeg_quality),
             )
+            capture_headers = {}
+            if reference_capture:
+                try:
+                    evidence = reference_capture_evidence(captured_packet, body.pipeline)
+                except PipelinePreviewError as exc:
+                    raise HTTPException(status_code=409, detail=exc.code) from exc
+                capture_headers["X-Toposync-Capture-Evidence"] = json.dumps(evidence, separators=(",", ":"))
+                if len(blob) > 8 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="reference_capture_image_limit")
+                capture_headers["X-Toposync-Capture-Receipt"] = request.app.state.capture_receipts.issue(
+                    reference_owner, blob, evidence
+                )
             return Response(
                 content=blob,
                 media_type=mime_type,
                 headers={
                     "Cache-Control": "no-store",
                     "X-Toposync-Pipeline-Preview-Mode": "runtime",
+                    **capture_headers,
                 },
             )
 
@@ -3864,7 +4055,7 @@ def create_app() -> FastAPI:
             try:
                 compiler.compile_pipeline(instance)
             except GraphCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise PipelineValidationError(str(exc)) from exc
 
             if body.dry_run:
                 created.append(instance_name) if not exists else updated.append(instance_name)
@@ -4028,7 +4219,7 @@ def create_app() -> FastAPI:
             return source.rstrip() + f"\n\nPIPELINE = {source_name}\n"
         return source
 
-    @app.post("/api/pipelines", response_model=Pipeline, status_code=201)
+    @app.post("/api/pipelines", response_model=PipelineRead, status_code=201)
     async def create_pipeline(request: Request, body: Pipeline) -> Pipeline:
         _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
@@ -4053,7 +4244,9 @@ def create_app() -> FastAPI:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
             await _validate_publish_video_host_affinity(config_store, body)
-            compiler.compile_pipeline(body)
+            _validate_client_pipeline(request, body)
+            catalog = [item for item in await config_store.list_pipelines() if item.name != body.name] + [body]
+            compiler.compile_many([body], catalog=catalog)
             saved = await config_store.create_pipeline(body)
             await _emit_pipeline_lifecycle_event(
                 request,
@@ -4068,13 +4261,13 @@ def create_app() -> FastAPI:
                     orchestrator.trigger_reload()
                 except Exception:
                     pass
-            return saved
+            return PipelineRead.from_pipeline(saved)
         except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise PipelineValidationError(str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @app.post("/api/pipelines/{pipeline_name}/duplicate", response_model=Pipeline, status_code=201)
+    @app.post("/api/pipelines/{pipeline_name}/duplicate", response_model=PipelineRead, status_code=201)
     async def duplicate_pipeline(
         request: Request,
         pipeline_name: str,
@@ -4112,6 +4305,7 @@ def create_app() -> FastAPI:
 
         try:
             duplicated = Pipeline.model_validate(payload)
+            duplicated = prepare_pipeline_duplicate(duplicated, request.app.state.pipeline_operator_registry)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -4128,7 +4322,7 @@ def create_app() -> FastAPI:
             )
             saved = await _reload_pipeline_after_lifecycle_handlers(config_store, saved)
         except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise PipelineValidationError(str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -4138,9 +4332,9 @@ def create_app() -> FastAPI:
                 orchestrator.trigger_reload()
             except Exception:
                 pass
-        return saved
+        return PipelineRead.from_pipeline(saved)
 
-    @app.get("/api/pipelines/{pipeline_name}", response_model=Pipeline)
+    @app.get("/api/pipelines/{pipeline_name}", response_model=PipelineRead)
     async def get_pipeline(request: Request, pipeline_name: str) -> Pipeline:
         _require(request, action="core:pipelines:read")
         config_store: ConfigStore = request.app.state.config_store
@@ -4150,7 +4344,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if pipeline is None:
             raise HTTPException(status_code=404, detail="Unknown pipeline")
-        return pipeline
+        return PipelineRead.from_pipeline(pipeline)
 
     @app.get("/api/pipelines/{pipeline_name}/stats", response_model=PipelineStatsResponse)
     async def get_pipeline_stats(request: Request, pipeline_name: str) -> PipelineStatsResponse:
@@ -4508,13 +4702,20 @@ def create_app() -> FastAPI:
             limiter=request.app.state.pipeline_telemetry_read_limiters["pipeline_image_markers"],
         )
 
-    @app.put("/api/pipelines/{pipeline_name}", response_model=Pipeline)
-    async def replace_pipeline(request: Request, pipeline_name: str, body: Pipeline) -> Pipeline:
+    @app.put("/api/pipelines/{pipeline_name}", response_model=PipelineRead)
+    async def replace_pipeline(request: Request, pipeline_name: str, body: PipelineEditRequest) -> Pipeline:
         _require(request, action="core:pipelines:write")
         config_store: ConfigStore = request.app.state.config_store
         compiler: PipelineGraphCompiler = request.app.state.pipeline_graph_compiler
         registry: OperatorRegistry = request.app.state.pipeline_operator_registry
         try:
+            expected = await config_store.get_pipeline(pipeline_name)
+            if expected is None:
+                raise HTTPException(404, detail="Unknown pipeline")
+            if body.revision is not None and body.revision != pipeline_revision(expected):
+                raise HTTPException(409, detail="pipeline_revision_conflict")
+            revision = body.revision
+            body = Pipeline.model_validate(body.model_dump(exclude={"revision"}))
             if str(getattr(body, "editor_mode", "json")) == "python":
                 source = str(getattr(body, "python_source", "") or "")
                 if not source.strip():
@@ -4532,9 +4733,20 @@ def create_app() -> FastAPI:
                 except PythonDslCompileError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
                 body = body.model_copy(update={"graph": graph})
+            # Operators opt in; old clients can still edit ordinary legacy pipelines.
+            if revision is None and any(
+                registered and "edit_precondition" in registered.definition.capabilities
+                for pipeline in (expected, body)
+                for nodes in [pipeline.graph.get("nodes", [])] if isinstance(nodes, (list, tuple))
+                for node in nodes if isinstance(node, dict)
+                for registered in [registry.get(str(node.get("operator", "")))]
+            ):
+                raise HTTPException(428, detail="pipeline_revision_required")
             await _validate_publish_video_host_affinity(config_store, body)
-            compiler.compile_pipeline(body)
-            saved = await config_store.replace_pipeline(pipeline_name, body)
+            _validate_client_pipeline(request, body)
+            catalog = [item for item in await config_store.list_pipelines() if item.name not in {body.name, pipeline_name}] + [body]
+            compiler.compile_many([body], catalog=catalog)
+            saved = await config_store.replace_pipeline(pipeline_name, body, expected_pipeline=expected)
             await _emit_pipeline_lifecycle_event(
                 request,
                 "core.pipeline.saved",
@@ -4549,9 +4761,11 @@ def create_app() -> FastAPI:
                     orchestrator.trigger_reload()
                 except Exception:
                     pass
-            return saved
+            return PipelineRead.from_pipeline(saved)
+        except PipelineRevisionConflictError as exc:
+            raise HTTPException(409, detail="pipeline_revision_conflict") from exc
         except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise PipelineValidationError(str(exc)) from exc
         except PipelineValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
@@ -4803,6 +5017,16 @@ def create_app() -> FastAPI:
         if not candidate.is_file():
             raise HTTPException(status_code=404, detail="File not found")
 
+        # Event images always require the occurrence's current authorization and expiry.
+        if candidate.relative_to(base_dir).parts[:2] == ("pipelines", "activity-media"):
+            raise HTTPException(status_code=404, detail="File not found")
+
+        principal = _auth_context(request).principal
+        if not principal.bypass and principal.role != "owner":
+            if not await asyncio.to_thread(request.app.state.notifications.store.file_visible,
+                                          candidate.relative_to(base_dir).as_posix(), read_filter=NotificationAccess(request)):
+                raise HTTPException(status_code=404, detail="File not found")
+
         return FileResponse(
             path=candidate,
             media_type=_guess_media_type(candidate.name),
@@ -4889,6 +5113,7 @@ def create_app() -> FastAPI:
                 data_filter=filters,
                 created_after=created_after,
                 created_before=created_before,
+                read_filter=NotificationAccess(request),
                 cancel_check=check_cancelled,
             )
             return {"notifications": items, "next_cursor": next_cursor,
@@ -4909,7 +5134,7 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
-            return {"options": request.app.state.notifications.store.data_options(field, label_field, cancel_check=check_cancelled)}
+            return {"options": request.app.state.notifications.store.data_options(field, label_field, cancel_check=check_cancelled, read_filter=NotificationAccess(request))}
         return await _run_cancelable_request_work(request, build_response,
             limiter=request.app.state.notification_read_limiters["list"])
 
@@ -4919,7 +5144,7 @@ def create_app() -> FastAPI:
         runtime: NotificationsRuntime = request.app.state.notifications
 
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
-            return runtime.count_summary_sync(cancel_check=check_cancelled)
+            return runtime.count_summary_sync(cancel_check=check_cancelled, read_filter=NotificationAccess(request), viewer_id=_auth_context(request).principal.user_id)
 
         return await _run_cancelable_request_work(
             request,
@@ -4931,24 +5156,42 @@ def create_app() -> FastAPI:
     async def mark_notifications_viewed(request: Request) -> dict[str, Any]:
         _require(request, action="core:notifications:read")
         runtime: NotificationsRuntime = request.app.state.notifications
-        return await runtime.mark_all_viewed()
+        return await runtime.mark_all_viewed(read_filter=NotificationAccess(request), viewer_id=_auth_context(request).principal.user_id)
 
     @app.get("/api/notifications/stream")
     async def notifications_stream(request: Request) -> StreamingResponse:
         _require(request, action="core:notifications:stream")
         runtime: NotificationsRuntime = request.app.state.notifications
+        access = NotificationAccess(request)
         async def gen():
             q = runtime.broadcaster.subscribe()
             try:
                 yield "retry: 1000\n\n"
                 yield "event: ready\ndata: {}\n\n"
                 while True:
+                    try:
+                        access.principal("core:notifications:stream")
+                    except HTTPException:
+                        break
                     if await request.is_disconnected():
                         break
                     try:
                         event = await asyncio.wait_for(q.get(), timeout=15)
                     except asyncio.TimeoutError:
                         yield ": ping\n\n"
+                        continue
+                    try:
+                        access.principal("core:notifications:stream")
+                    except HTTPException:
+                        break
+                    notification = event.get("notification") if isinstance(event, dict) else None
+                    if notification is None:
+                        if isinstance(event, dict) and event.get("op") == "invalidate" and await runtime.event_visible(event, read_filter=access):
+                            yield f'data: {json.dumps({"op": "invalidate", "notification_id": event["notification_id"]})}\n\n'
+                        if isinstance(event, dict) and event.get("op") == "resync" and await runtime.event_visible(event, read_filter=access):
+                            yield 'data: {"op":"resync"}\n\n'
+                        continue
+                    if not await runtime.event_visible(event, read_filter=access):
                         continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except asyncio.CancelledError:
@@ -4972,9 +5215,13 @@ def create_app() -> FastAPI:
         if not wanted:
             raise HTTPException(status_code=400, detail="notification_id is required")
 
+        if await runtime.get(wanted, read_filter=NotificationAccess(request)) is None:
+            raise HTTPException(status_code=404, detail="Unknown notification")
+
         if include_ephemeral_image and runtime.broadcaster.ephemeral_image_stream_count >= 16:
             raise HTTPException(status_code=429, detail="Too many ephemeral image streams")
 
+        access = NotificationAccess(request)
         async def gen():
             # Allocate only once streaming begins. A cancelled response whose
             # iterator never starts must not reserve live-image capacity.
@@ -4989,6 +5236,10 @@ def create_app() -> FastAPI:
                 yield "retry: 1000\n\n"
                 yield "event: ready\ndata: {}\n\n"
                 while True:
+                    try:
+                        access.principal("core:notifications:stream")
+                    except HTTPException:
+                        break
                     if await request.is_disconnected():
                         break
                     try:
@@ -4997,9 +5248,20 @@ def create_app() -> FastAPI:
                         yield ": ping\n\n"
                         continue
                     notif = event.get("notification") if isinstance(event, dict) else None
-                    if not isinstance(notif, dict):
+                    if isinstance(notif, dict) and str(notif.get("id") or "") != wanted:
                         continue
-                    if str(notif.get("id") or "") != wanted:
+                    try:
+                        access.principal("core:notifications:stream")
+                    except HTTPException:
+                        break
+                    notification = event.get("notification") if isinstance(event, dict) else None
+                    if notification is None:
+                        if isinstance(event, dict) and event.get("op") == "invalidate" and await runtime.event_visible(event, read_filter=access):
+                            yield f'data: {json.dumps({"op": "invalidate", "notification_id": event["notification_id"]})}\n\n'
+                        if isinstance(event, dict) and event.get("op") == "resync" and await runtime.event_visible(event, read_filter=access):
+                            yield 'data: {"op":"resync"}\n\n'
+                        continue
+                    if not await runtime.event_visible(event, read_filter=access):
                         continue
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except asyncio.CancelledError:
@@ -5019,7 +5281,7 @@ def create_app() -> FastAPI:
         runtime: NotificationsRuntime = request.app.state.notifications
 
         def build_response(check_cancelled: Callable[[], None]) -> dict[str, Any]:
-            notif = runtime.get_sync(notification_id, cancel_check=check_cancelled)
+            notif = runtime.get_sync(notification_id, cancel_check=check_cancelled, read_filter=NotificationAccess(request))
             if notif is None:
                 raise HTTPException(status_code=404, detail="Unknown notification")
             return notif
@@ -5029,6 +5291,8 @@ def create_app() -> FastAPI:
             build_response,
             limiter=request.app.state.notification_read_limiters["detail"],
         )
+
+    install_activity_routes(app)
 
     frontend_dir = _resolve_frontend_dir()
     if frontend_dir:

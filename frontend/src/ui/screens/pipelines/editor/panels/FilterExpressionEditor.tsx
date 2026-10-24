@@ -3,6 +3,7 @@ import React from "react";
 import type * as MonacoEditor from "monaco-editor";
 
 import { i18n } from "../../../../../util/i18n";
+import { DEFAULT_THEME_ID } from "../../../../../util/theme";
 import { validateFilterExpression, type FilterExpressionValidationMarker } from "../../../../../util/api";
 import type { SelectOption } from "../../types";
 import type { FilterExpressionPathSuggestion } from "./filterExpressionContext";
@@ -424,6 +425,19 @@ export function FilterExpressionEditor({
   const [editorReadyNonce, setEditorReadyNonce] = React.useState(0);
   const [validationError, setValidationError] = React.useState<string | null>(null);
   const [validationMarker, setValidationMarker] = React.useState<FilterExpressionValidationMarker | null>(null);
+  const [editorTheme, setEditorTheme] = React.useState("vs-dark");
+
+  React.useEffect(() => {
+    const root = document.documentElement;
+    const updateTheme = () => {
+      const theme = root.dataset.toposyncBaseTheme || root.dataset.toposyncTheme || DEFAULT_THEME_ID;
+      setEditorTheme(theme === "topo-night" ? "vs-dark" : "light");
+    };
+    updateTheme();
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ["data-toposync-base-theme", "data-toposync-theme"] });
+    return () => observer.disconnect();
+  }, []);
 
   React.useEffect(() => {
     setCompletionContext({ artifactSuggestions, payloadPathSuggestions, metadataPathSuggestions });
@@ -523,6 +537,7 @@ export function FilterExpressionEditor({
       <div className="pipelinesMonacoWrap pipelinesMonacoWrapCompact">
         <Editor
           height="188px"
+          theme={editorTheme}
           language={FILTER_LANGUAGE_ID}
           value={value}
           beforeMount={handleBeforeMount}

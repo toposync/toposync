@@ -4,6 +4,7 @@ import asyncio
 import copy
 import keyword
 import json
+import logging
 import os
 import re
 import sys
@@ -16,6 +17,8 @@ from typing import Any, Awaitable, Callable, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
+
+from .automatic import AutomaticState
 
 
 PIPELINE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -30,6 +33,10 @@ class PipelineValidationError(ValueError):
 
 
 class PipelineAlreadyExistsError(ValueError):
+    pass
+
+
+class PipelineRevisionConflictError(PipelineAlreadyExistsError):
     pass
 
 
@@ -442,6 +449,89 @@ class ConfigStore:
             str, Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
         ] = {}
         self._pipeline_activation_validator: Callable[[Pipeline, AppConfig], Awaitable[None]] | None = None
+        self._pipeline_resource_guards: dict[
+            str, Callable[[list[Pipeline] | None, list[Pipeline]], Awaitable[None]]
+        ] = {}
+        self._pipeline_resource_reconcilers: dict[str, Callable[[list[Pipeline]], Awaitable[None]]] = {}
+        self._pipeline_resource_retry: dict[str, float] = {}
+
+    async def register_pipeline_resource_guard(
+        self, owner: str,
+        callback: Callable[[list[Pipeline] | None, list[Pipeline]], Awaitable[None]],
+        *, reconcile: Callable[[list[Pipeline]], Awaitable[None]] | None = None,
+    ) -> None:
+        """Protect extension resources before persistence, including disabled graphs.
+
+        Callbacks run under the configuration lock and must not reenter this store.
+        They may reserve resources, never release them: a later guard or file write
+        can fail. A None previous snapshot means startup or external-file reload;
+        preserve available resources without requiring them all to be restored yet.
+
+        Optional reconciliation receives only committed/loaded snapshots. Failures
+        keep resources reserved and retry on a later load, without failing a save
+        that already committed. Reconciliation must be atomic and idempotent.
+        """
+        await self.load()
+        async with self._lock:
+            if owner in self._pipeline_resource_guards:
+                raise ValueError("Pipeline resource guard already registered")
+            assert self._config is not None
+            await callback(None, [pipeline.model_copy(deep=True) for pipeline in self._config.pipelines])
+            self._pipeline_resource_guards[owner] = callback
+            if reconcile is not None:
+                self._pipeline_resource_reconcilers[owner] = reconcile
+                self._pipeline_resource_retry[owner] = 0
+                await self._reconcile_pipeline_resources()
+
+    async def _reconcile_pipeline_resources(self, *, changed: bool = False) -> None:
+        if changed:
+            self._pipeline_resource_retry.update({owner: 0 for owner in self._pipeline_resource_reconcilers})
+        if not self._pipeline_resource_retry or self._config is None or self._config_stamp is None:
+            return
+        due = [owner for owner, retry_at in self._pipeline_resource_retry.items() if time.monotonic() >= retry_at]
+        if not due:
+            return
+        try:
+            current_stamp = await asyncio.to_thread(_path_stamp, self._paths.config_path)
+        except OSError:
+            self._pipeline_resource_retry.update({owner: time.monotonic() + 30 for owner in due})
+            logging.getLogger(__name__).warning("Cannot verify committed configuration for resource reconciliation; retaining resources", exc_info=True)
+            return
+        if current_stamp != self._config_stamp:
+            return
+        for owner in due:
+            task = asyncio.create_task(self._pipeline_resource_reconcilers[owner](
+                [pipeline.model_copy(deep=True) for pipeline in self._config.pipelines],
+            ))
+            cancelled = False
+            # Keep the write lock until native resource work finishes, even on cancellation.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    cancelled = True
+                except Exception:
+                    break
+            try:
+                task.result()
+            except Exception:
+                self._pipeline_resource_retry[owner] = time.monotonic() + 30
+                logging.getLogger(__name__).warning("Pipeline resource reconciliation failed for %s; retaining resources", owner, exc_info=True)
+            else:
+                self._pipeline_resource_retry.pop(owner, None)
+            if cancelled:
+                raise asyncio.CancelledError
+
+    async def _protect_pipeline_resources(self, config: AppConfig, *, loading: bool = False) -> None:
+        previous = None if loading or self._config is None else self._config.pipelines
+        if previous == config.pipelines:
+            return
+        self._pipeline_resource_retry.update({owner: 0 for owner in self._pipeline_resource_reconcilers})
+        for callback in self._pipeline_resource_guards.values():
+            await callback(
+                None if previous is None else [pipeline.model_copy(deep=True) for pipeline in previous],
+                [pipeline.model_copy(deep=True) for pipeline in config.pipelines],
+            )
 
     def register_pipeline_activation_validator(
         self, callback: Callable[[Pipeline, AppConfig], Awaitable[None]]
@@ -463,7 +553,7 @@ class ConfigStore:
 
     def _check_validated_revision(self, snapshot: AppConfig) -> None:
         if self._config is not snapshot:
-            raise PipelineAlreadyExistsError(
+            raise PipelineRevisionConflictError(
                 "Configuration changed during pipeline validation; review it again"
             )
 
@@ -493,11 +583,18 @@ class ConfigStore:
         return self._paths
 
     async def _persist_locked(self, cfg: AppConfig) -> AppConfig:
+        pipelines_changed = self._config is None or self._config.pipelines != cfg.pipelines
+        if self._pipeline_resource_guards and pipelines_changed:
+            expected_stamp = await asyncio.to_thread(_path_stamp, self._paths.config_path)
+            await self._protect_pipeline_resources(cfg)
+            if await asyncio.to_thread(_path_stamp, self._paths.config_path) != expected_stamp:
+                raise PipelineRevisionConflictError("Configuration changed while preserving pipeline resources; review it again")
         stamp = await asyncio.to_thread(
             _atomic_write_json, self._paths.config_path, cfg.model_dump()
         )
         self._config = cfg
         self._config_stamp = stamp
+        await self._reconcile_pipeline_resources(changed=pipelines_changed)
         return cfg
 
     async def load(self) -> AppConfig:
@@ -512,6 +609,7 @@ class ConfigStore:
                 and current_stamp is not None
                 and current_stamp == self._config_stamp
             ):
+                await self._reconcile_pipeline_resources()
                 return self._config
 
             if current_stamp is None:
@@ -541,8 +639,13 @@ class ConfigStore:
                 await self._persist_locked(cfg)
                 return cfg
 
+            # Resource failures are not corrupt JSON and must never quarantine the file.
+            await self._protect_pipeline_resources(cfg, loading=True)
+            if self._pipeline_resource_guards and await asyncio.to_thread(_path_stamp, self._paths.config_path) != current_stamp:
+                raise PipelineRevisionConflictError("Configuration changed while preserving pipeline resources; review it again")
             self._config = cfg
             self._config_stamp = current_stamp
+            await self._reconcile_pipeline_resources(changed=True)
             return cfg
 
     async def get_config(self) -> AppConfig:
@@ -563,6 +666,46 @@ class ConfigStore:
             self._check_validated_revision(snapshot)
             await self._persist_locked(cfg)
             return cfg
+
+    async def commit_automatic(
+        self, state: AutomaticState, *, expected_config: AppConfig,
+        derived_pipelines: list[Pipeline],
+    ) -> AutomaticState:
+        """Commit intent and its derived graphs together, preserving unrelated work."""
+        previous = AutomaticState.model_validate(expected_config.settings.core.get("automatic", {}))
+        if state.revision != previous.revision + 1:
+            raise PipelineAlreadyExistsError("Automatic revision changed; review it again")
+        previous_intents = {item.id: item for item in previous.intents}
+        for intent in state.intents:
+            old = previous_intents.get(intent.id)
+            if old is None and intent.revision != 1:
+                raise PipelineValidationError("New activities start at revision one")
+            if old is not None:
+                changed = intent.model_dump(exclude={"revision"}) != old.model_dump(exclude={"revision"})
+                if intent.revision != old.revision + int(changed):
+                    raise PipelineAlreadyExistsError("Activity revision changed; review it again")
+        manual = [p for p in expected_config.pipelines
+                  if p.graph.get("meta", {}).get("automatic", {}).get("intent_id") not in previous_intents]
+        intent_revisions = {item.id: item.revision for item in state.intents}
+        names = {p.name for p in manual}
+        for pipeline in derived_pipelines:
+            origin = pipeline.graph.get("meta", {}).get("automatic", {})
+            if origin.get("intent_id") not in intent_revisions or origin.get("revision") != intent_revisions[origin["intent_id"]]:
+                raise PipelineValidationError("Generated graph must reference its current activity")
+            if pipeline.name in names:
+                raise PipelineAlreadyExistsError("Generated graph conflicts with another pipeline")
+            names.add(pipeline.name)
+        settings = expected_config.settings.model_copy(update={
+            "core": {**expected_config.settings.core, "automatic": state.model_dump(mode="json")}
+        })
+        candidate = _build_config(expected_config, settings=settings, pipelines=[*manual, *derived_pipelines])
+        for pipeline in derived_pipelines:
+            await self.validate_pipeline_activation(pipeline, config=candidate)
+        await self.load()
+        async with self._lock:
+            self._check_validated_revision(expected_config)
+            await self._persist_locked(candidate)
+        return state
 
     async def get_active_composition(self) -> Composition:
         cfg = await self.get_config()
@@ -585,7 +728,10 @@ class ConfigStore:
                 )
                 for extension_id, proposed in settings.extensions.items()
             }
-            settings = AppSettings(core=dict(settings.core), extensions=extensions)
+            core = {key: value for key, value in settings.core.items() if key != "automatic"}
+            if "automatic" in cfg.settings.core:
+                core["automatic"] = cfg.settings.core["automatic"]
+            settings = AppSettings(core=core, extensions=extensions)
             cfg2 = _build_config(cfg, settings=settings)
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
@@ -813,8 +959,11 @@ class ConfigStore:
         cfg = await self.get_config()
         return next((p for p in cfg.pipelines if p.name == name), None)
 
-    async def create_pipeline(self, pipeline: Pipeline) -> Pipeline:
+    async def create_pipeline(self, pipeline: Pipeline, *, result_binding: bool = False) -> Pipeline:
         snapshot = await self.load()
+        self._require_manual_pipeline(pipeline, snapshot)
+        if pipeline.graph.get("meta", {}).get("result_consumer") and not result_binding:
+            raise PipelineValidationError("Result consumer ownership is managed by the result API")
         await self.validate_pipeline_activation(pipeline, config=snapshot)
         await self.load()
         async with self._lock:
@@ -833,10 +982,17 @@ class ConfigStore:
             return pipeline
 
     async def replace_pipeline(
-        self, pipeline_name: str, pipeline: Pipeline, *, expected_pipeline: Pipeline | None = None
+        self, pipeline_name: str, pipeline: Pipeline, *, expected_pipeline: Pipeline | None = None,
+        result_binding: bool = False,
     ) -> Pipeline:
         name = _normalize_pipeline_name(pipeline_name)
         snapshot = await self.load()
+        self._require_manual_pipeline(pipeline, snapshot)
+        for existing in snapshot.pipelines:
+            if existing.name == name:
+                self._require_manual_pipeline(existing, snapshot)
+                if not result_binding and existing.graph.get("meta", {}).get("result_consumer") != pipeline.graph.get("meta", {}).get("result_consumer"):
+                    raise PipelineValidationError("Result consumer binding requires a new review")
         await self.validate_pipeline_activation(pipeline, config=snapshot)
         await self.load()
         async with self._lock:
@@ -852,7 +1008,7 @@ class ConfigStore:
             if idx < 0:
                 raise KeyError(name)
             if expected_pipeline is not None and existing_pipeline != expected_pipeline:
-                raise PipelineAlreadyExistsError("Pipeline changed since preview; review it again")
+                raise PipelineRevisionConflictError("Pipeline changed since preview; review it again")
 
             if (
                 existing_pipeline is not None
@@ -897,6 +1053,7 @@ class ConfigStore:
                 pipelines.append(existing)
             if removed is None:
                 raise KeyError(name)
+            self._require_manual_pipeline(removed, cfg)
             if expected_pipeline is not None and removed != expected_pipeline:
                 raise PipelineAlreadyExistsError("Pipeline changed since preview; review it again")
 
@@ -904,6 +1061,14 @@ class ConfigStore:
             cfg2 = _normalize_config(cfg2)
             await self._persist_locked(cfg2)
             return removed
+
+    @staticmethod
+    def _require_manual_pipeline(pipeline: Pipeline, config: AppConfig) -> None:
+        intent_id = pipeline.graph.get("meta", {}).get("automatic", {}).get("intent_id")
+        if intent_id in {
+            item.id for item in AutomaticState.model_validate(config.settings.core.get("automatic", {})).intents
+        }:
+            raise PipelineValidationError("Edit the Automatic activity instead of its generated graph")
 
     async def list_processing_servers(self) -> list[ProcessingServer]:
         settings = await self.get_settings()

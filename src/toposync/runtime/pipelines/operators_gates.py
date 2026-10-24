@@ -95,10 +95,13 @@ def _resolve_packet_category(packet: Packet) -> str:
     return ""
 
 
-def _record_filtered(context) -> None:  # noqa: ANN001
+def _record_filtered(context, packet: Packet, reason="reason_uninstrumented") -> None:  # noqa: ANN001
     metrics = getattr(context, "metrics", None)
     if metrics is not None:
         metrics.dropped_packets += 1
+    inspect = getattr(context, "inspect", None)
+    if callable(inspect):
+        inspect("filtered", packet, reason=reason)
 
 
 def _deep_get(value: Any, path: str) -> tuple[bool, Any]:
@@ -325,7 +328,7 @@ class CategoryGateRuntime(TransformOperatorRuntime):
         key = (str(packet.payload.get("source_stream_id") or packet.stream_id),
                str(packet.payload.get("camera_id") or ""), str(subject.get("id") or packet.stream_id))
         if self._closed_subjects.observe(key, subject, retain=False):
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
         previous = self._last_accepted.get(key)
         allowed = self._matches(packet)
@@ -342,17 +345,17 @@ class CategoryGateRuntime(TransformOperatorRuntime):
                                     key[0], key[2], _resolve_packet_category(previous),
                                     _resolve_packet_category(packet))
                 return [closed]
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
         if not allowed:
-            _record_filtered(context)
+            _record_filtered(context, packet, "category_rejected")
             return []
         if self._closed_subjects.capacity_reached or (
             previous is None and len(self._last_accepted) >= self._closed_subjects.capacity
         ):
             raise RuntimeError("Category gate subject capacity reached; restart the pipeline to resume new subjects")
         if self._closed_subjects.observe(key, subject):
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
         lifecycle = Lifecycle.OPEN if previous is None else Lifecycle.UPDATE
         output = self._with_lifecycle(packet, lifecycle) if packet.lifecycle != lifecycle else packet
@@ -515,32 +518,32 @@ class CoreFilterRuntime(TransformOperatorRuntime):
             self._allowed_by_stream[stream_key] = allowed
             if allowed:
                 return [packet]
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
 
         if packet.lifecycle == Lifecycle.CLOSE:
             allowed = self._allowed_by_stream.pop(stream_key, False)
             if allowed:
                 return [packet]
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
 
         allowed = self._allowed_by_stream.get(stream_key)
         if allowed is False:
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
 
         # For update-only streams (e.g. camera frames), evaluate per packet without caching.
         if allowed is None:
             if self._matches(packet):
                 return [packet]
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
 
         # Stream is opened downstream; filter UPDATE packets, but always allow CLOSE.
         if self._matches(packet):
             return [packet]
-        _record_filtered(context)
+        _record_filtered(context, packet)
         return []
 
 
@@ -606,25 +609,25 @@ class BooleanGateRuntime(TransformOperatorRuntime):
             self._allowed_by_stream[stream_key] = allowed
             if allowed:
                 return [packet]
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
 
         if packet.lifecycle == Lifecycle.CLOSE:
             allowed = self._allowed_by_stream.pop(stream_key, False)
             if allowed:
                 return [packet]
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
 
         allowed = self._allowed_by_stream.get(stream_key)
         if allowed is False:
-            _record_filtered(context)
+            _record_filtered(context, packet)
             return []
         if allowed is None:
             allowed = self._matches(packet)
         if allowed:
             return [packet]
-        _record_filtered(context)
+        _record_filtered(context, packet)
         return []
 
 

@@ -330,42 +330,46 @@ export function HomeAssistantEditor({
     () => ({
       control: (base, state) => ({
         ...base,
-        minHeight: 36,
-        borderRadius: 12,
-        borderColor: state.isFocused ? "rgba(251,191,36,0.45)" : "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(0,0,0,0.20)",
-        boxShadow: "none",
+        minHeight: 44,
+        borderRadius: "var(--radius-control)",
+        borderColor: state.isFocused ? "var(--color-action-background)" : "var(--color-border-subtle)",
+        backgroundColor: "var(--color-surface-frost)",
+        boxShadow: state.isFocused ? "0 0 0 2px var(--color-action-background)" : "none",
+        ":hover": { borderColor: state.isFocused ? "var(--color-action-background)" : "var(--color-border-strong)" },
       }),
-      input: (base) => ({ ...base, color: "rgba(230,232,242,0.92)" }),
+      input: (base) => ({ ...base, color: "var(--color-text-primary)", "input:focus-visible": { boxShadow: "none" } }),
       multiValue: (base) => ({
         ...base,
         borderRadius: 999,
-        backgroundColor: "rgba(255,255,255,0.08)",
-        border: "1px solid rgba(255,255,255,0.10)",
+        backgroundColor: "var(--color-surface-frost-strong)",
+        border: "1px solid var(--color-border-subtle)",
       }),
-      multiValueLabel: (base) => ({ ...base, color: "rgba(230,232,242,0.92)", fontWeight: 650 }),
-      multiValueRemove: (base) => ({ ...base, color: "rgba(230,232,242,0.78)" }),
+      multiValueLabel: (base) => ({ ...base, color: "var(--color-text-primary)", fontWeight: 650 }),
+      multiValueRemove: (base) => ({ ...base, color: "var(--color-text-muted)", ":hover": { backgroundColor: "var(--color-accent-background-strong)", color: "var(--color-text-primary)" } }),
       menu: (base) => ({
         ...base,
-        backgroundColor: "rgba(14,18,30,0.96)",
-        border: "1px solid rgba(255,255,255,0.10)",
-        borderRadius: 12,
+        backgroundColor: "var(--color-surface-solid)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-control)",
         overflow: "hidden",
       }),
       option: (base, state) => ({
         ...base,
-        backgroundColor: state.isFocused ? "rgba(255,255,255,0.08)" : "transparent",
-        color: "rgba(230,232,242,0.92)",
+        backgroundColor: state.isFocused ? "var(--color-accent-background-strong)" : "transparent",
+        color: "var(--color-text-primary)",
       }),
       groupHeading: (base) => ({
         ...base,
-        color: "rgba(230,232,242,0.70)",
+        color: "var(--color-text-muted)",
         fontSize: 12,
         letterSpacing: "0.12em",
         textTransform: "uppercase",
       }),
-      singleValue: (base) => ({ ...base, color: "rgba(230,232,242,0.92)" }),
-      placeholder: (base) => ({ ...base, color: "rgba(230,232,242,0.55)" }),
+      singleValue: (base) => ({ ...base, color: "var(--color-text-primary)" }),
+      placeholder: (base) => ({ ...base, color: "var(--color-text-muted)" }),
+      indicatorSeparator: (base) => ({ ...base, backgroundColor: "var(--color-border-subtle)" }),
+      dropdownIndicator: (base) => ({ ...base, color: "var(--color-text-muted)", ":hover": { color: "var(--color-text-primary)" } }),
+      clearIndicator: (base) => ({ ...base, color: "var(--color-text-muted)", ":hover": { color: "var(--color-text-primary)" } }),
       menuPortal: (base) => ({ ...base, zIndex: 9999 }),
     }),
     [],
@@ -545,11 +549,7 @@ export function HomeAssistantEditor({
       />
 
       {errorMessage ? (
-        <div className="card">
-          <div className="cardBody" style={{ color: "rgba(252,165,165,0.92)" }}>
-            {errorMessage}
-          </div>
-        </div>
+        <div className="errorText" role="alert">{errorMessage}</div>
       ) : null}
 
       {servers.length === 0 ? (
@@ -582,6 +582,7 @@ export function HomeAssistantEditor({
           <div className="field">
             <div className="label">{t("ext.home_assistant.editor.items")}</div>
             <Select<HomeAssistantItemOption, true, GroupBase<HomeAssistantItemOption>>
+              aria-label={t("ext.home_assistant.editor.items")}
               isMulti
               isDisabled={!serverId || loadingRegistry}
               options={options}
@@ -593,12 +594,12 @@ export function HomeAssistantEditor({
               menuPosition="fixed"
               onChange={(next) => setItemsFromOptions(next ?? [])}
               formatOptionLabel={(opt) => (
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-                  <div style={{ fontWeight: 650, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div style={{ display: "grid", gap: 2, minWidth: 0, whiteSpace: "normal", overflowWrap: "anywhere" }}>
+                  <div style={{ fontWeight: 650, minWidth: 0 }}>
                     {opt.label}
                   </div>
                   {opt.meta?.subLabel ? (
-                    <div style={{ opacity: 0.7, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <div style={{ opacity: 0.7, fontSize: 12 }}>
                       {opt.meta.subLabel}
                     </div>
                   ) : null}
@@ -667,7 +668,7 @@ export function HomeAssistantEditor({
                       {t("ext.home_assistant.editor.icon_loading")}
                     </div>
                   ) : iconLoadError ? (
-                    <div className="cardMeta" style={{ marginTop: 10, color: "rgba(252,165,165,0.92)" }}>
+                    <div className="errorText" role="alert">
                       {iconLoadError}
                     </div>
                   ) : (
@@ -729,7 +730,7 @@ export function HomeAssistantEditor({
             ) : null}
 
             {iconFamilies && !isFontAwesomeSolidIconAvailable(icon) ? (
-              <div className="label" style={{ marginTop: 6, color: "rgba(252,165,165,0.92)" }}>
+              <div className="errorText" role="alert">
                 {t("ext.home_assistant.editor.icon_not_found")}
               </div>
             ) : null}

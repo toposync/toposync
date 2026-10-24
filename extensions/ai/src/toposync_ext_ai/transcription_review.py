@@ -5,6 +5,8 @@ from typing import Annotated, Literal
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from toposync.runtime.notifications.access import NotificationAccess
+
 from .assistant import require
 
 
@@ -104,7 +106,7 @@ def install_transcription_review_routes(app: FastAPI, router) -> None:
     async def review(notification_id: str, body: ReviewRequest, request: Request, response: Response):
         require(request, "core:notifications:read")
         response.headers["Cache-Control"] = "private, no-store"
-        notification = await app.state.notifications.get(notification_id)
+        notification = await app.state.notifications.get(notification_id, read_filter=NotificationAccess(request))
         if notification is None:
             raise HTTPException(404, "Notification unavailable")
         try:
@@ -124,7 +126,7 @@ def install_transcription_review_routes(app: FastAPI, router) -> None:
         except Exception:
             pass  # A failed optional interpretation leaves the original transcript available.
         require(request, "core:notifications:read")
-        current = await app.state.notifications.get(notification_id)
+        current = await app.state.notifications.get(notification_id, read_filter=NotificationAccess(request))
         if current != notification:
             raise HTTPException(409, "Recorded evidence changed; review the current notification")
         return result

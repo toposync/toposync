@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 import time
+import uuid
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field, replace
 from typing import Literal
@@ -16,6 +17,8 @@ from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, 
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 from toposync.runtime.pipelines.subject_lifecycle import ClosedSubjectLedger
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+from toposync.runtime.pipelines.inspection import inspect_packet_visuals
+from .pipelines.inspection import zone_visual
 
 from .pipelines.postprocess import AreaRestrictionPolygon, _point_in_polygon, resolve_composition_area
 
@@ -33,7 +36,7 @@ class OccurrenceConfig(BaseModel):
 class AreaOccurrenceConfig(OccurrenceConfig):
     area: AreaRestrictionPolygon | None = None
     composition_id: str = ""
-    categories: list[Literal["person", "dog", "cat"]] = Field(default_factory=lambda: ["person", "dog", "cat"])
+    categories: list[Literal["person", "dog", "cat", "car", "truck", "bus", "motorcycle"]] = Field(default_factory=lambda: ["person", "dog", "cat"])
 
     @field_validator("area")
     @classmethod
@@ -70,6 +73,7 @@ def _area_reference_diagnostics(config, context):
 
 @dataclass
 class _AreaState:
+    occurrence_sequence: int = 0
     observed_entry: bool = False
     visits: deque[float] = field(default_factory=lambda: deque(maxlen=256))
     visits_overflow_until: float = float("-inf")
@@ -92,6 +96,8 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         self._area_config_snapshot = None
         self.states: OrderedDict[tuple, _AreaState] = OrderedDict()
         self.closed_subjects = ClosedSubjectLedger()
+        self.occurrence_epoch = uuid.uuid4().hex
+        self.occurrence_sequence = 0
         self.polygon = [(point.x, point.z) for point in self.area.points] if self.area else []
 
     async def _refresh_area(self, context):
@@ -202,6 +208,8 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         state.capture = capture
         state.published_at = evidence["published_at"]
         inside = self._classify(packet, subject)
+        await inspect_packet_visuals(context, packet, lambda: [zone_visual(packet, name=self.area.name,
+            identifier=self.area.id, state="zone_unavailable" if inside is None else "zone_inside" if inside else "zone_outside")])
         if inside is None:
             state.inside = None
             return outputs + self._close(key, state, "unconfirmed")
@@ -221,6 +229,9 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         if state.opened and timestamp - state.last_emitted_at < self.config.update_interval_seconds:
             return outputs
         lifecycle = Lifecycle.UPDATE if state.opened else Lifecycle.OPEN
+        if not state.opened:
+            self.occurrence_sequence += 1
+            state.occurrence_sequence = self.occurrence_sequence
         if not state.opened and state.observed_entry:
             if len(state.visits) == state.visits.maxlen:
                 state.visits_overflow_until = state.visits[0] + self.config.visit_window_seconds
@@ -276,6 +287,8 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
         payload.update({
             "subject": subject, "correlation_id": identity,
             "area_occurrence": {"area": self.area.name, "mode": self.config.mode,
+                "lifecycle_epoch": self.occurrence_epoch,
+                "lifecycle_sequence": state.occurrence_sequence,
                 "status": status, "observed_subject": packet.payload["subject"],
                 "visits": {"count": len(state.visits), "window_seconds": self.config.visit_window_seconds,
                            "count_is_lower_bound": timestamp < state.visits_overflow_until,

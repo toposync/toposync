@@ -50,6 +50,7 @@ type Props = {
   onRedo: () => void;
   onExit: () => void;
   onOpenSettings: () => void;
+  onOpenAutomatic: (targetId: string) => void;
   onActivateComposition: (compositionId: string) => Promise<Composition>;
   onCreateComposition: (name: string) => Promise<Composition>;
   onRenameComposition: (compositionId: string, name: string) => Promise<Composition>;
@@ -243,6 +244,7 @@ export function CompositionEditorScreen({
   onRedo,
   onExit,
   onOpenSettings,
+  onOpenAutomatic,
   onActivateComposition,
   onCreateComposition,
   onRenameComposition,
@@ -1371,6 +1373,11 @@ export function CompositionEditorScreen({
                           </button>
                           <button className="layerDeleteButton" type="button" onClick={() => removeElement(el.id)}>
                             {t("core.actions.delete")}
+                          </button>
+                          <button className="chipButton" type="button"
+                            aria-label={`${t("core.ui.automatic.add_in_area")} · ${title}`}
+                            onClick={() => onOpenAutomatic(`area:${activeCompositionId}:${el.id}`)}>
+                            {t("core.ui.automatic.add_in_area")}
                           </button>
                           {renderLayerEditAction(el.id, title)}
                         </div>

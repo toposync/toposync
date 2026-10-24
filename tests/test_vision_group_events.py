@@ -235,6 +235,21 @@ def test_group_events_close_member_does_not_close_group_before_idle() -> None:
     asyncio.run(scenario())
 
 
+def test_group_derived_branch_close_does_not_keep_subject_active() -> None:
+    async def scenario() -> None:
+        runtime = _runtime({"update_interval_seconds": 0.0, "include_stationary_members": True})
+        await runtime.process_packet(_event_packet(1.0, "1"), None)
+        # A condition can end while the original tracker still observes the person.
+        packet = _event_packet(2.0, "1", lifecycle=Lifecycle.UPDATE)
+        closed = await runtime.process_packet(packet.with_lifecycle(Lifecycle.CLOSE), None)
+        assert closed[0].payload["subject"]["members"][0]["active"] is False
+        assert packet.payload["subject"]["lifecycle"] == "update"
+        reopened = await runtime.process_packet(_event_packet(3.0, "1"), None)
+        assert reopened[0].payload["subject"]["members"][0]["active"] is True
+
+    asyncio.run(scenario())
+
+
 def test_group_preserves_separate_recognition_links_without_inheriting_member_identity():
     from dataclasses import replace
     from toposync.runtime.pipelines import Artifact

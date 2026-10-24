@@ -593,6 +593,9 @@ function EventsStep({
                 <label className="ptzAttentionField" style={{ marginTop: 10 }}>
                   <span>{t("ext.ptz_attention.operator.priority", {}, "Attention priority")}</span>
                   <select className="input" value={String(policy.priority)} onChange={(input) => onUpdatePolicy(policy.event_type, { priority: Number(input.target.value) })}>
+                    {![-100, 0, 100].includes(policy.priority) ? <option value={String(policy.priority)}>
+                      {t("ext.ptz_attention.priority.custom", { priority: policy.priority }, "Custom ({{priority}})")}
+                    </option> : null}
                     <option value="-100">{t("ext.ptz_attention.priority.low", {}, "Low")}</option>
                     <option value="0">{t("ext.ptz_attention.priority.medium", {}, "Medium")}</option>
                     <option value="100">{t("ext.ptz_attention.priority.high", {}, "High")}</option>
@@ -799,6 +802,9 @@ function CameraStep({
 }
 
 function PolicyStep({ t, profile, onChange }: { t: Translate; profile: AttentionProfile; onChange: (profile: AttentionProfile) => void }): React.ReactElement {
+  const campaignEnd = profile.campaign_ends_at ? new Date(profile.campaign_ends_at * 1000) : null;
+  const localCampaignEnd = campaignEnd
+    ? new Date(campaignEnd.getTime() - campaignEnd.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";
   const numberField = (key: keyof AttentionProfile, value: number, min: number, max: number, stepValue: number) => (
     <input
       className="input"
@@ -815,6 +821,15 @@ function PolicyStep({ t, profile, onChange }: { t: Translate; profile: Attention
       <h3 className="ptzAttentionCardTitle">{t("ext.ptz_attention.wizard.policy.title", {}, "How should attention behave?")}</h3>
       <div className="ptzAttentionMuted">{t("ext.ptz_attention.wizard.policy.desc", {}, "Stable defaults prevent rapid switching.")}</div>
       <div className="ptzAttentionFields" style={{ marginTop: 12 }}>
+        <label className="ptzAttentionField">
+          <span>{t("ext.ptz_attention.campaign.end", {}, "End campaign at (optional)")}</span>
+          <input className="input" type="datetime-local" value={localCampaignEnd}
+            onChange={event => {
+              const value = event.target.value ? new Date(event.target.value).getTime() / 1000 : null;
+              if (value === null || Number.isFinite(value)) onChange({ ...profile, campaign_ends_at: value });
+            }} />
+          <small>{t("ext.ptz_attention.campaign.end_help", {}, "Local time. At the deadline, attention stops. An unconfirmed return requires explicit recovery.")}</small>
+        </label>
         <label className="ptzAttentionField">
           <span>{t("ext.ptz_attention.wizard.policy.minimum_focus", {}, "Minimum focus")} ({t("ext.ptz_attention.wizard.policy.seconds", {}, "seconds")})</span>
           {numberField("min_focus_seconds", profile.min_focus_seconds, 0, 3600, 1)}

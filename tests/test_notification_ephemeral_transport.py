@@ -24,6 +24,22 @@ def event(identifier="selected", sequence=1):
     return {"op": "update", "notification": {"id": identifier, "payload": {"sequence": sequence}}}
 
 
+def stream_runtime(path):
+    runtime = NotificationsRuntime(data_dir=path)
+    record, _ = runtime.store.upsert(type="event", title="Selected")
+    runtime.store._conn.execute("UPDATE notification SET id = 'selected' WHERE id = ?", (record.id,))
+    return runtime
+
+
+def stream_auth(actions=None):
+    def authorize(**kwargs):
+        if actions is not None:
+            actions.append(kwargs["action"])
+        return SimpleNamespace(bypass=True, role="owner")
+    return SimpleNamespace(mode="bypass", requires_setup=lambda: False,
+                           resolve_request=lambda request, **kwargs: None, authorize=authorize)
+
+
 def test_combined_history_and_real_image_budget_preserves_durable_update():
     import numpy as np
     from test_notification_image import packet
@@ -67,7 +83,7 @@ def test_oversized_durable_event_requests_resync_without_shortening_history():
         value = event()
         value["notification"]["payload"]["history"] = "x" * broadcaster.max_event_bytes
         broadcaster.publish(value)
-        assert selected.get_nowait() == global_queue.get_nowait() == {"op": "resync"}
+        assert selected.get_nowait() == global_queue.get_nowait() == {"op": "resync", "notification_id": "selected"}
         assert len(value["notification"]["payload"]["history"]) == broadcaster.max_event_bytes
         broadcaster.unsubscribe(selected)
         broadcaster.unsubscribe(global_queue)
@@ -106,8 +122,8 @@ def test_selected_images_are_not_sent_to_global_other_or_non_opt_in_subscribers(
 def test_selected_stream_task_cancellation_releases_subscription(tmp_path, spec_version):
     async def scenario():
         app = create_app()
-        app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
-        app.state.auth = SimpleNamespace(mode="bypass", requires_setup=lambda: False, authorize=lambda **_kwargs: None)
+        app.state.notifications = stream_runtime(tmp_path)
+        app.state.auth = stream_auth()
         request = SimpleNamespace(app=app, state=SimpleNamespace(), is_disconnected=lambda: asyncio.sleep(0, result=False))
         route = next(route for route in app.routes if route.path == "/api/notifications/{notification_id}/stream")
         response = await route.endpoint(request, "selected", include_ephemeral_image=True)
@@ -132,8 +148,8 @@ def test_selected_stream_task_cancellation_releases_subscription(tmp_path, spec_
 def test_selected_stream_capacity_race_is_bounded_and_preflight_returns_429(tmp_path):
     async def scenario():
         app = create_app()
-        app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
-        app.state.auth = SimpleNamespace(mode="bypass", requires_setup=lambda: False, authorize=lambda **_kwargs: None)
+        app.state.notifications = stream_runtime(tmp_path)
+        app.state.auth = stream_auth()
         request = SimpleNamespace(app=app, state=SimpleNamespace(), is_disconnected=lambda: asyncio.sleep(0, result=False))
         route = next(route for route in app.routes if route.path == "/api/notifications/{notification_id}/stream")
         responses = [await route.endpoint(request, "selected", include_ephemeral_image=True) for _ in range(17)]
@@ -320,11 +336,10 @@ def test_malformed_capture_does_not_suppress_metadata_notification():
 def test_selected_route_authorizes_stream_and_serializes_live_image_without_cache(tmp_path):
     async def scenario():
         app = create_app()
-        runtime = NotificationsRuntime(data_dir=tmp_path)
+        runtime = stream_runtime(tmp_path)
         app.state.notifications = runtime
         actions = []
-        app.state.auth = SimpleNamespace(mode="bypass", requires_setup=lambda: False,
-                                         authorize=lambda **kwargs: actions.append(kwargs["action"]))
+        app.state.auth = stream_auth(actions)
         request = SimpleNamespace(app=app, state=SimpleNamespace(), is_disconnected=lambda: asyncio.sleep(0, result=False))
         route = next(route for route in app.routes if route.path == "/api/notifications/{notification_id}/stream")
         for _ in range(20):
@@ -333,12 +348,12 @@ def test_selected_route_authorizes_stream_and_serializes_live_image_without_cach
         assert runtime.broadcaster.ephemeral_image_stream_count == 0
         actions.clear()
         response = await route.endpoint(request, "selected", include_ephemeral_image=True)
-        assert actions == ["core:notifications:stream"]
+        assert actions == ["core:notifications:stream", "core:notifications:read"]
         assert response.headers["cache-control"] == "no-store, no-transform"
         iterator = response.body_iterator
         assert await anext(iterator) == "retry: 1000\n\n"
         assert "event: ready" in await anext(iterator)
-        runtime.broadcaster.publish(event(), ephemeral_image=image())
+        runtime.broadcaster.publish({"op": "update", "notification": await runtime.get("selected")}, ephemeral_image=image())
         wire = await anext(iterator)
         assert json.loads(wire.removeprefix("data: "))["notification"]["ephemeralImage"]["packetId"] == "frame-1"
         await iterator.aclose()
@@ -360,8 +375,8 @@ def test_selected_stream_disconnect_releases_subscription_before_response_return
 
     async def scenario():
         app = create_app()
-        app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
-        app.state.auth = SimpleNamespace(mode="bypass", requires_setup=lambda: False, authorize=lambda **_kwargs: None)
+        app.state.notifications = stream_runtime(tmp_path)
+        app.state.auth = stream_auth()
         request = SimpleNamespace(app=app, state=SimpleNamespace(), is_disconnected=lambda: asyncio.sleep(0, result=False))
         route = next(route for route in app.routes if route.path == "/api/notifications/{notification_id}/stream")
         response = await route.endpoint(request, "selected", include_ephemeral_image=True)

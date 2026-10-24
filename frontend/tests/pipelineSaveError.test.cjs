@@ -74,7 +74,7 @@ function harness({ validationFailure = false, saveFailure = false, draftPresent 
     validateActiveGraph: noop, discardTopologyChanges: noop, resetTelemetryAndStats: noop,
     updatePipelineStorageLimitBytes: noop, setDuplicateOpen: noop, handleDelete: noop,
     TopologyView: () => React.createElement("div", { "data-testid": "topology" }),
-    PipelineTelemetryOverviewCard: () => null, PipelineStorageCard: () => null,
+    PipelineTelemetryOverviewCard: () => null, PipelineStorageCard: () => null, PipelineInspectionPanel: () => null,
     t: (key) => key,
     isRecord: (value) => value !== null && typeof value === "object" && !Array.isArray(value),
     safeJsonParse: (text) => ({ ok: true, data: JSON.parse(text) }),
@@ -90,7 +90,10 @@ function harness({ validationFailure = false, saveFailure = false, draftPresent 
     if (saveFailure) throw new Error("Save request rejected");
     return updated;
   };
-  for (const field of ["error", "draft", "graphText", "topologyDirty", "topologyValidationLoading", "topologyValidationError", "topologyValidationSuccessAt", "recommendations", "recommendationsError"]) {
+  context.saving = false;
+  context.conflictDraft = null;
+  context.AbortSignal = AbortSignal;
+  for (const field of ["saving", "conflictDraft", "error", "draft", "graphText", "topologyDirty", "topologyValidationLoading", "topologyValidationError", "topologyValidationSuccessAt", "recommendations", "recommendationsError"]) {
     context[`set${field[0].toUpperCase()}${field.slice(1)}`] = (value) => {
       context[field] = typeof value === "function" ? value(context[field]) : value;
     };
@@ -264,4 +267,52 @@ test("only the selected enabled pipeline's current activation error proves block
   assert.doesNotMatch(state(), /execution_blocked/);
   context.selected.enabled = false;
   assert.doesNotMatch(state(), /execution_blocked|execution_unknown/);
+});
+
+test('revision conflict retains draft and offers recovery without retrying the write', async () => {
+  const { context, render } = harness();
+  context.draft.revision = 'a'.repeat(64);
+  context.putPipeline = async (name, value) => {
+    context.putCalls.push({ name, value });
+    throw new Error('pipeline_revision_conflict');
+  };
+  await context.handleSave();
+  assert.equal(context.saving, false);
+  assert.equal(context.putCalls[0].value.revision, 'a'.repeat(64));
+  assert.equal(context.error, 'core.ui.pipelines.save_conflict');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.conflictDraft.graph)), graph);
+  assert.equal(context.graphText, JSON.stringify(graph));
+  const preserved = context.conflictDraft;
+  const rendered = render();
+  const textarea = elements(rendered).find(element => element.type === 'textarea' && element.props.readOnly);
+  assert.equal(JSON.parse(textarea.props.value).revision, 'a'.repeat(64));
+  const button = elements(rendered).find(element => element.type === 'button' && element.props.children === 'core.ui.pipelines.conflict_reload');
+  assert.ok(button);
+  const latest = { ...context.draft, revision: 'b'.repeat(64), graph: { nodes: [{ id: 'winner' }], edges: [] } };
+  context.getPipeline = async () => latest;
+  context.setPipelines = updater => { context.loaded = updater([context.draft])[0]; };
+  await button.props.onClick();
+  assert.equal(context.loaded, latest);
+  assert.equal(context.conflictDraft, preserved, 'Loading latest must retain the rejected snapshot');
+  assert.equal(context.putCalls.length, 1, 'Recovery never retries a stale write');
+  assert.equal(context.error, null);
+  assert.equal(context.saving, false);
+});
+
+test('saving is bounded by one active handler and releases editor after failure', async () => {
+  const { context } = harness();
+  let release;
+  context.compilePipeline = () => new Promise(resolve => { release = resolve; });
+  const pending = context.handleSave();
+  assert.equal(context.saving, true);
+  await context.handleSave();
+  assert.equal(context.putCalls.length, 0);
+  release({ alerts: [] });
+  await pending;
+  assert.equal(context.putCalls.length, 1);
+  assert.equal(context.saving, false);
+  context.compilePipeline = async () => { throw new Error('Timed out'); };
+  await context.handleSave();
+  assert.equal(context.saving, false);
+  assert.equal(context.error, 'Timed out');
 });

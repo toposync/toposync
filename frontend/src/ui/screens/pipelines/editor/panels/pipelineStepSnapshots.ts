@@ -133,6 +133,19 @@ export function buildPipelineStepPreviewRequest(
   };
 }
 
+export function buildPipelineStepReferenceRequest(
+  steps: InteractiveStep[], currentIndex: number, pipelineName: string | null, nodeId: string,
+  operatorsById: Record<string, PipelineOperatorDefinition>, processingServerId: string,
+): PipelineStepPreviewResolution | { enabled: false; reason: { code: "remote_execution" } } {
+  if (processingServerId !== "local") return { enabled: false, reason: { code: "remote_execution" } };
+  const result = buildPipelineStepPreviewRequest(steps, currentIndex, pipelineName, nodeId, operatorsById);
+  if (!result.enabled) return result;
+  return { enabled: true, request: {
+    pipeline: { ...result.request.pipeline, processing_server_id: processingServerId },
+    purpose: "reference", timeout_seconds: 12, format: "png",
+  } };
+}
+
 /** Bound regions apply to original camera pixels; only cadence may precede them. */
 export function resolveBoundCropCameraSource(steps: InteractiveStep[], currentIndex: number): { cameraId: string; sourceId: string } | null {
   for (let index = currentIndex - 1; index >= 0; index -= 1) {

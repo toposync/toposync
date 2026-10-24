@@ -465,7 +465,7 @@ export function MainViewportVector2D({
       return { x: transform.x + stage.x * transform.scale, y: transform.y + stage.y * transform.scale };
     };
     const trails = (pinData.trails ?? (pinData.trail ? [pinData.trail] : [])).map(segment => segment.map(project));
-    return { screenX, screenY, trails, priority: pinData.priority, closed: pinData.closed };
+    return { screenX, screenY, trails, priority: pinData.priority, closed: pinData.closed, image: pinData.image, companions: pinData.companions?.map(item => { const point = project(item); return { screenX: point.x, screenY: point.y, image: item.image }; }) };
   }, [bounds, notificationOverlay, stageHeight, stageWidth, transform, stateVersion]);
 
   const frameNotification = useCallback((force = false) => {
@@ -586,6 +586,8 @@ export function MainViewportVector2D({
             priority={notificationPin.priority}
             closed={notificationPin.closed}
             trails={notificationPin.trails}
+            image={notificationPin.image}
+            companions={notificationPin.companions}
           />
         ) : null}
         {markerEntries.map((entry) => {

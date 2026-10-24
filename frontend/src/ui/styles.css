@@ -32,7 +32,7 @@ body {
   letter-spacing: var(--letter-spacing-normal);
   user-select: text;
   -webkit-user-select: text;
-  touch-action: pan-x pan-y;
+  touch-action: pan-x pan-y pinch-zoom;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
@@ -469,11 +469,6 @@ video {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.10);
 }
 
-.pillButton:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: var(--borderStrong);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
-}
-
 .pillButton:focus-visible {
   outline: 2px solid rgba(251, 191, 36, 0.55);
   outline-offset: 2px;
@@ -833,19 +828,20 @@ video {
 .processingServerForm {
   margin-top: 10px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
 .processingServerEndpointRow {
   display: grid;
-  grid-template-columns: 110px 1fr 110px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
   gap: 10px;
   align-items: end;
 }
 
 .processingServerAuthRow {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 10px;
   align-items: end;
 }
@@ -1052,7 +1048,6 @@ video {
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--color-accent-teal);
 }
 
 .pipelinesControlField {
@@ -1091,6 +1086,8 @@ video {
 
 .pipelinesLabel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 6px;
   font-size: 13px;
   color: var(--muted);
@@ -2886,11 +2883,6 @@ video {
   white-space: nowrap;
 }
 
-.chipButton:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: var(--borderStrong);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04));
-}
-
 .chipButton:focus-visible,
 .primaryButton:focus-visible,
 .iconButton:focus-visible,
@@ -2957,6 +2949,12 @@ video {
   opacity: 0;
   pointer-events: none;
   filter: blur(2px);
+}
+
+.streamsOverlayAutoHide.isHidden .railNotifications,
+.streamsOverlayAutoHide.isHidden .railNotifications .railTitle,
+.streamsOverlayAutoHide.isHidden .railNotifications .railScroll {
+  pointer-events: none;
 }
 
 .overlayTopRight.streamsOverlayAutoHide.isHidden {
@@ -4098,6 +4096,10 @@ video {
 }
 
 @media (max-width: 960px) {
+  .screenRoot:has(> .streamsRoot) > .overlayLeft.isOpen {
+    padding-bottom: calc(var(--control-height-m) * 2 + var(--space-2) * 6);
+  }
+
   .streamsGrid.is2x2 {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: repeat(4, minmax(0, 1fr));
@@ -5058,11 +5060,6 @@ video {
   font-size: 14px;
 }
 
-.iconButton:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: var(--borderStrong);
-  background: rgba(255, 255, 255, 0.06);
-}
-
 .iconButton:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -5492,28 +5489,33 @@ video {
 }
 
 .settingsTab {
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(12, 18, 37, 0.36);
-  color: rgba(230, 232, 242, 0.92);
+  min-height: var(--control-height-m);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-frost);
+  color: var(--color-text-primary);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: var(--shadow-inner-highlight);
 }
 
 .settingsTab:hover {
-  border-color: rgba(255, 255, 255, 0.22);
-  background: rgba(15, 23, 48, 0.46);
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-frost-strong);
 }
 
 .settingsTab.isSelected {
-  border-color: rgba(251, 191, 36, 0.55);
-  background: rgba(251, 191, 36, 0.14);
-  color: rgba(255, 244, 210, 0.92);
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-background-strong);
+  color: var(--color-text-primary);
+}
+
+.settingsTab:focus-visible {
+  outline: 2px solid var(--color-action-background);
+  outline-offset: 2px;
 }
 
 .settingsSplit {
@@ -5549,6 +5551,7 @@ video {
 
 .settingsPanel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   min-width: 0;
 }
@@ -5586,6 +5589,7 @@ video {
   font-size: 13px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .settingsPanel .input,
@@ -5623,7 +5627,11 @@ video {
 .settingsPanel .settingsList {
   max-height: 430px;
   overflow: auto;
-  padding-right: 2px;
+  padding: 4px;
+}
+
+.settingsPanel .settingsList > * {
+  flex-shrink: 0;
 }
 
 .settingsPanel .settingsListItem,
@@ -6011,9 +6019,14 @@ video {
 
 .settingsDetailHeader {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
+}
+
+.settingsDetailHeader > .settingsTabBar {
+  flex: 1 1 320px;
 }
 
 .streamingSettingsPanel {
@@ -6043,11 +6056,21 @@ video {
   gap: 12px;
 }
 
+.streamingLiveHeroCard .settingsDetailHeader {
+  flex-wrap: wrap;
+}
+
+.streamingLiveHeroCard .settingsDetailHeader > :first-child {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
 .streamingLiveHeroMetrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(80px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  min-width: min(100%, 300px);
+  flex: 1 1 300px;
+  min-width: 0;
 }
 
 .streamingLiveHeroMetrics > div {
@@ -6179,6 +6202,7 @@ video {
 
 .streamingCameraVariantChip > span:last-child {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6236,6 +6260,8 @@ video {
 
 .streamingFormGrid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 10px;
   align-items: end;
 }
@@ -6281,7 +6307,7 @@ video {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: color-mix(in srgb, var(--color-success) 82%, var(--color-text-primary));
+  color: var(--color-text-primary);
 }
 
 .streamingStatusOk::before {
@@ -6341,23 +6367,21 @@ video {
   min-height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-primary);
   font-weight: 800;
 }
 
 .streamingRuntimeBadge.is-live {
-  color: color-mix(in srgb, var(--color-success) 82%, var(--color-text-primary));
   background: color-mix(in srgb, var(--color-success) 15%, transparent);
 }
 
 .streamingRuntimeBadge.is-degraded {
-  color: color-mix(in srgb, var(--color-warning) 86%, var(--color-text-primary));
   background: color-mix(in srgb, var(--color-warning) 16%, transparent);
 }
 
 .streamingRuntimeBadge.is-stale,
 .streamingRuntimeBadge.is-offline {
-  color: color-mix(in srgb, var(--color-danger) 82%, var(--color-text-primary));
   background: color-mix(in srgb, var(--color-danger) 14%, transparent);
 }
 
@@ -6401,12 +6425,14 @@ video {
 
 .streamingWizard {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
 .streamingWizard .cardBody {
   margin-top: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -6499,7 +6525,7 @@ video {
   max-height: 260px;
   margin-top: 8px;
   overflow: auto;
-  padding-right: 2px;
+  padding: 4px;
 }
 
 .streamingCameraPickerOption {
@@ -6561,7 +6587,7 @@ video {
 
 .settingsListItemMeta {
   font-size: 11px;
-  color: rgba(230, 232, 242, 0.62);
+  color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6856,7 +6882,6 @@ video {
     grid-template-columns: 1fr;
   }
 
-  .streamingLiveHeroMetrics,
   .streamingCameraSummaryItem,
   .streamingPlaybackVariant {
     grid-template-columns: 1fr;
@@ -6991,6 +7016,7 @@ video {
 
 .compositionCreateRow .input {
   flex: 1;
+  min-width: 0;
 }
 
 .compositionList {
@@ -7007,18 +7033,26 @@ video {
 
 .compositionMain {
   flex: 1;
+  min-width: 0;
+}
+
+.compositionMain .input {
+  width: 100%;
 }
 
 .compositionActions {
   display: flex;
+  flex-shrink: 0;
   gap: 8px;
   align-items: center;
 }
 
 .compositionSelectButton {
   flex: 1;
-  height: 40px;
-  padding: 0 12px;
+  min-width: 0;
+  min-height: var(--control-height-m);
+  height: auto;
+  padding: 8px 12px;
   border-radius: 14px;
   border: 1px solid var(--border);
   background:
@@ -7056,13 +7090,13 @@ video {
 .compositionName {
   font-weight: 650;
   font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .compositionBadge {
-  color: rgba(251, 191, 36, 0.92);
+  flex-shrink: 0;
+  color: var(--color-text-primary);
 }
 
 .compositionsSettingsPanel {
@@ -7228,8 +7262,10 @@ video {
 
 .field {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   margin: 10px 0;
+  min-width: 0;
 }
 
 .label {
@@ -7901,23 +7937,32 @@ video {
 
 .chipButton:focus-visible,
 .pillButton:focus-visible,
+input[type="file"]:focus-visible,
 .primaryButton:focus-visible,
 .dangerButton:focus-visible,
 .iconButton:focus-visible,
 .sceneIconButton:focus-visible,
+.streamingIssueBanner:focus-visible,
+.streamingCameraSummaryItem:focus-visible,
+.streamingCameraPickerButton:focus-visible,
+.streamingCameraPickerOption:focus-visible,
 .elementTypeButton:focus-visible,
 .layerDragHandle:focus-visible,
 .layerToggleButton:focus-visible,
 .layerMainButton:focus-visible,
 .layerDeleteButton:focus-visible,
 .compositionSelectButton:focus-visible {
-  outline: none;
-  outline-offset: 0;
+  outline: 2px solid var(--color-action-background);
+  outline-offset: 2px;
 }
 
 :where(button, input, textarea, select) {
   font-family: var(--font-family-sans);
   font-size: var(--font-size-13);
+}
+
+:where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
+  accent-color: var(--color-action-background);
 }
 
 :where(input, textarea)::placeholder {
@@ -8176,7 +8221,8 @@ video {
 .elementTypeButton,
 .layerDeleteButton,
 .layerMainButton,
-.compositionSelectButton {
+.compositionSelectButton,
+input[type="file"]::file-selector-button {
   border: 1px solid var(--color-border-subtle);
   color: var(--color-text-primary);
   background: var(--color-surface-frost);
@@ -8194,12 +8240,26 @@ video {
 .chipButton,
 .pillButton,
 .primaryButton,
-.dangerButton {
+.dangerButton,
+input[type="file"]::file-selector-button {
   height: var(--control-height-m);
   padding: 0 var(--space-3);
   border-radius: var(--radius-pill);
   font-size: var(--font-size-13);
   font-weight: var(--font-weight-semibold);
+}
+
+input[type="file"] {
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px;
+  border-radius: var(--radius-control);
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: var(--space-2);
+  font-family: inherit;
+  cursor: pointer;
 }
 
 label.chipButton {
@@ -8236,9 +8296,10 @@ label.chipButton {
   border-radius: var(--radius-control);
 }
 
-.chipButton:hover:not(:disabled):not([aria-disabled="true"]),
-.pillButton:not(.pillButtonPrimary):not(.pillButtonDanger):hover:not(:disabled):not([aria-disabled="true"]),
-.iconButton:not(.iconButtonPrimary):not(.iconButtonDanger):hover:not(:disabled):not([aria-disabled="true"]),
+.chipButton:not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
+input[type="file"]:hover:not(:disabled)::file-selector-button,
+.pillButton:not(.pillButtonPrimary):not(.pillButtonDanger):not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
+.iconButton:not(.iconButtonPrimary):not(.iconButtonDanger):not(.isActive):hover:not(:disabled):not([aria-disabled="true"]),
 .sceneIconButton:hover:not(:disabled):not([aria-disabled="true"]),
 .layerDragHandle:hover:not(:disabled):not([aria-disabled="true"]),
 .layerToggleButton:hover:not(:disabled):not([aria-disabled="true"]),
@@ -8293,25 +8354,17 @@ label.chipButton {
 .pillButtonDanger,
 .iconButtonDanger,
 .layerDeleteButton {
-  color: var(--color-text-inverted);
-  border-color: color-mix(in srgb, var(--color-danger) 46%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-danger) 84%, white),
-    color-mix(in srgb, var(--color-danger) 68%, black)
-  );
+  color: var(--color-action-text);
+  border-color: var(--color-action-danger-background);
+  background: var(--color-action-danger-background);
 }
 
 .dangerButton:hover:not(:disabled):not([aria-disabled="true"]),
 .pillButtonDanger:hover:not(:disabled):not([aria-disabled="true"]),
 .iconButtonDanger:hover:not(:disabled):not([aria-disabled="true"]),
 .layerDeleteButton:hover:not(:disabled):not([aria-disabled="true"]) {
-  border-color: color-mix(in srgb, var(--color-danger) 68%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-danger) 90%, white),
-    color-mix(in srgb, var(--color-danger) 72%, black)
-  );
+  border-color: var(--color-action-danger-hover);
+  background: var(--color-action-danger-hover);
   box-shadow: var(--shadow-elevation-3), inset 0 1px 0 rgba(255, 255, 255, 0.18);
   transform: translateY(var(--hover-translate-y));
 }
@@ -8381,6 +8434,86 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+.formGrid,
+.formSection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.formSection {
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-frost);
+}
+
+.formSection > legend {
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-14);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.formGrid > :is(h3, h4, p),
+.formSection > :is(h3, h4, p),
+:is(.formGrid, .formSection) .field {
+  margin: 0;
+}
+
+:is(.formGrid, .formSection) .field,
+:is(.formGrid, .formSection) .input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+:is(.formGrid, .formSection) .input {
+  width: 100%;
+}
+
+.formChoice:not([hidden]) {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-height-s);
+  padding-block: var(--space-2);
+  line-height: var(--line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.formChoice > :is(input[type="checkbox"], input[type="radio"]) {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+}
+
+.formActions,
+.formChoices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.pipelinesProvisionActions .pillButton,
+.pipelinesProvisionLinks .pillButton,
+:is(.formGrid, .formSection, .pipelineInspectionPanel) :is(.chipButton, .primaryButton) {
+  justify-self: start;
+  min-height: var(--control-height-m);
+  height: auto;
+  max-width: 100%;
+  padding-block: var(--space-2);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .pipelinesTextarea {
   background: color-mix(in srgb, var(--color-surface-solid) 84%, var(--color-application-background));
 }
@@ -8415,6 +8548,7 @@ select {
 .settingsNavItem.isSelected,
 .settingsTab.isSelected,
 .choiceItem.isSelected,
+.chipButton.isActive,
 .pillButton.isActive,
 .iconButton.isActive,
 .layerMainButton.isSelected,
@@ -8441,7 +8575,7 @@ select {
 
 .errorText,
 .pipelinesInlineError {
-  color: color-mix(in srgb, var(--color-danger) 80%, var(--color-text-inverted));
+  color: color-mix(in srgb, var(--color-danger) 60%, var(--color-text-primary));
   background: color-mix(in srgb, var(--color-danger) 16%, transparent);
   border-color: color-mix(in srgb, var(--color-danger) 38%, transparent);
 }
@@ -8460,9 +8594,9 @@ select {
 .notificationsToggleBadge,
 .main2dMarkerClusterCount,
 .pillBadge {
-  border: 1px solid color-mix(in srgb, var(--color-accent-border) 55%, transparent);
-  background: linear-gradient(135deg, var(--color-accent-teal), var(--color-accent-blue));
-  color: var(--color-text-inverted);
+  border: 1px solid var(--color-action-background);
+  background: var(--color-action-background);
+  color: var(--color-action-text);
 }
 
 .main2dMarkerButton {
@@ -8867,10 +9001,11 @@ select {
 
 /* Disabled controls retain their label and hit area, but never advertise an action. */
 button:disabled,
+input[type="file"]:disabled::file-selector-button,
 [role="button"][aria-disabled="true"],
 a[aria-disabled="true"] {
   cursor: not-allowed !important;
-  opacity: 0.55 !important;
+  opacity: 1 !important;
   filter: grayscale(1) !important;
   background: var(--color-surface-solid) !important;
   color: var(--color-text-muted) !important;
@@ -8994,3 +9129,16 @@ a[aria-disabled="true"] {
 .geographicNotificationTarget.isSelected { z-index: 2; }
 .choiceList > button.choiceItem { text-align: left; color: inherit; font: inherit; }
 .choiceList > button.choiceItem > span { display: block; }
+
+.activityView { display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }
+.activityView h3, .activityView h4, .activityView p { margin: 0; }
+.activityParticipants { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 8px; }
+.activityParticipants button { color: inherit; text-align: start; cursor: pointer; display: grid; gap: 6px; }
+.activityParticipants button[aria-pressed="true"] { border-color: var(--accent, #60a5fa); }
+.activityParticipants button:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.activityActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.activityActions .chipButton { min-height: 36px; white-space: normal; }
+.activityObservations { padding-inline-start: 24px; margin: 0; }
+.activityObservations li { padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, .1); }
+.activityObservations li > span, .activityObservations li > strong { display: block; }
+.activityView details > summary { cursor: pointer; padding-block: 6px; }

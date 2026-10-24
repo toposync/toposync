@@ -92,6 +92,11 @@ choosing a different source on that Camera does not bypass the gate because both
 sources still share the physical head. A later pipeline change to a same-head
 observer is blocked until that acknowledgement is saved.
 
+Framing is verified on the source selected by the profile. A successful wide-lens
+arrival does not certify the zoom-lens image. A secondary lens needs its own
+compatible source identity and geometry before it can be used as the framing
+reference. ONVIF command acknowledgement alone proves neither framing nor return.
+
 ## Configure a profile {/* #configure-a-profile */}
 
 Open **Settings > PTZ Attention** and create a profile. The wizard has four steps.
@@ -170,9 +175,14 @@ semantic event with OPEN / UPDATE / CLOSE
     -> qualified visual panorama navigation
 ```
 
-An `OPEN` packet must include a spatial target. `UPDATE` packets only refresh the
-active session. Optional following in shadow confirms changed mapped targets
-from fresh captures over the configured interval; it never moves a motor. `CLOSE`
+An `OPEN` packet must include a spatial target. `UPDATE` packets refresh the
+active session without changing an accepted destination by default. In shadow,
+an observed event whose initial target was unresolved can be reconsidered when
+an update supplies a valid target, including a complete envelope inside the region.
+An update without an observed open cannot start attention.
+Optional following in shadow confirms changed mapped targets from fresh captures
+over the configured interval; movement within the same panorama reference does
+not restart that interval at every frame. It never moves a motor. `CLOSE`
 releases the semantic event and starts the configured grace and return behavior.
 Graph edges must preserve `OPEN` and `CLOSE`; only intermediate updates may be
 compacted.
@@ -244,6 +254,30 @@ The software accepts only fresh visual arrival within 12 pixels, return within
 Check whether the profile is `disabled`, `shadow`, or `paused`; whether manual
 control owns the camera; whether the user has camera-control permission; and
 whether the selected event reached candidate confirmation.
+
+### A target cannot be resolved
+
+Recent decisions distinguish a missing target, an envelope outside the permitted
+region, unavailable mapping, incompatible source binding, and pending physical
+qualification. The requested coordinates are retained with the decision for
+inspection. A repeated unresolved shadow update does not repeat the same warning;
+closing that observed event still closes its lifecycle.
+
+Person–vehicle relations retain world coordinates when both participants have
+ready panorama geometry from the same mapping and revision. Visual localization
+must belong to each participant's own capture. This geometric evidence does not
+invent a confidence score or override an explicitly weak score. Unqualified
+coordinates still fall back to image-space proximity, which cannot direct a
+panorama attention profile.
+
+### Measure latency
+
+Decisions include elapsed time from the input event packet to the decision and
+from controller receipt to the decision. These are not the time since the first
+appearance of a subject. Physical focus acquisition additionally records command
+dispatch to verified arrival and the source where arrival was checked.
+Shadow decisions never report physical arrival latency. Keep detection, event
+confirmation, command transport, and visual arrival separate when diagnosing delay.
 
 ### The camera moves too often
 

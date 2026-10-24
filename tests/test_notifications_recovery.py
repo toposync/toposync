@@ -338,13 +338,14 @@ def test_silent_notifications_are_persisted_but_hidden_from_public_reads(tmp_pat
                 title="Visible motion",
                 payload={"priority": "low", "camera_id": "garage"},
             )
+            assert q.qsize() == 1
+            assert q.get_nowait()["notification"]["id"] == visible["id"]
         finally:
             notifications.broadcaster.unsubscribe(q)
 
         assert silent["priority"] == "silent"
         assert visible["priority"] == "low"
-        assert q.qsize() == 1
-        assert q.get_nowait()["notification"]["id"] == visible["id"]
+        assert q.empty()
 
         public_items, _cursor = notifications.list_sync(limit=10)
         assert [item["title"] for item in public_items] == ["Visible motion"]

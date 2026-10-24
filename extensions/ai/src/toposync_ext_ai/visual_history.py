@@ -95,15 +95,15 @@ class VisualHistorySearch(TextHistorySearch):
             connection.executemany("DELETE FROM ai_notification_embedding WHERE space=? AND notification_id=?",
                                    [(space, identifier) for identifier in identifiers])
 
-    async def _semantic(self, query, limit, priorities=None, types=None, created_after=None, created_before=None, data_filter=None, notification_ids=None):
+    async def _semantic(self, query, limit, priorities=None, types=None, created_after=None, created_before=None, data_filter=None, notification_ids=None, read_filter=None):
         # Optional extension failures must keep literal history usable, including unsupported runtimes.
         try:
-            return await self._visual(query, limit, priorities, types, created_after, created_before, data_filter, notification_ids)
+            return await self._visual(query, limit, priorities, types, created_after, created_before, data_filter, notification_ids, read_filter)
         except Exception as exc:
             raise ValueError("local_visual_embeddings_unavailable") from exc
 
-    async def _visual(self, query, limit, priorities, types, created_after, created_before, data_filter=None, notification_ids=None):
-        filters = dict(priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids)
+    async def _visual(self, query, limit, priorities, types, created_after, created_before, data_filter=None, notification_ids=None, read_filter=None):
+        filters = dict(priorities=priorities, types=types, created_after=created_after, created_before=created_before, data_filter=data_filter, notification_ids=notification_ids, read_filter=read_filter)
         items, _ = await self.notifications.list(limit=CORPUS_LIMIT, **filters)
         space = await self.services.call("vision.history_embedding_space")
         if not isinstance(space, str) or not space.startswith("clip-") or len(space) > 256:
@@ -117,6 +117,9 @@ class VisualHistorySearch(TextHistorySearch):
             data = await asyncio.to_thread(read_evidence, self.config_store.paths.files_dir, item)
             if evidence_hash(item, data) == documents[item["id"]][0]:
                 images[item["id"]] = data
+        current, _ = await self.notifications.list(limit=CORPUS_LIMIT, **filters)
+        unchanged = {item["id"] for item in current if item in items}
+        images = {identifier: data for identifier, data in images.items() if identifier in unchanged}
         embedded = await self.services.call("vision.history_embeddings", query=query, images=images)
         if embedded["space"] != space:
             raise ValueError("visual_embedding_space_changed")

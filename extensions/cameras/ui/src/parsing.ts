@@ -535,8 +535,9 @@ export function parseCameras(settings: Record<string, unknown>): CameraConfig[] 
     const sources = readCameraSources(device.sources);
     output.push({
       id,
-      name: readString(device.name).trim(),
+      name: readString(device.name),
       enabled: typeof device.enabled === "boolean" ? device.enabled : true,
+      clock_domain: readString(device.clock_domain).trim() || `device:${id}`,
       control: {
         type: controlType,
         automation_exclusive_control_confirmed:
@@ -559,7 +560,7 @@ export function serializeCameras(settings: CameraConfig[]): Record<string, unkno
         name: camera.name,
         kind: "camera",
         enabled: camera.enabled,
-        clock_domain: `device:${camera.id}`,
+        clock_domain: camera.clock_domain,
         control: {
           type: camera.control?.type === "onvif" ? "onvif" : "none",
           automation_exclusive_control_confirmed:
@@ -577,7 +578,7 @@ export function createDefaultCameraSource(index = 0, options?: Partial<CameraSou
   const id = options?.id?.trim() || (index === 0 ? "main" : `source_${index + 1}`);
   return {
     id,
-    name: options?.name?.trim() || (index === 0 ? "Principal" : `Fonte ${index + 1}`),
+    name: options?.name || (index === 0 ? "Principal" : `Fonte ${index + 1}`),
     enabled: options?.enabled ?? true,
     is_default: options?.is_default ?? index === 0,
     kind: options?.kind ?? "video",
@@ -608,7 +609,7 @@ export function readCameraSources(value: unknown): CameraSourceConfig[] {
     const video = readRecord(record.video);
     output.push({
       id,
-      name: readString(record.name).trim() || id,
+      name: readString(record.name) || id,
       enabled: typeof record.enabled === "boolean" ? record.enabled : true,
       is_default: Boolean(record.is_default),
       kind: readString(record.kind).trim().toLowerCase() === "audio" ? "audio" : readString(record.kind).trim().toLowerCase() === "data" ? "data" : "video",

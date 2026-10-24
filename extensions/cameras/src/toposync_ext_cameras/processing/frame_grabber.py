@@ -753,7 +753,12 @@ class FfmpegFrameGrabber:
         if proc is None:
             return
         try:
-            proc.terminate()
+            # This process only decodes disposable frames. On shutdown it
+            # cannot flush into an unread pipe; terminate it without that wait.
+            if self._frames_stop.is_set():
+                proc.kill()
+            else:
+                proc.terminate()
         except Exception:
             pass
         try:
@@ -852,11 +857,12 @@ class FfmpegFrameGrabber:
 
     def stop(self) -> None:
         self._frames_stop.set()
+        # Unblock pipe reads before joining their consumer threads.
+        self._stop_process()
         if self._frames_thread.is_alive():
             self._frames_thread.join(timeout=1.0)
         if self._stderr_thread is not None and self._stderr_thread.is_alive():
             self._stderr_thread.join(timeout=0.2)
-        self._stop_process()
         self._frame_buffer.clear()
 
 

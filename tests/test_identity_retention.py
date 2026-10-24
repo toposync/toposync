@@ -39,11 +39,27 @@ def test_retention_is_opt_in_persistent_and_revision_checked(tmp_path):
         store.configure_retention(enabled=False, expected_revision=store.revision)
     finally:
         store.close()
+
     store = IdentityStore(tmp_path, scope="test")
     try:
         assert store.retention_preview()["enabled"] is False
         store.observe(sample, policy())
         assert store.observations() == []
+    finally:
+        store.close()
+
+
+def test_reference_expiration_still_invalidates_prior_automatic_decisions(tmp_path):
+    store = IdentityStore(tmp_path, scope='test')
+    try:
+        enable(store)
+        identity, _, _ = enroll(store)
+        result = store.observe(evidence('retained-visit', observed_at=10), policy())
+        assert result.identity_id == identity
+        store._connection.execute('UPDATE observation SET created_at=? WHERE reference=1', (time.time() - 366 * 86400,))
+        assert store.validated_decision('retained-visit', decision_revision=result.revision, observed_at=10, max_age_seconds=0) is None
+        assert store.apply_retention()['observations'] == 1
+        assert store.validated_decision('retained-visit', decision_revision=result.revision, observed_at=10, max_age_seconds=0) is None
     finally:
         store.close()
 
@@ -83,6 +99,44 @@ def test_reference_expiry_removes_derived_vectors_and_blocks_undo_and_rebuild(tm
             == 0
         )
         assert store.observe(evidence("later", species="cat"), policy("cat")).identity_id is None
+    finally:
+        store.close()
+
+
+def test_expiry_blocks_reads_counts_matching_and_rebuild_before_sweep(tmp_path, monkeypatch):
+    store = IdentityStore(tmp_path, scope='test')
+    try:
+        identity, observation = enroll_photo(store, 'reference')
+        enable(store)
+        store._connection.execute('UPDATE observation SET created_at=?', (time.time() - 366 * 86400,))
+        assert store._connection.execute('SELECT crop FROM observation').fetchone()[0]
+        assert store.observations() == []
+        assert store.list_identities()[0]['references'] == 0
+        assert store.list_identities()[0]['representative_id'] is None
+        with pytest.raises(KeyError):
+            store.image(observation)
+        assert store.history_scope(identity, authorize_cameras=lambda _: None)['occurrences'] == []
+        assert rebuild_reference_batch(store, ReplacementExtractor(), species='cat', expected_revision=store.revision)['processed'] == 0
+        assert store.observe(evidence('new-cat', species='cat'), policy('cat')).identity_id is None
+    finally:
+        store.close()
+
+
+def test_reference_expiring_during_rebuild_discards_derivative(tmp_path, monkeypatch):
+    store = IdentityStore(tmp_path, scope='test')
+    try:
+        enroll_photo(store, 'reference')
+        enable(store)
+        extractor = ReplacementExtractor()
+        extract = extractor.extract
+        def expire(*args, **kwargs):
+            result = extract(*args, **kwargs)
+            store._connection.execute('UPDATE observation SET created_at=?', (time.time() - 366 * 86400,))
+            return result
+        monkeypatch.setattr(extractor, 'extract', expire)
+        with pytest.raises(IdentityConflict, match='expired during reconstruction'):
+            rebuild_reference_batch(store, extractor, species='cat', expected_revision=store.revision)
+        assert store._connection.execute('SELECT count(*) FROM reference_representation').fetchone()[0] == 0
     finally:
         store.close()
 
@@ -161,7 +215,8 @@ def test_expired_transient_does_not_drop_authorization_for_retained_visit(tmp_pa
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monkeypatch, existing):
+@pytest.mark.parametrize("disabled", [False, True])
+def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monkeypatch, existing, disabled):
     import asyncio
     from types import SimpleNamespace
     from fastapi import FastAPI
@@ -178,6 +233,8 @@ def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monk
 
     async def scenario():
         app = FastAPI()
+        from toposync.runtime.notifications import NotificationsRuntime
+        app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
         app.state.config_store = SimpleNamespace(paths=SimpleNamespace(data_dir=tmp_path))
         extension = VisionExtension()
         original_sleep = asyncio.sleep
@@ -191,13 +248,21 @@ def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monk
             await original_sleep(0)
 
         monkeypatch.setattr("toposync_ext_vision.plugin.asyncio.sleep", advance_cycle)
-        await extension.setup(app, bus=EventBus(), services=ServiceRegistry())
+        services = ServiceRegistry()
+        if disabled:
+            await extension.setup_retention(app)
+            assert services.list_ids() == []
+            assert not any('/api/vision' in getattr(route, 'path', '') for route in app.routes)
+        else:
+            await extension.setup(app, bus=EventBus(), services=services)
         try:
             for _ in range(200):
                 if cycles > 1:
                     break
                 await original_sleep(0.01)
             assert cycles > 1
+            if disabled:
+                assert extension._association_repository is None
             if existing:
                 assert extension._identity_store is not None
                 assert extension._identity_store.observations() == []
@@ -214,11 +279,11 @@ def test_retention_during_reconstruction_cannot_restore_expired_vectors(tmp_path
     store = IdentityStore(tmp_path, scope="test")
     try:
         enroll_photo(store, "reference")
-        store._connection.execute(
-            "UPDATE observation SET created_at=?", (time.time() - 366 * 86400,)
-        )
         enable(store)
-        replacement = ReplacementExtractor(before=store.apply_retention)
+        def expire_during_inference():
+            store._connection.execute('UPDATE observation SET created_at=?', (time.time() - 366 * 86400,))
+            store.apply_retention()
+        replacement = ReplacementExtractor(before=expire_during_inference)
         with pytest.raises(IdentityConflict):
             rebuild_reference_batch(
                 store, replacement, species="cat", expected_revision=store.revision
@@ -230,3 +295,35 @@ def test_retention_during_reconstruction_cannot_restore_expired_vectors(tmp_path
         )
     finally:
         store.close()
+
+
+def test_disabled_extension_purges_activity_derivatives_through_real_application(tmp_path, monkeypatch):
+    from test_auth_local import _create_client, _setup_owner
+    from test_identity_api import VisionEntryPoint
+    from test_activity_identity import activity
+    from toposync_ext_vision.plugin import VisionExtension
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Disabled vision must not initialize its runtime or models')
+    monkeypatch.setattr('toposync.app.disabled_extension_ids_from_settings', lambda _: {'com.toposync.vision'})
+    monkeypatch.setattr(VisionExtension, 'setup', forbidden)
+    with _create_client(tmp_path, monkeypatch, entry_points=[VisionEntryPoint()]) as client:
+        _setup_owner(client)
+        history = client.app.state.notifications
+        document, reference = activity(history)
+        gallery = IdentityStore(tmp_path / 'data/identities', scope='installation',
+            activity_authorized=history.occurrences.reference_allowed)
+        try:
+            observed = gallery.observe(evidence(), policy(), activity_reference=reference)
+        finally:
+            gallery.close()
+        assert client.get('/api/vision/identities').status_code == 404
+        assert 'vision.identity.store' not in client.app.state.services.list_ids()
+        response = client.request('DELETE', '/api/activity/' + document['id'], json={'expected_revision': document['revision']})
+        assert response.status_code == 200, response.text
+        reopened = IdentityStore(tmp_path / 'data/identities', scope='installation',
+            activity_authorized=history.occurrences.reference_allowed)
+        try:
+            assert reopened._connection.execute('SELECT count(*) FROM observation WHERE id=?', (observed.observation_id,)).fetchone()[0] == 0
+        finally:
+            reopened.close()

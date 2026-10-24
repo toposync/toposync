@@ -233,13 +233,14 @@ function JsonConfigEditor({
 
   return (
     <details className="pipelineTopologyInspectorSection pipelineTopologyJsonDetails" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary className="pipelineTopologyInspectorSectionTitle">
+      <summary className="pipelineTopologyInspectorSectionTitle" id={`pipeline-topology-node-config-label-${node.id}`}>
         <i className="fa-solid fa-code" aria-hidden="true" />
         {t("core.ui.pipelines.topology.advanced_json", {}, "Advanced JSON")}
       </summary>
       <textarea
         className="pipelineTopologyJsonInput"
         id={`pipeline-topology-node-config-${node.id}`}
+        aria-labelledby={`pipeline-topology-node-config-label-${node.id}`}
         name={`node_config_${node.id}`}
         value={text}
         readOnly={!editable}
@@ -325,7 +326,7 @@ function NodeInspector({
       <div className="pipelineTopologyInspectorSection">
         <div className="pipelineTopologyInspectorSectionTitle pipelineTopologyInspectorSectionTitleRow">
           <span>{t("core.ui.pipelines.topology.config", {}, "Config")}</span>
-          <button className="pillButton" type="button" onClick={() => setShowAdvanced((prev) => !prev)}>
+          <button className="pillButton" type="button" aria-expanded={showAdvanced} onClick={() => setShowAdvanced((prev) => !prev)}>
             {t("core.ui.pipelines.topology.advanced", {}, "Advanced")}
           </button>
         </div>

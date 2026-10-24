@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from copy import deepcopy
+import hashlib
+import json
+import time
 from typing import Any
 
 from toposync.runtime.config_store import Pipeline
@@ -10,9 +14,20 @@ from .graph_schema_v2 import PipelineGraphV2Spec
 from .images import resolve_image_artifact_for_data
 from .operator_registry import OperatorDefinition, OperatorRegistry
 from .runtime import Packet
+from .packet_contract import resolve_frame_freshness
+from .image_geometry import inspection_geometry
 
 
 _PREVIEW_SINK_BASE_ID = "preview_sink"
+
+_REFERENCE_SKIP = {
+    "camera.motion_gate", "camera.motion_bgsub_adaptive", "camera.motion_sample_bg",
+    "core.debounce", "core.fps_reducer", "core.throttle", "core.velocity_throttle",
+}
+_REFERENCE_EXECUTE = {
+    "camera.source", "camera.image_crop", "camera.image_privacy", "camera.artifact_privacy",
+    "core.passthrough", "core.filter",
+}
 
 _SKIP_OPERATOR_IDS: set[str] = {
     "camera.area_restriction",
@@ -84,7 +99,8 @@ def build_preview_registry(registry: OperatorRegistry) -> OperatorRegistry:
     return preview_registry
 
 
-def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) -> Pipeline:
+def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry,
+                             reference_capture: bool = False) -> Pipeline:
     try:
         graph = PipelineGraphV2Spec.model_validate(pipeline.graph)
     except Exception as exc:  # noqa: BLE001
@@ -92,6 +108,9 @@ def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) 
 
     if not graph.nodes:
         raise PipelinePreviewError("Preview graph is empty.", code="empty_preview_graph")
+
+    if reference_capture:
+        _validate_reference_slice(pipeline, graph)
 
     node_operator_by_id = {node.id: node.operator_id for node in graph.nodes}
     source_node_ids: list[str] = []
@@ -127,7 +146,7 @@ def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) 
             unsupported.append((node.id, operator_id))
             continue
 
-        if operator_id in _SKIP_OPERATOR_IDS:
+        if operator_id in (_REFERENCE_SKIP if reference_capture else _SKIP_OPERATOR_IDS):
             if not _is_passthrough_compatible(definition):
                 unsupported.append((node.id, operator_id))
                 continue
@@ -187,12 +206,20 @@ def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) 
     used_node_ids = {str(node.get("id") or "") for node in rewritten_nodes}
     for terminal_node_id in terminal_node_ids:
         sink_node_id = _next_preview_sink_id(used_node_ids)
+        terminal = registry.get(node_operator_by_id[terminal_node_id])
+        modalities = terminal.definition.output_modalities if terminal is not None else []
+        modality = modalities[0] if modalities else "data.record"
         rewritten_nodes.append({"uid": sink_node_id, "id": sink_node_id, "operator": "core.sink", "config": {}})
         rewritten_edges.append(
             {
                 "uid": f"preview:{terminal_node_id}->{sink_node_id}",
                 "from": {"node": terminal_node_id, "port": "out"},
                 "to": {"node": sink_node_id, "port": "in"},
+                "traffic": {
+                    "modality": modality,
+                    "semantic_class": "frame" if modality.startswith(("video", "image")) else "record",
+                    "continuous": modality.startswith("video"),
+                },
                 "queue": {"max_items": 1, "drop_policy": "latest_only"},
             }
         )
@@ -213,6 +240,127 @@ def prepare_preview_pipeline(*, pipeline: Pipeline, registry: OperatorRegistry) 
             },
         }
     )
+
+
+def _validate_reference_slice(pipeline: Pipeline, graph: PipelineGraphV2Spec) -> None:
+    if pipeline.processing_server_id != "local" or pipeline.editor_mode == "python":
+        raise PipelinePreviewError("Reference capture requires a local graph.", code="reference_capture_local_only")
+    identifiers = {node.id for node in graph.nodes}
+    incoming = {node.id: 0 for node in graph.nodes}
+    outgoing = {node.id: [] for node in graph.nodes}
+    for edge in graph.edges:
+        if (edge.source.node not in identifiers or edge.target.node not in identifiers
+                or edge.source.port != "out" or edge.target.port != "in"):
+            raise PipelinePreviewError("Reference capture requires one explicit image path.", code="reference_capture_topology")
+        incoming[edge.target.node] += 1
+        outgoing[edge.source.node].append(edge.target.node)
+    sources = [node.id for node in graph.nodes if node.operator_id == "camera.source"]
+    if len(sources) != 1 or incoming[sources[0]] != 0:
+        raise PipelinePreviewError("Reference capture requires one camera source.", code="reference_capture_topology")
+    visited = set()
+    current = sources[0]
+    while current not in visited:
+        visited.add(current)
+        targets = outgoing[current]
+        if not targets:
+            break
+        if len(targets) != 1 or incoming[targets[0]] != 1:
+            raise PipelinePreviewError("Ambiguous reference capture path.", code="reference_capture_topology")
+        current = targets[0]
+    if len(visited) != len(identifiers) or outgoing[current]:
+        raise PipelinePreviewError("Disconnected or cyclic reference capture path.", code="reference_capture_topology")
+    for node in graph.nodes:
+        if node.operator_id not in _REFERENCE_EXECUTE | _REFERENCE_SKIP:
+            raise PipelinePreviewError(
+                f"Operator cannot run during reference capture: {node.id} ({node.operator_id}).",
+                code="reference_capture_operator_not_allowed",
+            )
+        if node.operator_id == "camera.image_crop" and node.config.get("region_mode", "fixed") != "fixed":
+            raise PipelinePreviewError("Reference capture requires a stable prepared region.", code="reference_capture_region")
+
+
+def reference_input_pipeline(pipeline: Pipeline, node_id: str) -> Pipeline:
+    """Select one unambiguous upstream path without executing the target or its siblings."""
+    graph = PipelineGraphV2Spec.model_validate(pipeline.graph)
+    by_id = {node.id: node for node in graph.nodes}
+    if node_id not in by_id:
+        raise PipelinePreviewError("Reference target is absent.", code="reference_target_missing")
+    selected = set()
+    current = node_id
+    while True:
+        incoming = [edge for edge in graph.edges if edge.target.node == current]
+        if not incoming:
+            break
+        if len(incoming) != 1 or incoming[0].source.node in selected or incoming[0].source.node == node_id:
+            raise PipelinePreviewError("Reference input must have one acyclic path.", code="reference_input_ambiguous")
+        current = incoming[0].source.node
+        selected.add(current)
+    result = pipeline.model_copy(update={"graph": {
+        "schema_version": 2, "uid": graph.uid,
+        "nodes": [node for node in pipeline.graph["nodes"] if node["id"] in selected],
+        "edges": [edge for edge in pipeline.graph["edges"]
+                  if edge["from"]["node"] in selected and edge["to"]["node"] in selected],
+    }})
+    reference_preparation_revision(result)
+    return result
+
+
+def reference_capture_evidence(packet: Packet, pipeline: Pipeline, *, maximum_age_ms: int = 750,
+                               input_artifact_name: str = "main",
+                               now_monotonic: float | None = None, now_unix: float | None = None) -> dict[str, Any]:
+    """Evidence for a local capture; no envelope timestamp or stored-image fallback."""
+    freshness = resolve_frame_freshness(packet, local_monotonic_clock=True,
+                                        now_monotonic=now_monotonic, now_unix=now_unix)
+    if freshness.age_seconds is None or freshness.age_seconds * 1000 > maximum_age_ms:
+        raise PipelinePreviewError("Reference image lacks current capture evidence.", code="reference_capture_stale")
+    artifact_name, image = resolve_image_artifact_for_data(packet, input_artifact_name=input_artifact_name)
+    shape = getattr(image, "shape", ())
+    if len(shape) < 2 or shape[0] * shape[1] > 4_194_304:
+        raise PipelinePreviewError("Reference image is missing or exceeds pixel limits.", code="reference_capture_image")
+    evidence = packet.payload["capture_evidence"]
+    sample = {key: evidence[key] for key in ("capture_instance", "generation", "sequence")}
+    geometry = inspection_geometry(packet.artifacts[artifact_name].metadata.get("image_geometry"),
+                                   int(shape[1]), int(shape[0]), sample)
+    if geometry is None:
+        raise PipelinePreviewError("Reference image geometry does not match its capture.", code="reference_capture_geometry")
+    return {
+        "source_identity": packet.stream_id,
+        "preparation_revision": reference_preparation_revision(pipeline),
+        "sample": sample,
+        "observed_at": (time.time() if now_unix is None else now_unix) - freshness.age_seconds,
+        "freshness_basis": "capture" if freshness.basis == "physical_capture" else "receipt",
+        "historical_fallback": False,
+        "prepared_region": any(node.get("operator") == "camera.image_crop" for node in pipeline.graph["nodes"]),
+    }
+
+
+def reference_preparation_revision(pipeline: Pipeline) -> str:
+    """Bind pixel preparation without invalidating examples for layout or cadence edits."""
+    graph = PipelineGraphV2Spec.model_validate(pipeline.graph)
+    _validate_reference_slice(pipeline, graph)
+    by_id = {node.id: node for node in graph.nodes}
+    outgoing = {edge.source.node: edge.target.node for edge in graph.edges}
+    current = next(node.id for node in graph.nodes if node.operator_id == "camera.source")
+    prepared = []
+    while current is not None:
+        node = by_id[current]
+        if node.operator_id not in _REFERENCE_SKIP | {"core.passthrough"}:
+            prepared.append({"operator": node.operator_id, "config": node.config})
+        current = outgoing.get(current)
+    # This revision identifies configuration, not physical PTZ pose or calibration validity.
+    try:
+        encoded = json.dumps(prepared, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except ValueError as error:
+        raise PipelinePreviewError("Reference preparation requires finite values.", code="invalid_graph") from error
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def freeze_reference_packet(packet: Packet, *, input_artifact_name: str = "main") -> Packet:
+    """Keep copied pixels bound to their original evidence while encoding runs elsewhere."""
+    name, image = resolve_image_artifact_for_data(packet, input_artifact_name=input_artifact_name)
+    artifact = packet.artifacts[name]
+    return replace(packet, payload={"capture_evidence": dict(packet.payload["capture_evidence"])},
+                   artifacts={name: replace(artifact, data=image.copy(), metadata=deepcopy(artifact.metadata))})
 
 
 def resolve_preview_packet_image(packet: Packet) -> Any | None:

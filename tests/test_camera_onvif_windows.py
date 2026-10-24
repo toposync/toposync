@@ -313,7 +313,8 @@ def test_window_validation_rejects_invalid_duration(duration):
         CameraOnvifOptimization(topic="Motion", qualified_topic="{urn:fixture}Motion", item_name="Active", hold_seconds=duration)
 
 
-def test_identical_windows_preserve_shared_capture_and_motion_processing():
+@pytest.mark.parametrize("owned_motion", [False, True])
+def test_identical_windows_preserve_shared_capture_and_owned_motion_processing(owned_motion):
     from toposync.runtime.config_store import Pipeline
     from toposync.runtime.pipelines import OperatorRegistry, PipelineGraphCompiler
     from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
@@ -323,12 +324,14 @@ def test_identical_windows_preserve_shared_capture_and_motion_processing():
         return Pipeline(name=name, graph=build_pipeline_graph_v2(nodes=[
             {"id": "gate", "operator": "camera.onvif_state_gate", "config": {"camera_id": "fixture", "hold_seconds": hold, "stream_id": "shared-fixture"}},
             {"id": "source", "operator": "camera.source", "config": {"camera_id": "fixture", "keep_capture_when_gate_closed": True}},
-            {"id": "motion", "operator": "camera.motion_gate", "config": {}},
+            {"id": "motion", "operator": "camera.motion_gate", "config": {},
+             **({"state": {"resource_owner": "fixture-motion", "resource_partition": "camera/source"}} if owned_motion else {})},
         ], edges=[{"from": {"node": "gate", "port": "out"}, "to": {"node": "source", "port": "gate"}},
                   {"from": {"node": "source", "port": "out"}, "to": {"node": "motion", "port": "in"}}], graph_uid=name))
     report = PipelineGraphCompiler(registry).compile_many([pipeline("one"), pipeline("two"), pipeline("different", 30)])
     by_pipeline = [{n.node_id: n.signature for n in p.nodes} for p in report.pipelines]
-    assert by_pipeline[0] == by_pipeline[1]
+    assert all(by_pipeline[0][key] == by_pipeline[1][key] for key in ("gate", "source"))
+    assert (by_pipeline[0]["motion"] == by_pipeline[1]["motion"]) is owned_motion
     assert all(by_pipeline[0][key] != by_pipeline[2][key] for key in by_pipeline[0])
 
 

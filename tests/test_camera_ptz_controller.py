@@ -102,6 +102,214 @@ def _controller(
     )
 
 
+@pytest.mark.parametrize("wait_at", ["queue", "readiness", "none"])
+def test_dispatch_guard_rechecks_target_after_waits_without_faulting_or_blocking_stop(tmp_path, wait_at):
+    async def scenario():
+        controller, transport, _ = _controller(tmp_path)
+        lease = await controller.acquire(camera_id="front", owner_kind="automation", owner_id="tracking")
+        entered, release = asyncio.Event(), asyncio.Event()
+        current = [wait_at != "none"]
+
+        def guard():
+            if not current[0]:
+                raise PtzControlError("target observation expired")
+
+        async def readiness(_camera_id):
+            entered.set()
+            await release.wait()
+            return True
+
+        device = controller._devices[lease["ptz_device_id"]]
+        if wait_at == "queue":
+            await device.command_lock.acquire()
+        elif wait_at == "readiness":
+            controller._get_automation_readiness = readiness
+        pending = asyncio.create_task(controller.submit(lease_id=lease["lease_id"], fence=lease["fence"],
+            command_id="stale-subject", command={"kind": "continuous_move", "pan": .1, "tilt": 0., "timeout_s": .1},
+            dispatch_guard=guard))
+        if wait_at == "queue":
+            await asyncio.sleep(0)
+            assert not pending.done()
+            current[0] = False
+            device.command_lock.release()
+        elif wait_at == "readiness":
+            await asyncio.wait_for(entered.wait(), 1)
+            current[0] = False
+            release.set()
+        with pytest.raises(PtzControlError, match="target observation expired"):
+            await pending
+        assert transport.calls == [] and device.state == "acquired"
+        stopped = await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"], command_id="stop",
+            command={"kind": "stop", "pan_tilt": True, "zoom": True}, dispatch_guard=guard)
+        assert stopped["accepted"] and len(transport.calls) == 1
+        assert transport.calls[0]["command"]["kind"] == "stop"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("invalid", ["not_callable", "boolean", "async"])
+def test_dispatch_guard_rejects_invalid_contract_before_transport(tmp_path, invalid):
+    async def scenario():
+        controller, transport, _ = _controller(tmp_path)
+        lease = await controller.acquire(camera_id="front", owner_kind="automation", owner_id="tracking")
+        async def asynchronous_guard():
+            raise AssertionError("An asynchronous guard must not run under the controller lock")
+        guard = {"not_callable": True, "boolean": lambda: False, "async": asynchronous_guard}[invalid]
+        with pytest.raises(PtzControlError, match="dispatch guard must"):
+            await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"], command_id="bad-guard",
+                command={"kind": "goto_preset", "preset_token": "one"}, dispatch_guard=guard)
+        assert transport.calls == []
+    asyncio.run(scenario())
+
+
+def test_late_transport_guard_rejection_is_recorded_without_fault_or_repeated_dispatch(tmp_path):
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+        current, sent, attempts = [True], [], []
+        rejection = RuntimeError("target changed during ONVIF preparation")
+        def guard():
+            if not current[0]:
+                raise rejection
+        async def execute(**kwargs):
+            attempts.append(kwargs["command"]["kind"])
+            if kwargs["command"]["kind"] != "stop":
+                entered.set()
+                await release.wait()
+                kwargs["dispatch_guard"]()
+            else:
+                assert "dispatch_guard" not in kwargs
+            sent.append(kwargs["command"]["kind"])
+            return {"ok": True}
+        transport = _Transport()
+        transport.execute = execute
+        controller, _, _ = _controller(tmp_path, transport=transport)
+        lease = await controller.acquire(camera_id="front", owner_kind="automation", owner_id="tracking")
+        arguments = dict(lease_id=lease["lease_id"], fence=lease["fence"], command_id="late-target",
+            command={"kind": "continuous_move", "pan": .1, "tilt": 0., "timeout_s": .1}, dispatch_guard=guard)
+        operation = asyncio.create_task(controller.submit(**arguments))
+        await asyncio.wait_for(entered.wait(), 1)
+        current[0] = False
+        release.set()
+        with pytest.raises(RuntimeError) as rejected:
+            await operation
+        assert rejected.value is rejection and sent == []
+        device = controller._devices[lease["ptz_device_id"]]
+        assert device.state == "holding" and device.geometry_safe is False
+        current[0] = True
+        with pytest.raises(PtzControlError):
+            await controller.submit(**arguments)
+        assert attempts == ["continuous_move"] and sent == []
+        stopped = await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"], command_id="stop-late",
+            command={"kind": "stop", "pan_tilt": True, "zoom": True}, dispatch_guard=guard)
+        assert stopped["accepted"] and sent == ["stop"]
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("next_command", [
+    {"kind": "continuous_move", "pan": -.1, "timeout_s": .1},
+    {"kind": "relative_move", "pan": -.1},
+])
+@pytest.mark.parametrize("deadline_elapsed", [False, True])
+@pytest.mark.parametrize("stop_fails", [False, True])
+def test_rejected_retarget_stops_an_already_running_continuous_move(tmp_path, next_command, deadline_elapsed, stop_fails):
+    async def scenario():
+        entered, release, stopped = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        sent = []
+        current = [True]
+
+        def guard():
+            if not current[0]:
+                raise RuntimeError("target expired during preparation")
+
+        async def execute(**kwargs):
+            if "dispatch_guard" in kwargs:
+                entered.set()
+                await release.wait()
+                kwargs["dispatch_guard"]()
+            sent.append(kwargs["command"]["kind"])
+            if kwargs["command"]["kind"] == "stop":
+                stopped.set()
+                if stop_fails:
+                    raise RuntimeError("stop failed")
+            return {"ok": True}
+
+        transport = _Transport()
+        transport.execute = execute
+        controller, _, _ = _controller(tmp_path, transport=transport)
+        try:
+            lease = await controller.acquire(camera_id="front", owner_kind="automation", owner_id="tracking")
+            await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"], command_id="moving",
+                command={"kind": "continuous_move", "pan": .1, "timeout_s": .05})
+            pending = asyncio.create_task(controller.submit(lease_id=lease["lease_id"], fence=lease["fence"],
+                command_id="expired-retarget", command=next_command, dispatch_guard=guard))
+            await asyncio.wait_for(entered.wait(), 1)
+            if deadline_elapsed:
+                await asyncio.sleep(.06)
+                assert sent == ["continuous_move"]
+            current[0] = False
+            release.set()
+            with pytest.raises(RuntimeError, match="target expired"):
+                await pending
+            await asyncio.wait_for(stopped.wait(), .3)
+            assert sent == ["continuous_move", "stop"]
+            snapshot = await controller.snapshot(camera_id="front", include_readiness=False)
+            assert snapshot["active_lease"]["lease_id"] == lease["lease_id"]
+            assert snapshot["state"] == ("fault" if stop_fails else "holding")
+            assert snapshot["geometry_safe"] is False
+            assert snapshot["last_automatic_stop"]["reason"] == "retarget_rejected"
+            assert snapshot["last_automatic_stop"]["accepted"] is not stop_fails
+        finally:
+            await controller.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_continuous_updates_share_lease_and_stop_at_latest_command_deadline(tmp_path):
+    async def scenario():
+        controller, transport, _ = _controller(tmp_path)
+        try:
+            lease = await controller.acquire(camera_id="front", owner_kind="automation", owner_id="tracking")
+            for index, (pan, timeout) in enumerate(((.1, 2.), (-.1, .05))):
+                result = await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"],
+                    command_id=f"update-{index}", command={"kind": "continuous_move", "pan": pan, "timeout_s": timeout})
+                assert result["accepted"] and result["lease_id"] == lease["lease_id"]
+            watchdog = controller._devices[lease["ptz_device_id"]].continuous_watchdog_task
+            await asyncio.wait_for(asyncio.shield(watchdog), .5)
+            assert [call["command"]["kind"] for call in transport.calls] == ["continuous_move", "continuous_move", "stop"]
+            assert [call["command"]["pan"] for call in transport.calls[:2]] == [.1, -.1]
+            snapshot = await controller.snapshot(camera_id="front", include_readiness=False)
+            assert snapshot["active_lease"]["lease_id"] == lease["lease_id"]
+            assert snapshot["geometry_safe"] is False
+        finally:
+            await controller.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lost_control", ["expired", "fence"])
+def test_transport_guard_rechecks_control_after_preparation(tmp_path, lost_control):
+    async def scenario():
+        clock, sent = _Clock(), []
+        async def execute(**kwargs):
+            if kwargs["command"]["kind"] == "stop":
+                return {"ok": True}
+            if lost_control == "expired":
+                clock.now += 60
+            else:
+                controller._devices[lease["ptz_device_id"]].fence += 1
+            kwargs["dispatch_guard"]()
+            sent.append(kwargs["command"])
+            return {"ok": True}
+        transport = _Transport()
+        transport.execute = execute
+        controller, _, _ = _controller(tmp_path, transport=transport, clock=clock)
+        lease = await controller.acquire(camera_id="front", owner_kind="automation", owner_id="tracking")
+        with pytest.raises(PtzControlError, match="control changed before dispatch"):
+            await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"], command_id="late-control",
+                command={"kind": "continuous_move", "pan": .1, "tilt": 0., "timeout_s": .1}, dispatch_guard=lambda: None)
+        assert sent == []
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('change', ['none', 'configuration_before', 'configuration_after', 'expired', 'cancelled'])
 def test_continuous_preparation_is_lease_bound_read_only_and_does_not_block_stop(tmp_path, change):
     async def scenario():
@@ -380,6 +588,110 @@ def test_ptz_controller_serializes_commands_and_deduplicates_command_id(
             )
         assert len(transport.calls) == 1
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("renewal", ["renew", "reacquire", "reacquire_extended", "shorten"])
+def test_maximum_lease_duration_cannot_be_extended(tmp_path, renewal):
+    async def scenario():
+        wall, monotonic = _Clock(), _Clock()
+        controller, transport, _ = _controller(tmp_path, clock=wall, monotonic_clock=monotonic)
+        arguments = dict(camera_id="wide", owner_kind="automation", owner_id="campaign", ttl_s=30)
+        lease = await controller.acquire(**arguments, maximum_duration_s=10)
+        assert lease["expires_at"] == wall.now + 10
+        monotonic.now += 4
+        wall.now -= 100
+        if renewal == "renew":
+            renewed = await controller.renew(lease_id=lease["lease_id"], fence=lease["fence"], ttl_s=30)
+        else:
+            options = {"maximum_duration_s": 30 if renewal == "reacquire_extended" else 2} if renewal != "reacquire" else {}
+            renewed = await controller.acquire(**arguments, **options)
+        remaining = 2 if renewal == "shorten" else 6
+        assert renewed["expires_at"] == wall.now + remaining
+        assert renewed["lease_id"] == lease["lease_id"] and renewed["fence"] == lease["fence"]
+        monotonic.now += remaining
+        with pytest.raises(PtzControlError, match="Unknown or expired"):
+            await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"],
+                command_id="late-move", command={"kind": "goto_preset", "preset_token": "target"})
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert [call["command"]["kind"] for call in transport.calls] == ["stop"]
+        await controller.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("duration", [0, -1, True, float("nan"), float("inf"), "invalid"])
+def test_maximum_lease_duration_rejects_invalid_input_before_control(tmp_path, duration):
+    async def scenario():
+        controller, transport, _ = _controller(tmp_path)
+        with pytest.raises(PtzControlError, match="maximum_duration_s"):
+            await controller.acquire(camera_id="wide", owner_kind="automation", owner_id="campaign",
+                maximum_duration_s=duration)
+        assert not transport.calls
+        assert (await controller.snapshot(camera_id="wide"))["active_lease"] is None
+        await controller.shutdown()
+    asyncio.run(scenario())
+
+
+def test_maximum_lease_duration_includes_discovery_delay(tmp_path):
+    async def scenario():
+        controller, transport, clock = _controller(tmp_path)
+        async def delayed_readiness(camera_id):
+            clock.now += 11
+            return True
+        controller._get_automation_readiness = delayed_readiness
+        with pytest.raises(PtzControlError, match="maximum lease duration"):
+            await controller.acquire(camera_id="wide", owner_kind="automation", owner_id="campaign",
+                maximum_duration_s=10)
+        assert not transport.calls
+        assert (await controller.snapshot(camera_id="wide"))["active_lease"] is None
+        await controller.shutdown()
+    asyncio.run(scenario())
+
+
+def test_lease_renewal_rechecks_expiry_after_waiting_for_control_lock(tmp_path):
+    async def scenario():
+        controller, transport, clock = _controller(tmp_path)
+        lease = await controller.acquire(camera_id="wide", owner_kind="automation", owner_id="campaign",
+            ttl_s=30, maximum_duration_s=10)
+        async with controller._lock:
+            pending = asyncio.create_task(controller.renew(
+                lease_id=lease["lease_id"], fence=lease["fence"], ttl_s=30))
+            await asyncio.sleep(0)
+            assert not pending.done()
+            clock.now += 10
+        with pytest.raises(PtzControlError, match="Unknown or expired"):
+            await pending
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert [call["command"]["kind"] for call in transport.calls] == ["stop"]
+        await controller.shutdown()
+    asyncio.run(scenario())
+
+
+def test_maximum_lease_duration_expiring_during_preemption_grants_no_new_control(tmp_path):
+    async def scenario():
+        controller, transport, clock = _controller(tmp_path)
+        lease = await controller.acquire(camera_id="wide", owner_kind="automation", owner_id="previous")
+        await controller.submit(lease_id=lease["lease_id"], fence=lease["fence"],
+            command_id="previous-move", command={"kind": "goto_preset", "preset_token": "target"})
+        transport.block = True
+        pending = asyncio.create_task(controller.acquire(camera_id="wide", owner_kind="manual",
+            owner_id="campaign", maximum_duration_s=2))
+        for _ in range(20):
+            if len(transport.calls) == 2:
+                break
+            await asyncio.sleep(0)
+        assert [call["command"]["kind"] for call in transport.calls] == ["goto_preset", "stop"]
+        assert not pending.done()
+        clock.now += 3
+        transport.release.set()
+        with pytest.raises(PtzControlError, match="maximum lease duration"):
+            await pending
+        snapshot = await controller.snapshot(camera_id="wide")
+        assert snapshot["active_lease"] is None
+        assert snapshot["state"] == "fault"
+        await controller.shutdown()
     asyncio.run(scenario())
 
 
@@ -1657,8 +1969,9 @@ def test_ptz_controller_cancelled_emergency_does_not_leave_stopping_state(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("maximum_duration", [None, .1])
 def test_ptz_controller_lease_expiry_watchdog_sends_stop_without_an_api_poll(
-    tmp_path: Path,
+    tmp_path: Path, maximum_duration,
 ) -> None:
     async def scenario() -> None:
         transport = _Transport()
@@ -1670,12 +1983,15 @@ def test_ptz_controller_lease_expiry_watchdog_sends_stop_without_an_api_poll(
             get_status=transport.status,
             get_automation_readiness=lambda _camera_id: True,
         )
-        await controller.acquire(
+        lease = await controller.acquire(
             camera_id="front",
             owner_kind="automation",
             owner_id="attention:event-1",
             ttl_s=1,
+            maximum_duration_s=maximum_duration,
         )
+        if maximum_duration is not None:
+            await controller.renew(lease_id=lease["lease_id"], fence=lease["fence"], ttl_s=300)
         for _ in range(200):
             if transport.calls:
                 break

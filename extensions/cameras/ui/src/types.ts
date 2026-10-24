@@ -79,6 +79,7 @@ export type CameraConfig = {
   id: string;
   name: string;
   enabled: boolean;
+  clock_domain: string;
   control: CameraControlConfig;
   onvif?: CameraOnvifConfig | null;
   sources: CameraSourceConfig[];
@@ -457,6 +458,7 @@ export type CameraContextsResponse = {
 };
 
 export type CameraPipelinePreset =
+  | "visual_state"
   | "audio_anomaly"
   | "area_presence"
   | "area_entry"
@@ -846,6 +848,7 @@ export type CameraOnvifTransport = {
   received_messages: number; transitions: number; queue_overflows: number;
 };
 export type CameraOnvifCapabilities = {
+  source_profiles?: Record<string, string>;
   camera_id: string; queried_at: number; valid_until: number; status: string;
   identification: Record<string, string>;
   sections: Record<string, string>;

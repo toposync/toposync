@@ -129,6 +129,38 @@ test("main screen keeps global and selected-notification SSE separate", async ({
   expect(detailOpens.map((event) => event.url).join("\n")).toContain("/api/notifications/notif-one/stream");
 });
 
+test("notification details keep their subject while new events arrive after idle", async ({ page }) => {
+  await mockNotificationsApi(page);
+  await page.goto("/");
+  await page.locator(".notificationCard", { hasText: NOTIFICATIONS[0].title }).click();
+  await page.getByRole("button", { name: "Open selected notification details" }).click();
+  const dialog = page.getByRole("dialog", { name: "Notification details" });
+  await expect(dialog.getByText(NOTIFICATIONS[0].title, { exact: true })).toBeVisible();
+
+  await page.clock.setFixedTime(Date.now() + 13_000);
+  await page.evaluate(notification => {
+    const stream = window.__toposyncEventSources.find(source => /\/api\/notifications\/stream$/.test(source.url));
+    stream.onmessage(new MessageEvent("message", { data: JSON.stringify({ op: "insert", notification }) }));
+    return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }, NOTIFICATIONS[1]);
+  await expect(dialog.getByText(NOTIFICATIONS[0].title, { exact: true })).toBeVisible();
+  await expect(dialog.getByText(NOTIFICATIONS[1].title, { exact: true })).toHaveCount(0);
+
+  await page.evaluate(notification => {
+    const stream = window.__toposyncEventSources.find(source => /\/api\/notifications\/stream$/.test(source.url));
+    stream.onmessage(new MessageEvent("message", { data: JSON.stringify({ op: "update", notification }) }));
+  }, { ...NOTIFICATIONS[0], description: "Updated first detail" });
+  await expect(dialog.getByText("Updated first detail", { exact: true })).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await page.clock.setFixedTime(Date.now() + 26_000);
+  await page.evaluate(notification => {
+    const stream = window.__toposyncEventSources.find(source => /\/api\/notifications\/stream$/.test(source.url));
+    stream.onmessage(new MessageEvent("message", { data: JSON.stringify({ op: "insert", notification }) }));
+  }, NOTIFICATIONS[1]);
+  await expect(page.locator(".notificationCard.isActive")).toHaveText(new RegExp(NOTIFICATIONS[1].title));
+});
+
 for (const recovery of ["reconnect", "overflow"]) {
   test(`notification history recovers missed inserts after ${recovery}`, async ({ page }) => {
     await mockNotificationsApi(page);

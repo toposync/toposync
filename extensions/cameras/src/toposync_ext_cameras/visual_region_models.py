@@ -54,3 +54,20 @@ class VisualRegionConfig(BaseModel):
             raise ValueError("visual_region_reference_required")
         if not any(stroke.op == "paint" for stroke in self.strokes):
             raise ValueError("visual_region_empty")
+
+
+class CanonicalRegionConfig(VisualRegionConfig):
+    framing: Literal["passive"] = "passive"
+    evidence_timeout_seconds: float = Field(default=.75, gt=0, le=60, allow_inf_nan=False)
+    maximum_side: int = Field(default=256, strict=True, ge=32, le=512)
+    alignment_strokes: list[RegionStroke] = Field(default_factory=list, max_length=1024)
+    alignment_margin_pixels: int = Field(default=8, strict=True, ge=1, le=128)
+
+    @model_validator(mode="after")
+    def bounded_alignment(self):
+        if sum(len(stroke.points01) for stroke in [*self.strokes, *self.alignment_strokes]) > 100_000:
+            raise ValueError("Region drawing exceeds 100000 points")
+        return self
+
+    def geometry_key(self) -> str:
+        return "canonical-region-v1:" + super().geometry_key()

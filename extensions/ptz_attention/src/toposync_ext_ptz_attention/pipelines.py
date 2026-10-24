@@ -17,6 +17,7 @@ from toposync.runtime.pipelines.runtime import Packet
 from .bindings import attention_bindings, live_observer_binding_issue
 from .constants import EXTENSION_ID, OPERATOR_ID_REQUEST
 from .controller import PtzAttentionController
+from .framing import declared_group_members, estimate_group_framing, observe_framing
 from .models import (
     AttentionIntent,
     AttentionProfile,
@@ -257,10 +258,9 @@ class PtzAttentionRequestRuntime(SinkRuntime):
             if event_id not in self._event_types and len(self._event_types) >= 4096:
                 self._event_types.pop(next(iter(self._event_types)))
             self._event_types[event_id] = event_type
-        target = _target_from_packet(packet, self.config) if lifecycle == "open" or (
-            lifecycle == "update" and profile.follow_view_updates
-        ) else None
-        if lifecycle == "open" and target is None:
+        target = _target_from_packet(packet, self.config) if lifecycle in {"open", "update"} else None
+        group_members = declared_group_members(packet)
+        if lifecycle == "open" and target is None and not (profile.panorama_element_id and group_members is not None):
             self.controller.record_operator_rejection(
                 profile_id=profile.id,
                 pipeline_name=context.pipeline_name,
@@ -288,6 +288,10 @@ class PtzAttentionRequestRuntime(SinkRuntime):
                 self.config.hold_after_close_seconds if direct_operator else None
             ),
             target=target,
+            framing_observation=(observe_framing(packet, _packet_value(packet, self.config.bbox01_field), target)
+                                 if lifecycle in {"open", "update"} else None),
+            group_framing=(estimate_group_framing(packet, target) if lifecycle in {"open", "update"} else None),
+            group_member_event_ids=group_members,
             preferred_view_id=preferred_view_id,
             event_at=float(packet.created_at or now),
             received_at=now,

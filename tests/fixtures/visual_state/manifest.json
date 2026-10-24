@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "corpus_id": "synthetic-contract-only",
+  "protocol_revision": "contract-1",
+  "sequences": [
+    {
+      "sequence_id": "references",
+      "source_id": "synthetic",
+      "session_id": "references",
+      "partition": "references",
+      "evidence": "synthetic",
+      "label_origin": "synthetic",
+      "illumination": "unknown",
+      "preparation_revision": "synthetic-1",
+      "asset": "reference.pgm",
+      "sha256": "c1b893840915ed06b28c443e1f61fb63f08e50457067458525016072088deee9",
+      "duration_ms": 1000,
+      "truth": [
+        {
+          "start_ms": 0,
+          "end_ms": 1000,
+          "class_id": "closed"
+        }
+      ]
+    },
+    {
+      "sequence_id": "calibration",
+      "source_id": "synthetic",
+      "session_id": "calibration",
+      "partition": "calibration",
+      "evidence": "synthetic",
+      "label_origin": "synthetic",
+      "illumination": "unknown",
+      "preparation_revision": "synthetic-1",
+      "asset": "calibration.pgm",
+      "sha256": "3ef2ce55b364f4959c89af7dbeab0809f1df6ddede8c1fa374a1e613f01609c1",
+      "duration_ms": 1000,
+      "truth": [
+        {
+          "start_ms": 0,
+          "end_ms": 1000,
+          "class_id": "closed"
+        }
+      ]
+    },
+    {
+      "sequence_id": "test",
+      "source_id": "synthetic",
+      "session_id": "test",
+      "partition": "test",
+      "evidence": "synthetic",
+      "label_origin": "synthetic",
+      "illumination": "unknown",
+      "preparation_revision": "synthetic-1",
+      "asset": "test.pgm",
+      "sha256": "affbb5ace9715362125edddf26db18a1fcad3607374366ee831190cb45ffdd3e",
+      "duration_ms": 1000,
+      "truth": [
+        {
+          "start_ms": 0,
+          "end_ms": 1000,
+          "class_id": "closed"
+        }
+      ]
+    }
+  ]
+}

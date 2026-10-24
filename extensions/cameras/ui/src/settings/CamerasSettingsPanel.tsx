@@ -212,6 +212,9 @@ const CAMERA_PIPELINE_PRESET_CARDS: {
   stepsKey: string;
   stepsFallback: string;
 }[] = [
+  { id: "visual_state", requiresMapping: false, titleKey: "ext.cameras.visualState.title", titleFallback: "Sensor visual",
+    descriptionKey: "ext.cameras.visualState.description", descriptionFallback: "Reconheça estados visíveis com exemplos da câmera.",
+    stepsKey: "ext.cameras.visualState.steps", stepsFallback: "Configure região, estados e fotos no operador" },
   { id: "audio_anomaly", requiresMapping: false, titleKey: "ext.cameras.audioRecipe.title", titleFallback: "Som acima da referência",
     descriptionKey: "ext.cameras.audioRecipe.description", descriptionFallback: "Compare o som com uma referência normal da fonte.",
     stepsKey: "ext.cameras.audioRecipe.steps", stepsFallback: "Escolha uma referência e salve desativado" },
@@ -893,6 +896,7 @@ function CamerasSettingsPanelContent({
       id,
       name: controlType === "onvif" ? "Nova câmera ONVIF" : "Nova câmera manual",
       enabled: true,
+      clock_domain: `device:${id}`,
       control: {
         type: controlType,
       },
@@ -919,6 +923,7 @@ function CamerasSettingsPanelContent({
       id,
       name,
       enabled: true,
+      clock_domain: `device:${id}`,
       control: {
         type: "onvif",
       },
@@ -1238,6 +1243,12 @@ function CamerasSettingsPanelContent({
               <div className="card" data-testid="camera-device-settings">
                 <div className="cardBody">
                   <h2 className="modalSectionTitle">{t("ext.cameras.settings.device", {}, "Câmera")}</h2>
+                  <button className="chipButton" type="button" disabled={!activeCameraPersisted}
+                    title={!activeCameraPersisted ? t("ext.cameras.automatic.save_first") : undefined}
+                    onClick={() => navigateInApp(`/settings?${new URLSearchParams({ panel: "__automatic__", automatic_target: `camera:${activeCamera.id}` })}`)}>
+                    {t("ext.cameras.automatic.add")}
+                  </button>
+                  <p className="settingsDescription">{t("ext.cameras.automatic.scope")}</p>
                   <div className="rowWrap">
                     <div className="field" style={{ flex: 2, minWidth: 220 }}>
                       <label className="label">{t("ext.cameras.settings.camera_name", {}, "Nome da câmera")}</label>
@@ -1373,6 +1384,18 @@ function CamerasSettingsPanelContent({
                       <div><dt>{t("ext.cameras.settings.technical.identifier")}</dt><dd>{activeCamera.onvif?.device_id || t("ext.cameras.settings.technical.unknown")}</dd></div>
                       <div><dt>{t("ext.cameras.settings.technical.hardware")}</dt><dd>{activeCamera.onvif?.hardware || t("ext.cameras.settings.technical.unknown")}</dd></div>
                     </dl>
+                    <label className="field">
+                      {t("ext.cameras.settings.technical.clock_domain")}
+                      <input
+                        key={`${activeCamera.id}:${activeCamera.clock_domain}`}
+                        defaultValue={activeCamera.clock_domain}
+                        aria-describedby={`camera-clock-help-${activeCamera.id}`}
+                        onBlur={(event) => updateCamera(activeCamera.id, (camera) => ({ ...camera, clock_domain: event.target.value.trim() || `device:${camera.id}` }))}
+                      />
+                    </label>
+                    <div className="settingsDescription" id={`camera-clock-help-${activeCamera.id}`}>
+                      {t("ext.cameras.settings.technical.clock_domain_help")}
+                    </div>
                     <button className="chipButton" type="button" onClick={() => setOnvifResourcesCameraId(activeCamera.id)}>{t("ext.cameras.onvif.title")}</button>
                   </details>
                 </div>
@@ -2063,13 +2086,13 @@ function CamerasSettingsPanelContent({
         ) : null}
       </SubModal>
 
-      {activeCamera && (pipelinePresetOpen === "audio_anomaly" || pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry" || pipelinePresetOpen === "doorbell_visitor") ? (
+      {activeCamera && (pipelinePresetOpen === "visual_state" || pipelinePresetOpen === "audio_anomaly" || pipelinePresetOpen === "cat_litter_use" || pipelinePresetOpen === "cat_drinking" || pipelinePresetOpen === "area_presence" || pipelinePresetOpen === "area_entry" || pipelinePresetOpen === "area_group_entry" || pipelinePresetOpen === "doorbell_visitor") ? (
         <CameraObservationPresetModal ui={ui} cameras={cameras} open preset={pipelinePresetOpen} camera={activeCamera}
           activeSourceId={activeSourceId} mappedCompositions={mappedCompositions}
           processingServers={processingServers} i18n={i18n} onClose={() => setPipelinePresetOpen(null)}
           onCreated={handlePipelineCreated} />
       ) : null}
-      {activeCamera && pipelinePresetOpen !== "audio_anomaly" && pipelinePresetOpen !== "cat_litter_use" && pipelinePresetOpen !== "cat_drinking" && pipelinePresetOpen !== "area_presence" && pipelinePresetOpen !== "area_entry" && pipelinePresetOpen !== "area_group_entry" && pipelinePresetOpen !== "doorbell_visitor" ? (
+      {activeCamera && pipelinePresetOpen !== "visual_state" && pipelinePresetOpen !== "audio_anomaly" && pipelinePresetOpen !== "cat_litter_use" && pipelinePresetOpen !== "cat_drinking" && pipelinePresetOpen !== "area_presence" && pipelinePresetOpen !== "area_entry" && pipelinePresetOpen !== "area_group_entry" && pipelinePresetOpen !== "doorbell_visitor" ? (
         <CameraPipelinePresetModal
           open={Boolean(pipelinePresetOpen)}
           preset={pipelinePresetOpen}

@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
+import re
 import time
 import uuid
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
@@ -13,6 +16,7 @@ from toposync.runtime.notifications.events import EventBroadcaster
 from toposync.runtime.services import ServiceRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness
 from toposync.runtime.pipelines.runtime import Packet
+from toposync_ext_cameras.panorama_navigation import MAXIMUM_LIVE_CENTER_ERROR_PIXELS
 
 from .models import (
     AttentionIntent,
@@ -27,6 +31,7 @@ from .models import (
     target_in_region,
 )
 from .store import AttentionStore, ProfileNotFoundError
+from .framing import FramingContinuity, framing_status, group_framing_status
 
 
 _LIVE_SERVICES = (
@@ -51,16 +56,39 @@ class _CommandOwnershipStaleError(RuntimeError):
     pass
 
 
+class _CampaignExpiredError(RuntimeError):
+    pass
+
+
 @dataclass(slots=True)
 class _TrackedEvent:
     intent: AttentionIntent
     resolved: ResolvedTarget | None
     opened_monotonic: float
     last_seen_monotonic: float
+    candidate_received_monotonic: float | None = None
     closed_monotonic: float | None = None
     following_view: ResolvedTarget | None = None
     following_since: float | None = None
     following_confirmed: bool = False
+    following_invalid_reason: str = ""
+    resolution_reason: str = ""
+    observation_expired: bool = False
+    expected_group_member_event_ids: tuple[str, ...] | None = None
+    framing_continuity: FramingContinuity = field(default_factory=FramingContinuity)
+    arrival_geometry: dict | None = None
+
+    def __post_init__(self) -> None:
+        if self.expected_group_member_event_ids is None:
+            self.expected_group_member_event_ids = self.intent.group_member_event_ids
+
+    def invalidate_following(self, reason: str) -> None:
+        # Keep the last qualified position for grace, never as a live fallback.
+        self.following_view = None
+        self.following_since = None
+        self.following_confirmed = False
+        self.following_invalid_reason = reason
+        self.framing_continuity.interrupt(reason)
 
     @property
     def open(self) -> bool:
@@ -81,9 +109,14 @@ class _DeviceRuntime:
     lease_expires_at: float = 0.0
     next_renew_at: float = 0.0
     command_id: str = ""
+    command_event_key: str = ""
     command_preset: str = ""
     command_target_key: str = ""
+    command_started_monotonic: float | None = None
     navigation_task: asyncio.Task | None = None
+    navigation_progress: dict | None = None
+    capture_owner_id: str = ""
+    capture_open_task: asyncio.Task | None = None
     motion_epoch: int | str | None = None
     settle_deadline: float = 0.0
     focused_since: float | None = None
@@ -93,9 +126,14 @@ class _DeviceRuntime:
     last_heartbeat_at: float | None = None
     movement_times: deque[float] = field(default_factory=deque)
     session_id: str = ""
+    session_started_monotonic: float | None = None
     fault: str = ""
     last_rate_limit_key: str = ""
     recovery_required: bool = False
+    campaign_deadline_monotonic: float | None = None
+    campaign_expired: bool = False
+    campaign_finishing: bool = False
+    manual_return_deadline_monotonic: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +170,9 @@ class PtzAttentionController:
         self._operator_bindings: dict[tuple[str, str, str], _OperatorBinding] = {}
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+        self._navigation_finished = asyncio.Event()
+        self._preparations: dict[str, tuple[asyncio.Task, float]] = {}
+        self._clock_scope = uuid.uuid4().hex
 
     def service_status(self, profile: AttentionProfile | None = None) -> dict[str, bool]:
         known = getattr(self.services, "_services", {})
@@ -198,6 +239,10 @@ class PtzAttentionController:
 
     async def shutdown(self) -> None:
         self._closed = True
+        for task, _ in self._preparations.values():
+            task.cancel()
+        await asyncio.gather(*(task for task, _ in self._preparations.values()), return_exceptions=True)
+        self._preparations.clear()
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -238,15 +283,24 @@ class PtzAttentionController:
 
     async def _run(self) -> None:
         while True:
-            await asyncio.sleep(self._tick_interval_seconds)
+            try:
+                await asyncio.wait_for(self._navigation_finished.wait(), self._tick_interval_seconds)
+            except asyncio.TimeoutError:
+                pass
+            self._navigation_finished.clear()
             await self.tick_once()
 
     async def tick_once(self) -> None:
         for profile in self.store.list_profiles():
             runtime = self._runtime_for(profile)
             async with self._lock_for(profile.ptz_device_id):
+                current = self.store.get_profile(profile.id)
+                if current is None or current.ptz_device_id != profile.ptz_device_id:
+                    continue
+                profile, runtime = current, self._runtime_for(current)
                 try:
                     await self._evaluate(profile, runtime, self._monotonic_clock())
+                    await self._prepare_idle_camera(profile, runtime)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -256,6 +310,27 @@ class PtzAttentionController:
                         exc_info=True,
                     )
                     await self._fault(profile, runtime, "controller_tick_failed")
+
+    async def _prepare_idle_camera(self, profile: AttentionProfile, runtime: _DeviceRuntime) -> None:
+        previous = self._preparations.get(profile.ptz_device_id)
+        eligible = (not self._closed and profile.mode == "live_panorama" and runtime.state == "IDLE"
+            and not runtime.lease_id and not runtime.campaign_finishing
+            and bool(profile.panorama_element_id) and self.has_service("cameras.panorama.prepare_attention"))
+        if not eligible:
+            if previous is not None:
+                previous[0].cancel()
+                await asyncio.gather(previous[0], return_exceptions=True)
+                self._preparations.pop(profile.ptz_device_id, None)
+            return
+        now = self._monotonic_clock()
+        if previous is not None and (not previous[0].done() or now < previous[1]):
+            return
+        task = asyncio.create_task(self.services.call("cameras.panorama.prepare_attention",
+            camera_id=profile.camera_id, source_id=profile.source_id,
+            composition_id=profile.composition_id, element_id=profile.panorama_element_id))
+        task.add_done_callback(lambda result: None if result.cancelled() else result.exception())
+        # Refresh before the adapter's 30-second metadata validity expires.
+        self._preparations[profile.ptz_device_id] = (task, now + 15)
 
     async def submit_intent(self, intent: AttentionIntent) -> None:
         profile = self.store.get_profile(intent.profile_id)
@@ -275,10 +350,18 @@ class PtzAttentionController:
 
         runtime = self._runtime_for(profile)
         async with self._lock_for(profile.ptz_device_id):
+            current = self.store.get_profile(profile.id)
+            if current is None or current.ptz_device_id != profile.ptz_device_id:
+                return
+            profile, runtime = current, self._runtime_for(current)
             now = self._monotonic_clock()
             runtime.last_heartbeat_at = self._clock()
+            if await self._expire_campaign(profile, runtime):
+                return
+            if await self._finish_campaign(profile, runtime):
+                return
             if runtime.recovery_required:
-                runtime.fault = _RECOVERY_FAULT
+                runtime.fault = runtime.fault or _RECOVERY_FAULT
                 self._set_state(runtime, "FAULT", now)
                 self._record(
                     profile,
@@ -289,7 +372,8 @@ class PtzAttentionController:
                 )
                 return
             if profile.mode == "paused":
-                self._set_state(runtime, "MANUAL_OVERRIDE", now)
+                if runtime.state != "RETURNING":
+                    self._set_state(runtime, "MANUAL_OVERRIDE", now)
                 self._record(
                     profile,
                     runtime,
@@ -389,7 +473,16 @@ class PtzAttentionController:
                 )
 
             existing = runtime.events.get(governed.key)
+            if (existing and (existing.open or existing.observation_expired)
+                    and existing.expected_group_member_event_ids is not None and governed.lifecycle != "close"):
+                # Missing metadata or partial membership cannot downgrade a known group to a point request.
+                previous_members = set(existing.expected_group_member_event_ids)
+                incoming_members = set(governed.group_member_event_ids or ())
+                governed = governed.model_copy(update={"group_member_event_ids": tuple(sorted(
+                    incoming_members if previous_members.issubset(incoming_members) else previous_members))})
             observation_age = max(0.0, max(self._clock(), governed.received_at) - governed.event_at)
+            if governed.group_framing:
+                observation_age = max(observation_age, self._clock() - governed.group_framing.oldest_published_at)
             if profile.follow_view_updates and governed.lifecycle != "close":
                 freshness = resolve_frame_freshness(
                     Packet.create(stream_id=governed.key, payload={"capture_evidence": governed.capture_evidence}),
@@ -398,9 +491,10 @@ class PtzAttentionController:
                 capture = governed.capture_evidence or {}
                 previous_capture = existing.intent.capture_evidence if existing else None
                 reason = freshness.reason if freshness.age_seconds is None else ""
-                if governed.target is None or governed.target.bbox01 is not None:
+                if ((governed.target is None or governed.target.bbox01 is not None)
+                        and not (profile.panorama_element_id and governed.group_member_event_ids is not None)):
                     reason = "mapped_target_required"
-                if existing and not existing.open:
+                if existing and not existing.open and not existing.observation_expired:
                     reason = "closed_tracking_event"
                 if previous_capture and (
                     capture.get("capture_instance") != previous_capture.get("capture_instance")
@@ -413,16 +507,26 @@ class PtzAttentionController:
                     reason = "non_increasing_capture_timestamp"
                 if reason:
                     if existing:
-                        existing.following_view = None
-                        existing.following_confirmed = False
+                        existing.invalidate_following(reason)
                     self._record(profile, runtime, action="intent_ignored", reason=reason, intent=governed)
                     return
                 observation_age = max(observation_age, freshness.age_seconds)
             observed_monotonic = now - observation_age
-            if governed.lifecycle != "close" and observation_age >= profile.stale_timeout_seconds:
+            observation_timeout = (min(profile.stale_timeout_seconds, profile.follow_observation_timeout_seconds)
+                if profile.follow_view_updates and effective_mode(profile) == "live_panorama"
+                else profile.stale_timeout_seconds)
+            if governed.lifecycle != "close" and observation_age >= observation_timeout:
                 if existing and profile.follow_view_updates:
-                    existing.following_view = None
-                    existing.following_confirmed = False
+                    existing.invalidate_following("observation_expired")
+                elif existing:
+                    existing.framing_continuity.interrupt("observation_expired")
+                elif profile.follow_view_updates and governed.lifecycle == "open":
+                    self._prune_events(runtime, now=now, stale_timeout=profile.stale_timeout_seconds)
+                    if len(runtime.events) < _MAX_EVENTS_PER_DEVICE:
+                        runtime.events[governed.key] = _TrackedEvent(
+                            intent=governed, resolved=None, opened_monotonic=now,
+                            last_seen_monotonic=observed_monotonic, closed_monotonic=now,
+                            observation_expired=True)
                 self._record(
                     profile,
                     runtime,
@@ -432,8 +536,32 @@ class PtzAttentionController:
                 )
                 return
 
+            if existing and governed.lifecycle != "close" and governed.group_member_event_ids is not None:
+                # Retain newly requested members without rewriting the last qualified position held in grace.
+                existing.expected_group_member_event_ids = governed.group_member_event_ids
+            group_lost = not governed.group_framing_complete
+            if existing and existing.resolved is not None and existing.intent.group_framing and governed.lifecycle != "close":
+                from toposync_ext_cameras.panorama_navigation import group_framing_update_valid
+                group_lost = group_lost or not group_framing_update_valid(existing.intent.group_framing.model_dump(mode="json"),
+                    governed.group_framing.model_dump(mode="json") if governed.group_framing else None)
+            if (profile.follow_view_updates and governed.lifecycle != "close" and existing and existing.resolved is not None
+                    and (existing.intent.group_framing is not None or (
+                        existing.intent.framing_observation is not None and existing.intent.framing_observation.panorama is not None))
+                    and (group_lost or (governed.group_framing is None
+                        and (governed.framing_observation is None or governed.framing_observation.panorama is None)))):
+                # Keep the last complete intent through grace; a ground point cannot reacquire a framed subject.
+                existing.invalidate_following("following_framing_unavailable")
+                if existing.open:
+                    existing.closed_monotonic = now
+                    existing.observation_expired = True
+                self._record(profile, runtime, action="intent_rejected",
+                             reason="following_framing_unavailable", intent=governed)
+                await self._evaluate(profile, runtime, now)
+                return
+
             if governed.lifecycle == "update":
-                if existing is None or not existing.open:
+                recovering_observation = bool(profile.follow_view_updates and existing and existing.observation_expired)
+                if existing is None or (not existing.open and not recovering_observation):
                     self._record(
                         profile,
                         runtime,
@@ -442,14 +570,32 @@ class PtzAttentionController:
                         intent=governed,
                     )
                     return
-                if profile.follow_view_updates:
+                if existing.resolved is None:
+                    # An observed event can enter the valid region after its initial rejection.
+                    if governed.target is None and not (profile.panorama_element_id and governed.group_member_event_ids is not None):
+                        self._record(profile, runtime, action="intent_ignored",
+                                     reason="target_missing_or_invalid", intent=governed)
+                        return
+                elif profile.follow_view_updates and not recovering_observation:
                     await self._follow_update(profile, runtime, existing, governed, observed_monotonic)
                     return
-                existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
-                existing.intent = governed.model_copy(update={"target": existing.intent.target})
-                return
+                elif not recovering_observation:
+                    if profile.panorama_element_id and not governed.group_framing_complete:
+                        self._record(profile, runtime, action="intent_rejected", reason="group_framing_unavailable", intent=governed)
+                        return
+                    existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
+                    retained = {"target": existing.intent.target}
+                    if existing.intent.group_member_event_ids is not None:
+                        # With following disabled, updates keep the original qualified target and its evidence.
+                        retained.update(group_member_event_ids=existing.intent.group_member_event_ids,
+                            group_framing=existing.intent.group_framing, framing_observation=existing.intent.framing_observation)
+                    existing.intent = governed.model_copy(update=retained)
+                    existing.framing_continuity.observe(existing.intent.framing_observation, profile, self._clock())
+                    return
 
             if governed.lifecycle == "close":
+                if existing is not None:
+                    existing.observation_expired = False
                 if existing is None or not existing.open:
                     self._record(
                         profile,
@@ -461,6 +607,7 @@ class PtzAttentionController:
                     return
                 existing.last_seen_monotonic = now
                 existing.closed_monotonic = now
+                existing.framing_continuity.interrupt("event_closed")
                 self._record(
                     profile,
                     runtime,
@@ -471,12 +618,15 @@ class PtzAttentionController:
                 await self._evaluate(profile, runtime, now)
                 return
 
-            if existing is not None and existing.open:
+            if existing is not None and existing.open and existing.resolved is not None:
+                if profile.follow_view_updates and governed.group_framing is not None:
+                    await self._follow_update(profile, runtime, existing, governed, observed_monotonic)
+                    return
                 existing.last_seen_monotonic = max(existing.last_seen_monotonic, observed_monotonic)
                 return
 
             self._prune_events(runtime, now=now, stale_timeout=profile.stale_timeout_seconds)
-            if len(runtime.events) >= _MAX_EVENTS_PER_DEVICE:
+            if governed.key not in runtime.events and len(runtime.events) >= _MAX_EVENTS_PER_DEVICE:
                 self._record(
                     profile,
                     runtime,
@@ -486,19 +636,27 @@ class PtzAttentionController:
                 )
                 return
 
-            resolved = await self._resolve(profile, governed)
+            resolved, resolution_reason = await self._resolve(profile, governed)
             if resolved is None:
-                reason = (
-                    "target_resolver_unavailable"
-                    if not self.has_service("cameras.views.resolve_target")
-                    else "target_unresolved"
-                )
-                if effective_mode(profile) in {"live_preset", "live_panorama"}:
+                reason = resolution_reason
+                live = effective_mode(profile) in {"live_preset", "live_panorama"}
+                outside_region = reason in {"target_outside_attention_region", "outside_validated_region"}
+                if live and not outside_region and reason != "group_framing_unavailable":
                     await self._fault(profile, runtime, reason, intent=governed)
                 else:
-                    self._record(
-                        profile, runtime, action="shadow_blocked", reason=reason, intent=governed
-                    )
+                    if existing is None or runtime.active_key != governed.key:
+                        runtime.events[governed.key] = _TrackedEvent(
+                            intent=governed, resolved=None, opened_monotonic=now,
+                            last_seen_monotonic=observed_monotonic, resolution_reason=reason,
+                        )
+                    if existing is None or existing.resolution_reason != reason:
+                        self._record(
+                            profile, runtime, action="intent_rejected" if live else "shadow_blocked",
+                            reason=reason, intent=governed
+                        )
+                    if existing is not None and runtime.active_key == governed.key:
+                        # Grace still refers to the last qualified position.
+                        existing.resolution_reason = reason
                 return
 
             if resolved.panorama is None and resolved.view_id not in profile.eligible_view_ids:
@@ -526,7 +684,15 @@ class PtzAttentionController:
                 resolved=resolved,
                 opened_monotonic=now,
                 last_seen_monotonic=observed_monotonic,
+                candidate_received_monotonic=now,
             )
+            runtime.events[governed.key].framing_continuity.observe(governed.framing_observation, profile, self._clock())
+            if existing and existing.observation_expired and runtime.active_key == governed.key and runtime.state == "GRACE":
+                # Fresh reacquisition must pass confirmation again; being held
+                # after a lost observation is not a verified arrival.
+                runtime.active_key = ""
+                runtime.grace_deadline_monotonic = None
+                self._set_state(runtime, "CANDIDATE", now)
             self._record(
                 profile,
                 runtime,
@@ -542,10 +708,13 @@ class PtzAttentionController:
         profile = self._require_profile(profile_id)
         runtime = self._runtime_for(profile)
         async with self._lock_for(profile.ptz_device_id):
-            if runtime.recovery_required:
-                runtime.fault = _RECOVERY_FAULT
-                self._set_state(runtime, "FAULT", self._clock())
-                raise RuntimeError("return_home_required")
+            current = self._require_profile(profile_id)
+            if current.ptz_device_id != profile.ptz_device_id:
+                raise RuntimeError("profile_changed")
+            profile, runtime = current, self._runtime_for(current)
+            if runtime.state == "RETURNING" and (runtime.manual_return_deadline_monotonic is not None or runtime.campaign_finishing):
+                await self._fault(profile, runtime, "manual_return_cancelled")
+                return profile
             paused = profile
             if profile.mode != "paused":
                 paused = profile.model_copy(update={"mode": "paused", "resume_mode": profile.mode})
@@ -560,10 +729,16 @@ class PtzAttentionController:
             runtime.grace_deadline_monotonic = None
             runtime.cooldown_deadline_monotonic = None
             if released:
-                runtime.fault = ""
                 self._clear_command(runtime)
-                self._set_state(runtime, "MANUAL_OVERRIDE", self._clock())
-                self._record(paused, runtime, action="paused", reason="manual_override_requested")
+                if runtime.recovery_required:
+                    # Suspension never certifies home or clears the durable recovery debt.
+                    runtime.fault = runtime.fault or _RECOVERY_FAULT
+                    self._set_state(runtime, "FAULT", self._clock())
+                    self._record(paused, runtime, action="paused", reason="return_home_required")
+                else:
+                    runtime.fault = ""
+                    self._set_state(runtime, "MANUAL_OVERRIDE", self._clock())
+                    self._record(paused, runtime, action="paused", reason="manual_override_requested")
             else:
                 runtime.fault = "pause_cleanup_failed"
                 self._set_state(runtime, "FAULT", self._clock())
@@ -573,15 +748,21 @@ class PtzAttentionController:
 
     async def resume(self, profile_id: str) -> AttentionProfile:
         profile = self._require_profile(profile_id)
-        if profile.mode != "paused":
-            return profile
-        resumed = profile.model_copy(
-            update={"mode": profile.resume_mode or "disabled", "resume_mode": None}
-        )
         runtime = self._runtime_for(profile)
-        async with self._lock_for(resumed.ptz_device_id):
+        async with self._lock_for(profile.ptz_device_id):
+            current = self._require_profile(profile_id)
+            if current.ptz_device_id != profile.ptz_device_id:
+                raise RuntimeError("profile_changed")
+            profile, runtime = current, self._runtime_for(current)
+            if await self._expire_campaign(profile, runtime):
+                raise RuntimeError("campaign_expired")
+            if runtime.campaign_finishing or self._campaign_return_due(profile, runtime):
+                raise RuntimeError("campaign_finishing")
+            if profile.mode != "paused":
+                return profile
+            resumed = profile.model_copy(update={"mode": profile.resume_mode or "disabled", "resume_mode": None})
             if runtime.recovery_required:
-                runtime.fault = _RECOVERY_FAULT
+                runtime.fault = runtime.fault or _RECOVERY_FAULT
                 self._set_state(runtime, "FAULT", self._clock())
                 raise RuntimeError("return_home_required")
             if runtime.lease_id:
@@ -603,12 +784,27 @@ class PtzAttentionController:
         profile_id: str,
         *,
         reason: str = "manual_return_home",
+        allow_expired_recovery: bool = False,
     ) -> bool:
         profile = self._require_profile(profile_id)
         runtime = self._runtime_for(profile)
         async with self._lock_for(profile.ptz_device_id):
+            current = self._require_profile(profile_id)
+            if current.ptz_device_id != profile.ptz_device_id:
+                raise RuntimeError("profile_changed")
+            profile, runtime = current, self._runtime_for(current)
+            expired = await self._expire_campaign(profile, runtime)
+            if expired:
+                if not allow_expired_recovery:
+                    self._record(profile, runtime, action="return_home_blocked", reason="campaign_expired")
+                    return False
+                profile = self._require_profile(profile_id)
+                if runtime.state == "RETURNING" and runtime.manual_return_deadline_monotonic is not None:
+                    return True
+                # An explicit recovery has its own bounded lease, never a renewed campaign.
+                runtime.manual_return_deadline_monotonic = self._monotonic_clock() + profile.settle_timeout_seconds
             if runtime.recovery_required and effective_mode(profile) not in {"live_preset", "live_panorama"}:
-                runtime.fault = _RECOVERY_FAULT
+                runtime.fault = runtime.fault or _RECOVERY_FAULT
                 self._set_state(runtime, "FAULT", self._clock())
                 self._record(
                     profile,
@@ -627,6 +823,7 @@ class PtzAttentionController:
                 runtime,
                 self._monotonic_clock(),
                 reason=reason,
+                manual_recovery=expired,
             )
 
     def status(self, *, profile_id: str = "", ptz_device_id: str = "") -> list[DeviceStatus]:
@@ -658,6 +855,16 @@ class PtzAttentionController:
                     ),
                     active_view_id=(active.resolved.view_id if active and active.resolved else ""),
                     active_target=(active.resolved.panorama.model_dump(mode="json") if active and active.resolved and active.resolved.panorama else None),
+                    observed_framing=framing_status(active.intent.framing_observation if active else None, profile, wall_now,
+                        continuity=active.framing_continuity if active else None,
+                        arrival_geometry=active.arrival_geometry if (active and active.open
+                            and not active.observation_expired and runtime.state == "FOCUSED"
+                            and profile.mode == "live_panorama"
+                            and (active.expected_group_member_event_ids is None or (
+                                active.intent.framing_observation is not None
+                                and active.expected_group_member_event_ids == active.intent.framing_observation.member_event_ids))) else None),
+                    following_framing=self._following_framing(runtime, wall_now),
+                    estimated_group_framing=group_framing_status(active.intent.group_framing if active else None, wall_now),
                     active_priority=(active.intent.priority if active else None),
                     candidate_event_key=runtime.candidate_key,
                     candidate_preset_token=(
@@ -683,6 +890,10 @@ class PtzAttentionController:
                     last_heartbeat_at=runtime.last_heartbeat_at,
                     movements_last_minute=len(runtime.movement_times),
                     paused=profile.mode == "paused",
+                    campaign_expired=runtime.campaign_expired or (
+                        profile.campaign_ends_at is not None and self._campaign_remaining(profile, runtime) <= 0),
+                    campaign_finishing=runtime.campaign_finishing or (
+                        profile.mode == "paused" and self._campaign_return_due(profile, runtime)),
                     fault=runtime.fault,
                 )
             )
@@ -747,6 +958,9 @@ class PtzAttentionController:
         async with self._lock_for(device_id):
             existing = self.store.get_profile_by_device(device_id)
             runtime = self._devices.get(device_id)
+            if (existing is not None and existing.campaign_ends_at is not None
+                    and await self._expire_campaign(existing, self._runtime_for(existing))):
+                return self._require_profile(existing.id)
             if existing is not None and existing.operator_managed:
                 if (
                     existing.source_id != config.source_id
@@ -783,6 +997,7 @@ class PtzAttentionController:
                 name=f"PTZ operator {config.camera_id}",
                 mode="shadow" if config.preview_follow_views else "live_preset",
                 follow_view_updates=config.preview_follow_views,
+                campaign_ends_at=existing.campaign_ends_at if existing else None,
                 camera_id=config.camera_id,
                 source_id=config.source_id,
                 ptz_device_id=config.camera_id,
@@ -830,7 +1045,7 @@ class PtzAttentionController:
                 runtime = self._devices.get(device_id)
                 if runtime is None:
                     continue
-                if runtime.lease_id:
+                if runtime.lease_id or runtime.capture_owner_id:
                     released = await self._stop_and_release(
                         runtime,
                         profile=profiles_by_device[device_id],
@@ -873,10 +1088,89 @@ class PtzAttentionController:
         )
         self.events.publish({"type": "decision", "decision": record.public_payload()})
 
+    def _campaign_remaining(self, profile: AttentionProfile, runtime: _DeviceRuntime) -> float | None:
+        if profile.campaign_ends_at is None:
+            return None
+        remaining = profile.campaign_ends_at - self._clock()
+        if runtime.campaign_deadline_monotonic is None:
+            runtime.campaign_deadline_monotonic = self._monotonic_clock() + max(0.0, remaining)
+        return min(remaining, runtime.campaign_deadline_monotonic - self._monotonic_clock())
+
+    async def _expire_campaign(self, profile: AttentionProfile, runtime: _DeviceRuntime) -> bool:
+        remaining = self._campaign_remaining(profile, runtime)
+        if remaining is None or remaining > 0:
+            return False
+        if runtime.campaign_expired:
+            return True
+        paused = profile
+        if profile.mode != "paused":
+            paused = profile.model_copy(update={"mode": "paused", "resume_mode": profile.mode})
+            self.store.replace_profile(paused)
+        runtime.campaign_expired = True
+        position_unknown = self._position_may_require_recovery(runtime, profile=profile)
+        if position_unknown:
+            self._mark_recovery_required(runtime, reason="campaign_expired_recovery_required")
+        released = await self._stop_and_release(runtime, profile=paused, emergency=True)
+        if not released and not position_unknown:
+            self._mark_recovery_required(runtime, reason="campaign_expired_recovery_required")
+        self._end_session(runtime, outcome="campaign_expired")
+        runtime.events.clear()
+        runtime.active_key = runtime.candidate_key = ""
+        runtime.grace_deadline_monotonic = runtime.cooldown_deadline_monotonic = None
+        if released:
+            self._clear_command(runtime)
+        runtime.fault = "campaign_expired_recovery_required" if runtime.recovery_required else ""
+        self._set_state(runtime, "FAULT" if runtime.recovery_required else "MANUAL_OVERRIDE", self._clock())
+        self._record(paused, runtime, action="campaign_expired", reason="campaign_expired",
+            details={"campaign_ends_at": profile.campaign_ends_at, "cleanup_confirmed": released,
+                     "recovery_required": runtime.recovery_required})
+        return True
+
+    def _campaign_return_due(self, profile: AttentionProfile, runtime: _DeviceRuntime) -> bool:
+        remaining = self._campaign_remaining(profile, runtime)
+        return remaining is not None and 0 < remaining <= profile.settle_timeout_seconds + self._tick_interval_seconds
+
+    async def _finish_campaign(self, profile: AttentionProfile, runtime: _DeviceRuntime) -> bool:
+        if (profile.mode in {"paused", "disabled"} or runtime.state in {"FAULT", "MANUAL_OVERRIDE"}
+                or not self._campaign_return_due(profile, runtime)):
+            return False
+        paused = profile.model_copy(update={"mode": "paused", "resume_mode": profile.mode})
+        self.store.replace_profile(paused)
+        runtime.campaign_finishing = True
+        runtime.events.clear()
+        runtime.candidate_key = ""
+        self._record(paused, runtime, action="campaign_finishing", reason="campaign_return_window",
+            details={"campaign_ends_at": profile.campaign_ends_at,
+                     "remaining_seconds": self._campaign_remaining(profile, runtime)})
+        if runtime.state == "RETURNING":
+            return True
+        if runtime.session_id or runtime.state in {"ACQUIRING", "FOLLOWING", "FOCUSED", "GRACE"}:
+            await self._begin_return(paused, runtime, self._monotonic_clock(), reason="campaign_return_window")
+        else:
+            released = await self._stop_and_release(runtime, profile=paused, emergency=True)
+            runtime.active_key = ""
+            if released:
+                self._clear_command(runtime)
+                self._set_state(runtime, "MANUAL_OVERRIDE", self._clock())
+            else:
+                self._mark_recovery_required(runtime, reason="campaign_finish_cleanup_failed")
+                runtime.fault = "campaign_finish_cleanup_failed"
+                self._set_state(runtime, "FAULT", self._clock())
+                self._record(paused, runtime, action="fault", reason=runtime.fault)
+        return True
+
     async def _evaluate(
         self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float
     ) -> None:
+        if runtime.state == "RETURNING" and runtime.manual_return_deadline_monotonic is not None:
+            if now >= runtime.manual_return_deadline_monotonic:
+                await self._fault(profile, runtime, "manual_return_timeout")
+                return
+        elif await self._expire_campaign(profile, runtime):
+            return
         if runtime.state == "FAULT":
+            return
+        if await self._finish_campaign(profile, runtime):
             return
         if profile.mode == "paused":
             if runtime.state == "RETURNING":
@@ -903,12 +1197,12 @@ class PtzAttentionController:
             return
         if profile.panorama_element_id and runtime.active_key:
             active = runtime.events.get(runtime.active_key)
-            current = await self._resolve(profile, active.intent) if active else None
+            current, _ = await self._resolve(profile, active.intent) if active else (None, "")
             if (current is None or active.resolved is None or current.panorama is None or active.resolved.panorama is None
-                    or current.panorama.model_dump(exclude={"ray"}) != active.resolved.panorama.model_dump(exclude={"ray"})):
+                    or current.panorama.model_dump(exclude={"ray", "framing", "group_framing"}) != active.resolved.panorama.model_dump(exclude={"ray", "framing", "group_framing"})):
                 await self._fault(profile, runtime, "panorama_reference_changed")
                 return
-        if profile.follow_view_updates:
+        if profile.follow_view_updates and effective_mode(profile) == "shadow":
             try:
                 snapshot = await self.services.call(
                     "cameras.control.snapshot", ptz_device_id=profile.ptz_device_id,
@@ -921,13 +1215,28 @@ class PtzAttentionController:
                 await self._fault(profile, runtime, "control_snapshot_invalid")
                 return
             if snapshot.get("active_lease") is not None or snapshot.get("state") == "manual_override":
-                self._enter_manual_override(profile, runtime, "other_controller_active", now=now)
+                await self._enter_manual_override(profile, runtime, "other_controller_active", now=now)
                 return
         if effective_mode(profile) in {"live_preset", "live_panorama"} and runtime.lease_id:
             await self._renew_if_due(profile, runtime, now)
             if runtime.state == "FAULT":
                 return
-        if runtime.state in {"ACQUIRING", "RETURNING"}:
+        if runtime.state in {"ACQUIRING", "FOLLOWING", "RETURNING"}:
+            if runtime.state in {"ACQUIRING", "FOLLOWING"} and profile.follow_view_updates and effective_mode(profile) == "live_panorama":
+                active = runtime.events.get(runtime.active_key)
+                best = self._best_event(runtime)
+                expired = active is None or not active.open or (
+                    now - active.last_seen_monotonic >= profile.follow_observation_timeout_seconds)
+                preempt = bool(active and best and best.intent.priority > active.intent.priority
+                    and now - best.opened_monotonic >= profile.candidate_confirm_seconds)
+                if expired or preempt:
+                    if not await self._stop_following_move(profile, runtime, now):
+                        return
+                    if preempt:
+                        await self._begin_focus(profile, runtime, best, now, reason="higher_priority")
+                        return
+                    await self._expire_following_observation(profile, runtime, now)
+                    return
             if effective_mode(profile) in {"live_preset", "live_panorama"}:
                 await self._observe_move(profile, runtime, now)
             return
@@ -953,9 +1262,33 @@ class PtzAttentionController:
             await self._begin_return(profile, runtime, now, reason="max_focus_seconds_elapsed")
             return
 
+        if (profile.mode == "live_panorama" and profile.follow_view_updates
+                and runtime.state in {"IDLE", "CANDIDATE"}
+                and self.has_service("cameras.panorama.attention_response_status")):
+            try:
+                response = await self.services.call("cameras.panorama.attention_response_status",
+                    camera_id=profile.camera_id, source_id=profile.source_id,
+                    composition_id=profile.composition_id, element_id=profile.panorama_element_id,
+                    home_target=profile.home_target.model_dump())
+                if response.get("preparation_required") is True:
+                    self._trim_movements(runtime, now)
+                    if len(runtime.movement_times) < profile.max_movements_per_minute:
+                        runtime.movement_times.append(now)
+                        await self._begin_return(profile, runtime, now,
+                            reason="tracking_response_preparation", prepare_response=True)
+                    return
+            except Exception:
+                await self._fault(profile, runtime, "response_preparation_unavailable")
+                return
+
         for tracked in runtime.events.values():
-            if tracked.open and now - tracked.last_seen_monotonic >= profile.stale_timeout_seconds:
+            timeout = (min(profile.stale_timeout_seconds, profile.follow_observation_timeout_seconds)
+                       if profile.follow_view_updates and effective_mode(profile) == "live_panorama"
+                       else profile.stale_timeout_seconds)
+            if tracked.open and now - tracked.last_seen_monotonic >= timeout:
                 tracked.closed_monotonic = now
+                tracked.observation_expired = True
+                tracked.framing_continuity.interrupt("observation_expired")
                 self._record(
                     profile,
                     runtime,
@@ -1016,7 +1349,9 @@ class PtzAttentionController:
             if best.intent.key == active.intent.key:
                 if (
                     active.following_view is not None and active.following_confirmed
-                    and (not runtime.movement_times or now - runtime.movement_times[-1] >= profile.min_focus_seconds)
+                    and (not runtime.movement_times or now - runtime.movement_times[-1] >= (
+                        profile.follow_interval_seconds if effective_mode(profile) == "live_panorama"
+                        else profile.min_focus_seconds))
                 ):
                     replacement = replace(active, resolved=active.following_view,
                         following_view=None, following_since=None, following_confirmed=False)
@@ -1105,29 +1440,47 @@ class PtzAttentionController:
         self, profile: AttentionProfile, runtime: _DeviceRuntime, tracked: _TrackedEvent,
         intent: AttentionIntent, observed_monotonic: float,
     ) -> None:
-        resolved = await self._resolve(profile, intent)
+        resolved, resolution_reason = await self._resolve(profile, intent)
         now = self._monotonic_clock()
         if (
             resolved is None or (resolved.panorama is None and resolved.view_id not in profile.eligible_view_ids)
             or resolved.confidence < profile.minimum_target_confidence
             or now - observed_monotonic >= profile.stale_timeout_seconds
         ):
-            tracked.following_view = None
-            tracked.following_confirmed = False
-            self._record(profile, runtime, action="shadow_blocked", reason="following_target_unqualified", intent=intent)
+            tracked.invalidate_following(resolution_reason or "following_target_unqualified")
+            self._record(profile, runtime,
+                         action="intent_rejected" if effective_mode(profile) == "live_panorama" else "shadow_blocked",
+                         reason=resolution_reason or "following_target_unqualified", intent=intent)
             return
-        tracked.last_seen_monotonic = max(tracked.last_seen_monotonic, observed_monotonic)
+        tracked.following_invalid_reason = ""
+        tracked.last_seen_monotonic = (observed_monotonic if intent.group_framing
+            else max(tracked.last_seen_monotonic, observed_monotonic))
         tracked.intent = intent
+        tracked.framing_continuity.observe(intent.framing_observation, profile, self._clock())
+
+        def same_reference(previous: ResolvedTarget | None) -> bool:
+            return bool(
+                previous and previous.panorama and resolved.panorama
+                and previous.panorama.model_dump(exclude={"ray", "framing", "group_framing"}) == resolved.panorama.model_dump(exclude={"ray", "framing", "group_framing"})
+            )
+
         if runtime.active_key != intent.key:
-            if tracked.resolved is None or tracked.resolved.target_key != resolved.target_key:
+            if not same_reference(tracked.resolved) and (
+                tracked.resolved is None or tracked.resolved.target_key != resolved.target_key
+            ):
                 tracked.opened_monotonic = now
             tracked.resolved = resolved
             await self._evaluate(profile, runtime, now)
             return
         if tracked.resolved and resolved.target_key == tracked.resolved.target_key:
+            tracked.resolved = resolved
             tracked.following_view = None
             tracked.following_since = None
             tracked.following_confirmed = False
+        elif same_reference(tracked.following_view):
+            # A moving world target changes its ray every frame, not its calibrated reference.
+            tracked.following_view = resolved
+            tracked.following_confirmed = now - tracked.following_since >= profile.candidate_confirm_seconds
         elif not tracked.following_view or tracked.following_view.target_key != resolved.target_key:
             tracked.following_view = resolved
             tracked.following_since = now
@@ -1136,6 +1489,43 @@ class PtzAttentionController:
                          details={"target": resolved.panorama.model_dump(mode="json")} if resolved.panorama else {"view_id": resolved.view_id})
         else:
             tracked.following_confirmed = now - tracked.following_since >= profile.candidate_confirm_seconds
+        await self._evaluate(profile, runtime, now)
+
+    async def _stop_following_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> bool:
+        task, runtime.navigation_task = runtime.navigation_task, None
+        runtime.navigation_progress = None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        try:
+            for attempt in range(6):
+                snapshot = await self.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
+                    source_id=profile.source_id, refresh_physical=True)
+                if self._snapshot_confirms_other_owner(runtime, snapshot):
+                    await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                    return False
+                if not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True:
+                    raise ValueError("following ownership not verified")
+                if snapshot.get("geometry_safe") is True and snapshot.get("motion_state") == "stable":
+                    return True
+                if attempt < 5:
+                    await asyncio.sleep(.25)
+            raise ValueError("following stop not verified")
+        except Exception:
+            await self._fault(profile, runtime, "following_stop_unconfirmed")
+            return False
+        return True
+
+    async def _expire_following_observation(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
+        active = runtime.events.get(runtime.active_key)
+        if active is not None and active.open:
+            active.closed_monotonic = now
+            active.observation_expired = True
+            active.framing_continuity.interrupt("observation_expired")
+            self._record(profile, runtime, action="event_stale", reason="following_observation_expired",
+                         intent=active.intent)
+        # Enter grace from a verified stopped position without claiming arrival.
+        self._set_state(runtime, "FOCUSED", now)
         await self._evaluate(profile, runtime, now)
 
     async def _begin_focus(
@@ -1147,6 +1537,10 @@ class PtzAttentionController:
         *,
         reason: str,
     ) -> None:
+        if await self._expire_campaign(profile, runtime):
+            return
+        if await self._finish_campaign(profile, runtime):
+            return
         if tracked.resolved is None:
             return
         self._trim_movements(runtime, now)
@@ -1170,6 +1564,7 @@ class PtzAttentionController:
             and previous.resolved
             and previous.resolved.target_key == tracked.resolved.target_key
         ):
+            tracked.arrival_geometry = deepcopy(previous.arrival_geometry) if runtime.state == "FOCUSED" else None
             runtime.active_key = tracked.intent.key
             runtime.candidate_key = ""
             self._set_state(runtime, "FOCUSED", now)
@@ -1187,25 +1582,19 @@ class PtzAttentionController:
         runtime.active_key = tracked.intent.key
         runtime.candidate_key = ""
         runtime.grace_deadline_monotonic = None
-        runtime.focused_since = None
-        runtime.focused_started_monotonic = None
+        if reason != "follow_view_confirmed":
+            runtime.focused_since = None
+            runtime.focused_started_monotonic = None
         runtime.command_preset = tracked.resolved.preset_token
         runtime.command_target_key = tracked.resolved.target_key
         runtime.movement_times.append(now)
+        tracked.arrival_geometry = None
 
         if effective_mode(profile) == "shadow":
             runtime.focused_since = self._clock()
             runtime.focused_started_monotonic = now
             self._set_state(runtime, "FOCUSED", now)
-            runtime.session_id = self.store.start_session(
-                ptz_device_id=profile.ptz_device_id,
-                profile_id=profile.id,
-                event_key=tracked.intent.key,
-                preset_token=tracked.resolved.preset_token,
-                priority=tracked.intent.priority,
-                recovery_on_restart=False,
-                now=self._clock(),
-            )
+            self._start_session(profile, runtime, tracked.resolved, tracked=tracked)
             self._record(
                 profile,
                 runtime,
@@ -1229,19 +1618,49 @@ class PtzAttentionController:
             return
         try:
             await self._ensure_lease(profile, runtime, now)
-            runtime.session_id = self.store.start_session(
-                ptz_device_id=profile.ptz_device_id,
-                profile_id=profile.id,
-                event_key=tracked.intent.key,
-                preset_token=tracked.resolved.preset_token,
-                priority=tracked.intent.priority,
-                now=self._clock(),
-            )
+            if await self._finish_campaign(profile, runtime):
+                return
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
+            runtime.command_event_key = tracked.intent.key
+            runtime.command_started_monotonic = None
+            runtime.navigation_progress = None
+            self._start_session(profile, runtime, tracked.resolved, tracked=tracked)
+            runtime.command_started_monotonic = self._monotonic_clock()
             if tracked.resolved.panorama is not None:
+                options = {}
+                if profile.follow_view_updates or tracked.resolved.panorama.framing is not None:
+                    options["observation_timeout_seconds"] = profile.follow_observation_timeout_seconds
+                if profile.follow_view_updates:
+                    def latest_target():
+                        current = runtime.events.get(tracked.intent.key)
+                        if (current is None or not current.open
+                                or self._monotonic_clock() - current.last_seen_monotonic
+                                > profile.follow_observation_timeout_seconds):
+                            raise RuntimeError("following_observation_expired")
+                        if current.following_invalid_reason:
+                            raise RuntimeError("following_target_unqualified")
+                        destination = current.following_view or current.resolved
+                        if destination is None or destination.panorama is None:
+                            raise RuntimeError("following_target_unqualified")
+                        return destination.panorama.model_dump(mode="json")
+                    options["target_provider"] = latest_target
+                    submitted_command = runtime.command_id
+                    def progress_observer(value):
+                        if runtime.command_id == submitted_command and runtime.command_event_key == tracked.intent.key:
+                            if not isinstance(value, dict) or self._following_framing(runtime, self._clock(), value) is None:
+                                return
+                            previous = (runtime.navigation_progress or {}).get("evidence", {}).get("capture_evidence")
+                            capture = value["evidence"]["capture_evidence"]
+                            if previous and (any(capture.get(key) != previous.get(key) for key in ("capture_instance", "generation"))
+                                    or capture.get("sequence", 0) <= previous.get("sequence", 0)):
+                                return
+                            runtime.navigation_progress = deepcopy(value)
+                            self._navigation_finished.set()
+                    options["progress_observer"] = progress_observer
                 runtime.navigation_task = asyncio.create_task(self.services.call(
                     "cameras.panorama.navigate_attention", destination=tracked.resolved.panorama.model_dump(mode="json"),
-                    lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id))
+                    lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, **options))
+                runtime.navigation_task.add_done_callback(lambda _: self._navigation_finished.set())
                 runtime.settle_deadline = now + profile.settle_timeout_seconds
                 self._set_state(runtime, "ACQUIRING", now)
                 self._record(profile, runtime, action="move_submitted", reason=reason, intent=tracked.intent,
@@ -1269,6 +1688,8 @@ class PtzAttentionController:
                 preset_token=tracked.resolved.preset_token,
                 details={"command_id": runtime.command_id},
             )
+        except _CampaignExpiredError:
+            await self._expire_campaign(profile, runtime)
         except _CommandOwnershipStaleError:
             await self._reconcile_stale_command_ownership(
                 profile,
@@ -1276,13 +1697,15 @@ class PtzAttentionController:
                 now=now,
             )
         except _LeaseOwnershipLostError:
-            self._enter_manual_override(
+            await self._enter_manual_override(
                 profile,
                 runtime,
                 "lease_lost_before_move",
                 now=now,
             )
         except Exception:
+            if await self._expire_campaign(profile, runtime):
+                return
             _LOGGER.debug(
                 "PTZ Attention focus move failed for profile=%s",
                 profile.id,
@@ -1297,7 +1720,11 @@ class PtzAttentionController:
         now: float,
         *,
         reason: str,
+        manual_recovery: bool = False,
+        prepare_response: bool = False,
     ) -> bool:
+        if not manual_recovery and await self._expire_campaign(profile, runtime):
+            return False
         task, runtime.navigation_task = runtime.navigation_task, None
         if task is not None:
             task.cancel()
@@ -1359,23 +1786,21 @@ class PtzAttentionController:
             await self._fault(profile, runtime, f"live_services_missing: {', '.join(missing)}")
             return False
         try:
-            await self._ensure_lease(profile, runtime, now)
-            if not runtime.session_id:
-                runtime.session_id = self.store.start_session(
-                    ptz_device_id=profile.ptz_device_id,
-                    profile_id=profile.id,
-                    event_key="__return_home__",
-                    preset_token=resolved.preset_token,
-                    priority=0,
-                    now=self._clock(),
-                )
+            await self._ensure_lease(profile, runtime, now, manual_recovery=manual_recovery)
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
+            runtime.command_event_key = "__prepare_response__" if prepare_response else "__return_home__"
+            runtime.command_started_monotonic = None
+            if not runtime.session_id:
+                self._start_session(profile, runtime, resolved)
+            runtime.command_started_monotonic = self._monotonic_clock()
             runtime.command_preset = resolved.preset_token
             runtime.command_target_key = resolved.target_key
             if resolved.panorama is not None:
                 runtime.navigation_task = asyncio.create_task(self.services.call(
                     "cameras.panorama.navigate_attention", destination=resolved.panorama.model_dump(mode="json"),
-                    lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, returning=True))
+                    lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, returning=True,
+                    **({"prepare_response": True} if prepare_response else {})))
+                runtime.navigation_task.add_done_callback(lambda _: self._navigation_finished.set())
                 runtime.settle_deadline = now + profile.settle_timeout_seconds
                 self._set_state(runtime, "RETURNING", now)
                 self._record(profile, runtime, action="return_home_submitted", reason=reason,
@@ -1403,6 +1828,12 @@ class PtzAttentionController:
                 details={"view_id": resolved.view_id, "command_id": runtime.command_id},
             )
             return True
+        except _CampaignExpiredError:
+            if manual_recovery:
+                await self._fault(profile, runtime, "manual_return_timeout")
+            else:
+                await self._expire_campaign(profile, runtime)
+            return False
         except _CommandOwnershipStaleError:
             await self._reconcile_stale_command_ownership(
                 profile,
@@ -1411,7 +1842,7 @@ class PtzAttentionController:
             )
             return False
         except _LeaseOwnershipLostError:
-            self._enter_manual_override(
+            await self._enter_manual_override(
                 profile,
                 runtime,
                 "lease_lost_before_return",
@@ -1419,6 +1850,8 @@ class PtzAttentionController:
             )
             return False
         except Exception:
+            if not manual_recovery and await self._expire_campaign(profile, runtime):
+                return False
             _LOGGER.debug(
                 "PTZ Attention return home failed for profile=%s",
                 profile.id,
@@ -1465,7 +1898,7 @@ class PtzAttentionController:
             return
         if not self._snapshot_owns_lease(runtime, snapshot):
             if self._snapshot_confirms_other_owner(runtime, snapshot):
-                self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
             elif self._snapshot_confirms_not_owned(runtime, snapshot):
                 await self._fault(profile, runtime, "lease_lost_without_owner")
             return
@@ -1500,7 +1933,8 @@ class PtzAttentionController:
             return
         await self._complete_move(profile, runtime, now)
 
-    async def _complete_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
+    async def _complete_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float,
+                             *, visual_evidence: dict | None = None) -> None:
         if runtime.state == "RETURNING":
             released = await self._stop_and_release(runtime, profile=profile, emergency=False)
             if not released:
@@ -1516,6 +1950,13 @@ class PtzAttentionController:
                     details={"cleanup_confirmed": False},
                 )
                 return
+            if runtime.session_id:
+                self.store.update_session(runtime.session_id, details={"return_verified": True})
+            if runtime.command_event_key == "__prepare_response__":
+                self._record(profile, runtime, action="response_prepared", reason="local_probe_and_return_verified",
+                    details={"response": visual_evidence.get("response_preparation"),
+                             "return_measurement": visual_evidence.get("measurement"),
+                             "image_url": visual_evidence.get("image_url")})
             self._end_session(runtime, outcome="returned_home")
             self._clear_command(runtime)
             self._set_cooldown(runtime, now=now, seconds=profile.cooldown_seconds)
@@ -1530,8 +1971,12 @@ class PtzAttentionController:
         if tracked is None or tracked.resolved is None:
             await self._fault(profile, runtime, "active_event_missing_after_move")
             return
-        runtime.focused_since = self._clock()
-        runtime.focused_started_monotonic = now
+        if runtime.focused_started_monotonic is None:
+            runtime.focused_since = self._clock()
+            runtime.focused_started_monotonic = now
+        geometry = visual_evidence.get("frame_geometry") if visual_evidence else None
+        tracked.arrival_geometry = deepcopy(geometry) if (isinstance(geometry, dict)
+            and geometry.get("capture_evidence") == visual_evidence.get("capture_evidence")) else None
         self._set_state(runtime, "FOCUSED", now)
         if not runtime.session_id:
             await self._fault(profile, runtime, "focus_session_missing_after_move")
@@ -1543,7 +1988,65 @@ class PtzAttentionController:
             reason="command_accepted_and_camera_settled",
             intent=tracked.intent,
             preset_token=tracked.resolved.preset_token,
+            details={
+                "command_to_arrival_ms": (
+                    max(0.0, now - runtime.command_started_monotonic) * 1000
+                    if runtime.command_started_monotonic is not None else None
+                ),
+                "arrival_source_id": profile.source_id,
+                "arrival_evidence": "visual" if tracked.resolved.panorama else "preset_pose",
+                **({"framing_projection": visual_evidence.get("framing_projection"),
+                    "group_framing_projection": visual_evidence.get("group_framing_projection"),
+                    "arrival_image_url": visual_evidence.get("image_url")} if visual_evidence is not None else {}),
+            },
         )
+
+    def _following_framing(self, runtime: _DeviceRuntime, wall_now: float, value: dict | None = None) -> dict | None:
+        value = runtime.navigation_progress if value is None else value
+        if (runtime.state not in {"ACQUIRING", "FOLLOWING"} or runtime.navigation_task is None
+                or not isinstance(value, dict) or value.get("command_id") != runtime.command_id
+                or value.get("lease_id") != runtime.lease_id or value.get("fence") != runtime.fence):
+            return None
+        evidence = value.get("evidence", {})
+        if not isinstance(evidence, dict) or not isinstance(evidence.get("measurement"), dict):
+            return None
+        capture = evidence.get("capture_evidence")
+        freshness = resolve_frame_freshness(Packet.create(stream_id=runtime.command_id,
+            payload={"capture_evidence": capture}), now_unix=wall_now)
+        error = evidence.get("measurement", {}).get("center_error_pixels")
+        geometry = evidence.get("frame_geometry")
+        if (evidence.get("kind") != "visual_following_progress" or evidence.get("arrival_verified") is not False
+                or evidence.get("stop_confirmed") is not False or evidence.get("subject_visibility_verified") is not False
+                or freshness.age_seconds is None or not 0 <= freshness.age_seconds <= 1
+                or not isinstance(geometry, dict) or not capture or geometry.get("capture_evidence") != capture
+                or type(error) not in (float, int) or not math.isfinite(error) or error < 0):
+            return None
+        tracked = runtime.events.get(runtime.active_key)
+        if tracked is None or not tracked.open or tracked.resolved is None or tracked.resolved.panorama is None:
+            return None
+        destination = value.get("destination", {})
+        if not isinstance(destination, dict):
+            return None
+        expected = tracked.resolved.panorama.model_dump(exclude={"ray", "framing", "group_framing"})
+        if any(destination.get(key) != val for key, val in expected.items()):
+            return None
+        return {"kind": "projected_framing_during_command", "source_id": destination.get("source_id"),
+            "center_error_pixels": error, "within_center_tolerance": error <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
+            "observation_age_seconds": freshness.age_seconds, "capture_evidence": deepcopy(capture),
+            "arrival_verified": False, "stop_confirmed": False, "subject_visibility_verified": False}
+
+    def _observe_following_progress(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
+        progress = self._following_framing(runtime, self._clock())
+        framed = progress is not None and progress["within_center_tolerance"]
+        if framed and runtime.state != "FOLLOWING":
+            # The original acquisition deadline remains in force. This does not
+            # renew a physical window or replace terminal Stop/arrival checks.
+            self._set_state(runtime, "FOLLOWING", now)
+            self._record(profile, runtime, action="following_framed", reason="projected_during_command",
+                details={**progress, "command_to_progress_ms": max(0., now - runtime.command_started_monotonic) * 1000
+                    if runtime.command_started_monotonic is not None else None})
+        elif not framed and runtime.state == "FOLLOWING":
+            self._set_state(runtime, "ACQUIRING", now)
 
     async def _observe_panorama_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
         task = runtime.navigation_task
@@ -1558,9 +2061,11 @@ class PtzAttentionController:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
                     runtime.navigation_task = None
-                    self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                    await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
                 elif not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True:
                     await self._fault(profile, runtime, "panorama_control_lost")
+                elif runtime.state != "RETURNING":
+                    self._observe_following_progress(profile, runtime, now)
             except Exception:
                 await self._fault(profile, runtime, "control_snapshot_unavailable")
             return
@@ -1573,47 +2078,87 @@ class PtzAttentionController:
                 payload={"capture_evidence": evidence.get("capture_evidence")}), now_unix=self._clock())
             destination = ResolvedTarget(panorama=response["destination"])
             returning = runtime.state == "RETURNING"
+            if freshness.age_seconds is None or not 0 <= freshness.age_seconds <= 1:
+                self._record(profile, runtime, action="arrival_rejected", reason="arrival_observation_expired",
+                    details={"observation_age_seconds": freshness.age_seconds, "freshness_reason": freshness.reason})
+                raise ValueError("arrival_observation_expired")
             if (response.get("command_id") != runtime.command_id
                     or response.get("lease_id") != runtime.lease_id or response.get("fence") != runtime.fence
                     or response.get("stop_confirmed") is not True or response.get("returning") is not returning
-                    or destination.target_key != runtime.command_target_key
+                    or ((not profile.follow_view_updates or returning) and destination.target_key != runtime.command_target_key)
                     or evidence.get("verified") is not True or evidence.get("kind") != "visual_aim_verified"
-                    or type(error) not in (int, float) or not 0 <= error <= (3 if returning else 12)
-                    or freshness.age_seconds is None or not 0 <= freshness.age_seconds <= 1):
+                    or type(error) not in (int, float) or not 0 <= error <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS):
                 raise ValueError("unconfirmed visual arrival")
+            if runtime.command_event_key == "__prepare_response__":
+                prepared = evidence.get("response_preparation", {})
+                if (prepared.get("response_qualified") is not True
+                        or not 1 <= prepared.get("following_pulse_limit_seconds", 0) <= 1.2):
+                    raise ValueError("response_preparation_unconfirmed")
             snapshot = await self.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
                 source_id=profile.source_id, ptz_device_id=profile.ptz_device_id, refresh_physical=False)
             if self._snapshot_confirms_other_owner(runtime, snapshot):
-                self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
                 return
             if (not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True
                     or snapshot.get("geometry_safe") is not True or snapshot.get("motion_state") != "stable"
                     or response.get("motion_epoch") is None or snapshot.get("motion_epoch") != response["motion_epoch"]):
+                self._record(profile, runtime, action="arrival_rejected", reason="arrival_control_not_stopped",
+                    details={key: snapshot.get(key) for key in ("geometry_safe", "motion_state", "motion_epoch", "automation_ready")})
                 raise ValueError("visual arrival no longer owns stopped control")
+            if profile.follow_view_updates and not returning:
+                tracked = runtime.events.get(runtime.active_key)
+                if (tracked is None or tracked.resolved is None
+                        or tracked.resolved.panorama.model_dump(exclude={"ray", "framing", "group_framing"})
+                        != destination.panorama.model_dump(exclude={"ray", "framing", "group_framing"})):
+                    raise ValueError("following reference changed")
+                tracked.resolved = destination
+                runtime.command_target_key = destination.target_key
         except asyncio.CancelledError:
             await self._fault(profile, runtime, "panorama_navigation_cancelled")
             return
-        except Exception:
+        except Exception as failure:
+            detail = getattr(failure, "detail", None)
+            code = detail.get("code") if isinstance(detail, dict) else getattr(failure, "code", None)
+            if (code == "following_observation_expired"
+                    and profile.follow_view_updates and runtime.state in {"ACQUIRING", "FOLLOWING"}):
+                # The navigator can observe expiry between controller ticks.
+                if await self._stop_following_move(profile, runtime, now):
+                    await self._expire_following_observation(profile, runtime, now)
+                return
+            if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code):
+                self._record(profile, runtime, action="arrival_rejected",
+                    reason=code)
             await self._fault(profile, runtime, "panorama_arrival_unconfirmed")
             return
         runtime.navigation_task = None
-        await self._complete_move(profile, runtime, now)
+        await self._complete_move(profile, runtime, now, visual_evidence=evidence)
 
     async def _resolve(
         self, profile: AttentionProfile, intent: AttentionIntent
-    ) -> ResolvedTarget | None:
+    ) -> tuple[ResolvedTarget | None, str]:
+        if profile.panorama_element_id and not intent.group_framing_complete:
+            return None, "group_framing_unavailable"
         if intent.target is None:
-            return None
+            return None, "target_missing_or_invalid"
         if profile.panorama_element_id:
             if intent.preferred_view_id:
-                return None
+                return None, "panorama_preset_target_incompatible"
             anchor = intent.target.world_anchor or (intent.target.world_envelope.center if intent.target.world_envelope else None)
             radius = intent.target.world_envelope.radius_meters if intent.target.world_envelope else 0
-            if anchor is None or not target_in_region(anchor, profile.attention_region, radius):
-                return None
-            return await self._resolve_panorama(profile, intent.target.service_payload())
+            if anchor is None:
+                return None, "mapped_target_required"
+            if not target_in_region(anchor, profile.attention_region, radius):
+                return None, "target_outside_attention_region"
+            target = intent.target.service_payload()
+            if intent.group_framing:
+                if intent.target.world_envelope is None or intent.target.world_envelope.member_count != len(intent.group_framing.members):
+                    return None, "group_member_count_mismatch"
+                target["group_framing"] = intent.group_framing.model_dump(mode="json")
+            elif intent.framing_observation and intent.framing_observation.panorama:
+                target["framing"] = intent.framing_observation.model_dump(mode="json")
+            return await self._resolve_panorama(profile, target)
         if not self.has_service("cameras.views.resolve_target"):
-            return None
+            return None, "target_resolver_unavailable"
         try:
             raw = await self.services.call(
                 "cameras.views.resolve_target",
@@ -1625,35 +2170,43 @@ class PtzAttentionController:
                 preferred_view_id=intent.preferred_view_id or None,
                 eligible_view_ids=profile.eligible_view_ids,
             )
-            return ResolvedTarget.model_validate(raw)
+            return ResolvedTarget.model_validate(raw), ""
         except Exception:
-            return None
+            return None, "target_resolution_failed"
 
-    async def _resolve_panorama(self, profile: AttentionProfile, target: dict) -> ResolvedTarget | None:
+    async def _resolve_panorama(self, profile: AttentionProfile, target: dict) -> tuple[ResolvedTarget | None, str]:
         if not self.has_service("cameras.panorama.resolve_target"):
-            return None
+            return None, "target_resolver_unavailable"
         try:
             raw = await self.services.call("cameras.panorama.resolve_target", camera_id=profile.camera_id,
                 source_id=profile.source_id, composition_id=profile.composition_id,
                 element_id=profile.panorama_element_id, target=target)
-            if not isinstance(raw, dict) or raw.get("status") != "ready":
-                return None
+            if not isinstance(raw, dict):
+                return None, "target_resolution_invalid"
+            if raw.get("status") != "ready":
+                reason = raw.get("reason")
+                # Service codes are useful diagnostics; arbitrary error text may contain credentials.
+                if isinstance(reason, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", reason):
+                    return None, reason
+                return None, "panorama_target_unavailable"
             if any(raw.get(key) != value for key, value in {
                 "camera_id": profile.camera_id, "source_id": profile.source_id,
                 "composition_id": profile.composition_id, "element_id": profile.panorama_element_id,
             }.items()):
-                return None
+                return None, "panorama_target_binding_mismatch"
             if effective_mode(profile) == "live_panorama" and raw.get("attention_qualified") is not True:
-                return None
+                return None, "attention_physical_qualification_required"
             return ResolvedTarget(panorama={key: raw[key] for key in (
                 "camera_id", "source_id", "composition_id", "element_id", "job_id", "revision")}
-                | {"ray": raw["target"]["ray"]}, confidence=0, reason="panorama_mapped")
+                | {"ray": raw["target"]["ray"], "framing": raw["target"].get("framing"),
+                    "group_framing": raw["target"].get("group_framing")}, confidence=0, reason="panorama_mapped"), ""
         except Exception:
-            return None
+            return None, "target_resolution_failed"
 
     async def _resolve_home(self, profile: AttentionProfile) -> ResolvedTarget | None:
         if profile.panorama_element_id:
-            return await self._resolve_panorama(profile, {"world_anchor": profile.home_target.model_dump(exclude_none=True)})
+            resolved, _ = await self._resolve_panorama(profile, {"world_anchor": profile.home_target.model_dump(exclude_none=True)})
+            return resolved
         if not profile.home_view_id or not self.has_service("cameras.views.resolve_target"):
             return None
         try:
@@ -1675,14 +2228,24 @@ class PtzAttentionController:
             return None
 
     async def _ensure_lease(
-        self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float
+        self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float, *, manual_recovery: bool = False,
     ) -> None:
+        def budget_remaining():
+            if manual_recovery and runtime.manual_return_deadline_monotonic is not None:
+                return runtime.manual_return_deadline_monotonic - self._monotonic_clock()
+            return self._campaign_remaining(profile, runtime)
+        remaining = budget_remaining()
+        if remaining is not None and remaining <= 0:
+            raise _CampaignExpiredError("campaign_expired")
         readiness = await self.services.call(
             "cameras.control.snapshot",
             camera_id=profile.camera_id,
             source_id=profile.source_id,
             ptz_device_id=profile.ptz_device_id,
         )
+        remaining = budget_remaining()
+        if remaining is not None and remaining <= 0:
+            raise _CampaignExpiredError("campaign_expired")
         if not isinstance(readiness, dict):
             raise RuntimeError("invalid automation readiness snapshot")
         if str(readiness.get("ptz_device_id") or "") != profile.ptz_device_id:
@@ -1700,6 +2263,12 @@ class PtzAttentionController:
             if self._snapshot_confirms_other_owner(runtime, readiness):
                 raise _LeaseOwnershipLostError("automation lease ownership changed")
             raise RuntimeError("automation lease ownership is unknown")
+        if runtime.capture_owner_id:
+            if not await self._release_session_capture(runtime):
+                raise RuntimeError("previous session capture cleanup failed")
+            remaining = budget_remaining()
+            if remaining is not None and remaining <= 0:
+                raise _CampaignExpiredError("campaign_expired")
         raw = await self.services.call(
             "cameras.control.acquire",
             camera_id=profile.camera_id,
@@ -1710,6 +2279,7 @@ class PtzAttentionController:
             automation_tracking_disabled_confirmed=(
                 profile.same_head_observer_acknowledged
             ),
+            **({"maximum_duration_s": remaining} if remaining is not None else {}),
         )
         if not isinstance(raw, dict):
             raise RuntimeError("invalid lease response")
@@ -1727,6 +2297,45 @@ class PtzAttentionController:
             expires_at_epoch=runtime.lease_expires_at,
             lease_ttl_seconds=profile.lease_ttl_seconds,
         )
+        remaining = budget_remaining()
+        if remaining is not None and remaining <= 0:
+            raise _CampaignExpiredError("campaign_expired")
+
+        if effective_mode(profile) == "live_panorama" and not runtime.capture_owner_id and all(
+            self.has_service(service) for service in ("cameras.capture.open", "cameras.capture.release_owner")
+        ):
+            runtime.capture_owner_id = f"ptz_attention_capture:{lease_id}:{runtime.fence}"
+            runtime.capture_open_task = asyncio.create_task(
+                self._open_session_capture(profile, runtime.capture_owner_id),
+                name=f"ptz-attention-capture:{profile.id}",
+            )
+
+    async def _open_session_capture(self, profile: AttentionProfile, owner_id: str) -> None:
+        try:
+            # Match panorama navigation demand so closing a move does not restart the decoder.
+            await self.services.call(
+                "cameras.capture.open", owner_id=owner_id,
+                camera_id=profile.camera_id, source_id=profile.source_id, fps=12.0,
+            )
+        except Exception:
+            _LOGGER.warning("PTZ attention capture warmup failed for profile=%s", profile.id, exc_info=True)
+
+    async def _release_session_capture(self, runtime: _DeviceRuntime) -> bool:
+        task, runtime.capture_open_task = runtime.capture_open_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if not runtime.capture_owner_id:
+            return True
+        try:
+            result = await self.services.call("cameras.capture.release_owner", owner_id=runtime.capture_owner_id)
+            if not isinstance(result, dict) or result.get("ok") is not True:
+                raise RuntimeError("capture release was not acknowledged")
+        except Exception:
+            _LOGGER.warning("PTZ attention capture cleanup failed for device=%s", runtime.ptz_device_id, exc_info=True)
+            return False
+        runtime.capture_owner_id = ""
+        return True
 
     async def _renew_if_due(
         self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float
@@ -1782,7 +2391,7 @@ class PtzAttentionController:
                 return
             if not self._snapshot_owns_lease(runtime, ownership_snapshot):
                 if self._snapshot_confirms_other_owner(runtime, ownership_snapshot):
-                    self._enter_manual_override(
+                    await self._enter_manual_override(
                         profile,
                         runtime,
                         "lease_lost",
@@ -1824,7 +2433,7 @@ class PtzAttentionController:
             return
         if not self._snapshot_owns_lease(runtime, snapshot):
             if self._snapshot_confirms_other_owner(runtime, snapshot):
-                self._enter_manual_override(profile, runtime, "lease_lost", now=now)
+                await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
             elif self._snapshot_confirms_not_owned(runtime, snapshot):
                 await self._fault(profile, runtime, "lease_lost_without_owner")
             else:
@@ -1842,6 +2451,20 @@ class PtzAttentionController:
             )
 
     async def _stop_and_release(
+        self,
+        runtime: _DeviceRuntime,
+        *,
+        profile: AttentionProfile | None,
+        emergency: bool,
+    ) -> bool:
+        try:
+            released = await self._stop_and_release_control(runtime, profile=profile, emergency=emergency)
+        finally:
+            # Stop is attempted before waiting for capture startup or decoder cleanup.
+            capture_released = await self._release_session_capture(runtime)
+        return released and capture_released
+
+    async def _stop_and_release_control(
         self,
         runtime: _DeviceRuntime,
         *,
@@ -1955,28 +2578,31 @@ class PtzAttentionController:
         )
         released = await self._stop_and_release(runtime, profile=profile, emergency=True)
         if position_unknown or not released:
-            self._mark_recovery_required(runtime, reason=_RECOVERY_FAULT)
+            self._mark_recovery_required(runtime, reason=reason)
         self._end_session(runtime, outcome="fault")
         runtime.fault = str(reason)
-        runtime.events.clear()
-        runtime.active_key = ""
-        runtime.candidate_key = ""
-        runtime.grace_deadline_monotonic = None
-        runtime.focused_since = None
-        runtime.focused_started_monotonic = None
-        if released:
-            self._clear_command(runtime)
+        active = runtime.events.get(runtime.active_key)
         self._set_state(runtime, "FAULT", self._clock())
-        self._record(
-            profile,
-            runtime,
-            action="fault",
-            reason=str(reason),
-            intent=intent,
-            details={"cleanup_confirmed": released},
-        )
+        try:
+            self._record(
+                profile,
+                runtime,
+                action="fault",
+                reason=str(reason),
+                intent=intent or (active.intent if active is not None else None),
+                details={"cleanup_confirmed": released},
+            )
+        finally:
+            runtime.events.clear()
+            runtime.active_key = ""
+            runtime.candidate_key = ""
+            runtime.grace_deadline_monotonic = None
+            runtime.focused_since = None
+            runtime.focused_started_monotonic = None
+            if released:
+                self._clear_command(runtime)
 
-    def _enter_manual_override(
+    async def _enter_manual_override(
         self,
         profile: AttentionProfile,
         runtime: _DeviceRuntime,
@@ -1995,7 +2621,9 @@ class PtzAttentionController:
         runtime.fault = str(reason)
         self._clear_command(runtime)
         self._set_state(runtime, "MANUAL_OVERRIDE", now)
-        self._record(profile, runtime, action="manual_override", reason=str(reason))
+        capture_released = await self._release_session_capture(runtime)
+        self._record(profile, runtime, action="manual_override", reason=str(reason),
+                     details={"capture_cleanup_confirmed": capture_released})
 
     async def _automation_readiness_lost(
         self,
@@ -2098,7 +2726,7 @@ class PtzAttentionController:
             runtime,
             snapshot,
         ):
-            self._enter_manual_override(
+            await self._enter_manual_override(
                 profile,
                 runtime,
                 "lease_lost_during_command",
@@ -2126,7 +2754,7 @@ class PtzAttentionController:
         if profile is not None and effective_mode(profile) not in {"live_preset", "live_panorama"}:
             return False
         return bool(
-            runtime.session_id or runtime.state in {"ACQUIRING", "FOCUSED", "GRACE", "RETURNING"}
+            runtime.session_id or runtime.state in {"ACQUIRING", "FOLLOWING", "FOCUSED", "GRACE", "RETURNING"}
         )
 
     @staticmethod
@@ -2252,6 +2880,8 @@ class PtzAttentionController:
                 state_since=self._clock(),
                 fault=_RECOVERY_FAULT if recovery_required else "",
                 recovery_required=recovery_required,
+                campaign_deadline_monotonic=(self._monotonic_clock() + max(0.0, profile.campaign_ends_at - self._clock())
+                    if profile.campaign_ends_at is not None else None),
             )
             self._devices[profile.ptz_device_id] = runtime
             if recovery_required:
@@ -2321,11 +2951,15 @@ class PtzAttentionController:
         if runtime.navigation_task is not None:
             runtime.navigation_task.cancel()
             runtime.navigation_task = None
+        runtime.navigation_progress = None
         runtime.command_id = ""
+        runtime.command_event_key = ""
         runtime.command_preset = ""
         runtime.command_target_key = ""
+        runtime.command_started_monotonic = None
         runtime.motion_epoch = None
         runtime.settle_deadline = 0.0
+        runtime.manual_return_deadline_monotonic = None
 
     @staticmethod
     def _clear_lease(runtime: _DeviceRuntime) -> None:
@@ -2359,10 +2993,43 @@ class PtzAttentionController:
                 break
             runtime.events.pop(item.intent.key, None)
 
+    def _start_session(
+        self, profile: AttentionProfile, runtime: _DeviceRuntime, target: ResolvedTarget,
+        *, tracked: _TrackedEvent | None = None,
+    ) -> None:
+        now = self._monotonic_clock()
+        mode = effective_mode(profile)
+        details = {"mode": mode, "source_id": profile.source_id, "clock_scope": self._clock_scope,
+                   "timing_clock": "controller_monotonic", "arrival_verified": False, "return_verified": False,
+                   "campaign_ends_at": profile.campaign_ends_at,
+                   "candidate_confirm_seconds": profile.candidate_confirm_seconds}
+        if target.panorama is not None:
+            details["panorama"] = target.panorama.model_dump(mode="json")
+        if mode != "shadow":
+            details["initial_command_id"] = runtime.command_id
+        if tracked is not None:
+            details["initial_event_at"] = tracked.intent.event_at
+            details["initial_received_at"] = tracked.intent.received_at
+            details["initial_capture_evidence"] = tracked.intent.capture_evidence
+            if tracked.candidate_received_monotonic is not None:
+                details["candidate_before_session_ms"] = max(0.0, now - tracked.candidate_received_monotonic) * 1000
+        runtime.session_id = self.store.start_session(
+            ptz_device_id=profile.ptz_device_id, profile_id=profile.id,
+            event_key=tracked.intent.key if tracked is not None else "__return_home__",
+            preset_token=target.preset_token, priority=tracked.intent.priority if tracked is not None else 0,
+            recovery_on_restart=mode != "shadow", details=details, now=self._clock(),
+        )
+        runtime.session_started_monotonic = now
+
     def _end_session(self, runtime: _DeviceRuntime, *, outcome: str) -> None:
         if runtime.session_id:
-            self.store.end_session(runtime.session_id, outcome=outcome, now=self._clock())
+            details = {"state_before_close": runtime.state, "recovery_required": runtime.recovery_required}
+            if runtime.session_started_monotonic is not None:
+                details["session_elapsed_ms"] = max(0.0,
+                    self._monotonic_clock() - runtime.session_started_monotonic) * 1000
+            self.store.end_session(runtime.session_id, outcome=outcome, details=details, now=self._clock())
             runtime.session_id = ""
+            runtime.session_started_monotonic = None
 
     def _record_missing_profile(self, intent: AttentionIntent) -> None:
         record = self.store.record_decision(
@@ -2392,15 +3059,50 @@ class PtzAttentionController:
         details: dict[str, Any] | None = None,
     ) -> None:
         payload = dict(details or {})
+        if runtime is not None and runtime.session_id and action in {
+            "move_submitted", "focus_acquired", "shadow_focus", "return_home_submitted",
+        }:
+            payload.setdefault("session_id", runtime.session_id)
+        tracked = runtime.events.get(intent.key) if runtime is not None and intent is not None else None
+        if tracked is not None and tracked.candidate_received_monotonic is not None:
+            # UPDATE and candidate reconfirmation must not erase time already spent waiting.
+            payload.setdefault("candidate_elapsed_ms", max(0.0,
+                self._monotonic_clock() - tracked.candidate_received_monotonic) * 1000)
+            payload.setdefault("candidate_confirm_seconds", profile.candidate_confirm_seconds)
+            payload.setdefault("timing_clock", "controller_monotonic")
+            if action == "focus_acquired":
+                payload.setdefault("candidate_to_arrival_ms", payload["candidate_elapsed_ms"])
+        if (runtime is not None and runtime.command_started_monotonic is not None
+                and (action in {"fault", "return_home_submitted"}
+                     or (intent is not None and runtime.command_event_key == intent.key))):
+            payload.setdefault("command_id", runtime.command_id)
+            payload.setdefault("command_event_key", runtime.command_event_key)
+            payload.setdefault("command_elapsed_ms", max(0.0,
+                self._monotonic_clock() - runtime.command_started_monotonic) * 1000)
+            payload.setdefault("timing_clock", "controller_monotonic")
         if profile.panorama_element_id:
             payload.pop("view_id", None)
             if reason in {"same_preset", "same_preset_event_remains", "higher_priority_same_preset"}:
                 reason = "same_target"
-            tracked = runtime.events.get(intent.key) if runtime is not None and intent is not None else None
             if tracked is not None and tracked.resolved is not None and tracked.resolved.panorama is not None:
                 payload.setdefault("target", tracked.resolved.panorama.model_dump(mode="json"))
         if intent is not None:
             payload.setdefault("event_type", intent.event_type)
+            if intent.group_member_event_ids is not None:
+                payload.setdefault("group_member_event_ids", list(intent.group_member_event_ids))
+            if intent.group_framing is not None:
+                payload.setdefault("estimated_group_framing", group_framing_status(intent.group_framing, self._clock()))
+            if intent.framing_observation is not None:
+                payload.setdefault("observed_framing", framing_status(intent.framing_observation, profile, self._clock(),
+                    continuity=tracked.framing_continuity if tracked and tracked.intent.framing_observation == intent.framing_observation else None))
+            if intent.target is not None:
+                payload.setdefault("requested_target", intent.target.service_payload())
+            payload.setdefault("event_at", intent.event_at)
+            payload.setdefault("received_at", intent.received_at)
+            payload.setdefault("event_to_decision_ms", max(0.0, self._clock() - intent.event_at) * 1000)
+            payload.setdefault("controller_to_decision_ms", max(0.0, self._clock() - intent.received_at) * 1000)
+        if payload.get("timing_clock") == "controller_monotonic":
+            payload.setdefault("clock_scope", self._clock_scope)
         record = self.store.record_decision(
             ptz_device_id=profile.ptz_device_id,
             profile_id=profile.id,
@@ -2414,6 +3116,12 @@ class PtzAttentionController:
             details=payload,
             now=self._clock(),
         )
+        if action == "focus_acquired" and runtime is not None and runtime.session_id:
+            self.store.update_session(runtime.session_id, details={
+                "arrival_verified": True, "arrival_decision_id": record.id,
+                **{key: payload[key] for key in ("command_to_arrival_ms", "candidate_to_arrival_ms",
+                    "arrival_source_id", "arrival_evidence") if key in payload},
+            })
         self.events.publish({"type": "decision", "decision": record.public_payload()})
 
     def _require_profile(self, profile_id: str) -> AttentionProfile:

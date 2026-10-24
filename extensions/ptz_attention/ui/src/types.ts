@@ -5,6 +5,7 @@ export type AttentionRuntimeState =
   | "IDLE"
   | "CANDIDATE"
   | "ACQUIRING"
+  | "FOLLOWING"
   | "FOCUSED"
   | "GRACE"
   | "RETURNING"
@@ -99,7 +100,10 @@ export type AttentionProfile = {
   name: string;
   mode: AttentionExecutionMode;
   follow_view_updates?: boolean;
+  follow_interval_seconds?: number;
+  follow_observation_timeout_seconds?: number;
   resume_mode?: AttentionResumableMode | null;
+  campaign_ends_at?: number | null;
   camera_id: string;
   source_id: string;
   ptz_device_id: string;
@@ -151,6 +155,8 @@ export type AttentionValidationResponse = {
 };
 
 export type AttentionSession = {
+  campaign_expired?: boolean;
+  campaign_finishing?: boolean;
   follow_view_updates?: boolean;
   ptz_device_id: string;
   profile_id: string;
@@ -159,6 +165,23 @@ export type AttentionSession = {
   active_event_key: string;
   active_view_id: string;
   active_target?: { ray: number[]; revision: number; source_id: string } | null;
+  following_framing?: {
+    kind: "projected_framing_during_command";
+    source_id: string;
+    center_error_pixels: number;
+    within_center_tolerance: boolean;
+    observation_age_seconds: number;
+    arrival_verified: false;
+    stop_confirmed: false;
+    subject_visibility_verified: false;
+  } | null;
+  observed_framing?: {
+    observed_after_arrival?: boolean;
+    publication_age_seconds?: number | null;
+    publication_recent?: boolean;
+    on_selected_source?: boolean;
+    box_with_margin?: boolean;
+  } | null;
   active_priority?: number | null;
   candidate_event_key: string;
   candidate_view_id: string;

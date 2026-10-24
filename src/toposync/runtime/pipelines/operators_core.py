@@ -6,6 +6,7 @@ import math
 import re
 import tempfile
 import time
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -28,6 +29,8 @@ from .runtime import Artifact, Lifecycle, Packet
 from .operators_control import register_control_operators
 from .operators_distributed import register_distributed_operators
 from .operators_gates import register_gate_operators
+from .operators_merge import register_merge_operators
+from .demands import register_demand_operators
 from .operators_sinks import _encode_image_bytes, _write_bytes, register_sink_operators
 
 
@@ -138,6 +141,7 @@ class StationaryEventConfig(BaseModel):
 
 @dataclass(slots=True)
 class _StationaryEventState:
+    occurrence_sequence: int = 0
     first_seen_at: float | None = None
     first_position: tuple[float, float] | None = None
     candidate_since: float | None = None
@@ -762,6 +766,7 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
         self._height = int(parsed.height)
         self._index = 0
         self._next_tick = time.monotonic()
+        self._capture_instance = uuid.uuid4().hex
 
     async def produce(self, context) -> Packet | None:  # noqa: ANN001
         if self._index >= self._frames:
@@ -786,6 +791,10 @@ class DemoFrameSequenceSourceRuntime(SourceOperatorRuntime):
         frame = np.full((self._height, self._width, 3), value, dtype=np.uint8)
         current_ts = time.time()
         payload = {
+            "capture_evidence": {"capture_instance": self._capture_instance, "generation": 0,
+                "sequence": self._index + 1, "published_at": current_ts,
+                "received_monotonic": time.monotonic(), "physical_timestamp_verified": False,
+                "captured_monotonic": None},
             "source": build_source_descriptor(
                 device_id=self._camera_id,
                 source_id="demo",
@@ -1077,6 +1086,8 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         self._state_by_key: dict[tuple[str, str, str], _StationaryEventState] = {}
         self._closed_subjects = ClosedSubjectLedger(capacity=parsed.maximum_subjects)
         self._last_decision_telemetry: dict[str, float] = {}
+        self._occurrence_epoch = uuid.uuid4().hex
+        self._occurrence_sequence = 0
 
     def _end_observation(self, state, reason):
         outputs = []
@@ -1122,6 +1133,8 @@ class StationaryEventRuntime(TransformOperatorRuntime):
         payload = dict(packet.payload)
         candidate_since = state.candidate_since
         payload["stationary_event"] = {
+            "lifecycle_epoch": self._occurrence_epoch,
+            "lifecycle_sequence": state.occurrence_sequence,
             "confirmed": bool(state.confirmed),
             "candidate_since": float(candidate_since) if candidate_since is not None else None,
             "last_evidence_at": now,
@@ -1341,6 +1354,8 @@ class StationaryEventRuntime(TransformOperatorRuntime):
             return []
 
         state.decision = "confirmed"
+        self._occurrence_sequence += 1
+        state.occurrence_sequence = self._occurrence_sequence
         state.confirmed = True
         state.moving_since = None
         annotated = self._annotate(
@@ -1641,6 +1656,8 @@ def register_core_operators(registry: OperatorRegistry) -> None:
         runtime_factory=lambda _config, _deps: SinkRuntime(),
     )
     register_gate_operators(registry)
+    register_merge_operators(registry)
+    register_demand_operators(registry)
     register_sink_operators(registry)
     register_control_operators(registry)
     register_distributed_operators(registry)

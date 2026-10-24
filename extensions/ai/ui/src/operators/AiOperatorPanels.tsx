@@ -153,7 +153,7 @@ function AiSmartCropPanel({ i18n, config, showAdvanced, updateConfig }: PanelArg
   );
 }
 
-function AiConditionFilterPanel({ i18n, config, showAdvanced, updateConfig }: PanelArgs): React.ReactElement {
+function AiConditionFilterPanel({ i18n, config, showAdvanced, updateConfig, purpose }: PanelArgs): React.ReactElement {
   const { t } = i18n.useI18n();
   const settings = useAiSettings();
   const profiles = settings?.profiles ?? [];
@@ -162,10 +162,11 @@ function AiConditionFilterPanel({ i18n, config, showAdvanced, updateConfig }: Pa
   return (
     <div className="pipelinesOperatorConfigCard">
       <label className="pipelinesLabel">
-        <span>{t("ext.ai.operator.condition.condition", {}, "Condição")}</span>
+        <span>{purpose === "automatic" ? t("ext.ai.operator.condition.question", {}, "Pergunta visual") : t("ext.ai.operator.condition.condition", {}, "Condição")}</span>
         <textarea
           className="pipelinesTextArea"
           rows={3}
+          required={purpose === "automatic"}
           value={asString(c.condition_description)}
           placeholder={t("ext.ai.operator.condition.placeholder", {}, "ex.: alguém sentado no sofá")}
           onChange={(event) => updateConfig({ condition_description: event.target.value })}
@@ -176,7 +177,8 @@ function AiConditionFilterPanel({ i18n, config, showAdvanced, updateConfig }: Pa
         <span>{t("ext.ai.operator.profile", {}, "Perfil de IA")}</span>
         <ProfileSelect
           t={t}
-          value={asString(c.profile_id) || DEFAULT_PROFILE_ID}
+          value={purpose === "automatic" ? asString(config.profile_id) : asString(c.profile_id) || DEFAULT_PROFILE_ID}
+          explicit={purpose === "automatic"}
           profiles={profiles}
           onChange={(profile_id) => updateConfig({ profile_id })}
         />
@@ -198,7 +200,7 @@ function AiConditionFilterPanel({ i18n, config, showAdvanced, updateConfig }: Pa
         />
       </div>
 
-      <div className="rowWrap" style={{ gap: 12 }}>
+      {purpose !== "automatic" && <div className="rowWrap" style={{ gap: 12 }}>
         <NumberField
           label={t("ext.ai.operator.condition.concurrency", {}, "Concorrência")}
           min={1}
@@ -219,9 +221,9 @@ function AiConditionFilterPanel({ i18n, config, showAdvanced, updateConfig }: Pa
             <option value="fallback">{t("ext.ai.operator.condition.concurrency.fallback", {}, "Use fallback")}</option>
           </select>
         </label>
-      </div>
+      </div>}
 
-      {showAdvanced ? (
+      {showAdvanced && purpose !== "automatic" ? (
         <>
           <div className="sectionDivider" />
           <div className="rowWrap" style={{ gap: 12 }}>
@@ -272,19 +274,23 @@ function ProfileSelect({
   value,
   profiles,
   onChange,
+  explicit = false,
 }: {
   t: T;
   value: string;
   profiles: AiProfileConfig[];
   onChange: (value: string) => void;
+  explicit?: boolean;
 }): React.ReactElement {
   const options = useMemo(() => {
-    if (profiles.length) return profiles;
+    if (profiles.length || explicit) return profiles;
     return [{ id: DEFAULT_PROFILE_ID, name: "Qwen3.8 27B MLX local", model: "qwen3.8:27b-mlx" }] as AiProfileConfig[];
-  }, [profiles]);
+  }, [profiles, explicit]);
 
   return (
-    <select className="pipelinesSelect" value={value} onChange={(event) => onChange(event.target.value)}>
+    <select className="pipelinesSelect" required={explicit} value={value} onChange={(event) => onChange(event.target.value)}>
+      {explicit && <option value="" disabled>—</option>}
+      {explicit && value && !options.some(profile => profile.id === value) && <option value={value} disabled>{value}</option>}
       {options.map((profile) => (
         <option key={profile.id} value={profile.id}>
           {profile.name || profile.model || profile.id}

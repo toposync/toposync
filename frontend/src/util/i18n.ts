@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { pipelineOperatorTranslations } from "./pipelineOperatorTranslations";
+import { inspectionTranslations } from "../ui/streams/inspectionTranslations";
+import { activityTranslations } from "../ui/notifications/activityTranslations";
 
 export type Locale = "en" | "pt-BR";
 
@@ -28,6 +30,8 @@ const STORAGE_KEY = "toposync.locale";
 const translationsByLocale: Record<Locale, Translations> = {
   en: {
     ...pipelineOperatorTranslations.en,
+    ...inspectionTranslations.en,
+    ...activityTranslations.en,
     "core.map.element": "Element",
     "core.map.devices": "{{count}} devices",
     "core.map.selection_unpositioned": "{{name}} has no geographic position. Use Position on map beside its name.",
@@ -293,6 +297,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.graphics_quality.detailed_desc": "More detail and effects. Higher GPU/CPU usage.",
     "core.ui.settings.title": "Settings",
     "core.ui.settings.aria": "Settings",
+    "core.ui.automatic.add_in_area": "Add activity in this area",
     "core.ui.settings.sections.view": "View",
     "core.ui.settings.sections.view_desc": "Theme, walls, interactivity and graphics.",
     "core.ui.settings.sections.compositions": "Compositions",
@@ -399,6 +404,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.extensions.summary.recommended": "Recommended",
     "core.ui.settings.extensions.recommended": "recommended",
     "core.ui.settings.extensions.managed": "managed",
+    "core.ui.settings.extensions.dependents": "Activities and flows affected by disabling or removing this extension:",
     "core.ui.settings.extensions.installed": "installed",
     "core.ui.settings.extensions.editable": "editable",
     "core.ui.settings.extensions.status.active": "Active",
@@ -801,6 +807,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.status.enabled": "enabled",
     "core.ui.pipelines.status.disabled": "disabled",
     "core.ui.pipelines.status.read_only": "read-only",
+    "core.ui.pipelines.status.automatic": "managed by Automatic",
+    "core.ui.pipelines.open_automatic": "Edit in Automatic",
     "core.ui.pipelines.generated.separator": "Generated pipelines",
     "core.ui.pipelines.generated.show": "Show generated pipelines",
     "core.ui.pipelines.generated.hide": "Hide generated pipelines",
@@ -1137,6 +1145,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.modes.json": "JSON",
     "core.ui.pipelines.modes.python_one_way": "Python (one-way)",
     "core.ui.pipelines.confirm_delete": "Delete pipeline '{{name}}'?",
+    "core.ui.pipelines.save_conflict": "This pipeline changed elsewhere. Nothing was overwritten. Your rejected draft is preserved below. Load the saved version and review your changes before saving again.",
+    "core.ui.pipelines.saving": "Saving…",
+    "core.ui.pipelines.conflict_draft": "Preserved draft (select and copy to recover changes)",
+    "core.ui.pipelines.conflict_reload": "Load saved version; keep rejected draft below",
     "core.ui.pipelines.error.no_selection": "No pipeline selected.",
 
     "core.ui.pipelines.duplicate.title": "Duplicate pipeline",
@@ -1269,6 +1281,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.debug": "Inspect flow",
     "core.ui.pipelines.operator_name.core.stream_state_snapshot": "Capture stream state",
     "core.ui.pipelines.operator_name.core.passthrough": "Pass through flow",
+    "core.ui.pipelines.operator_name.core.result_input": "Use shared result",
     "core.ui.pipelines.operator_name.core.sink": "End flow",
     "core.ui.pipelines.operator_name.dist.remote_source": "Receive remote packets",
     "core.ui.pipelines.operator_name.dist.target_filter": "Route remote packets",
@@ -2026,6 +2039,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_draw.motion_mask_instructions": "Click and drag to paint. Hold Shift to erase.",
     "core.ui.pipelines.panels.image_draw.motion_mask.mode": "Mode",
     "core.ui.pipelines.panels.image_draw.motion_mask.paint": "Paint",
+    "core.ui.pipelines.panels.visual_region.brush": "Brush",
+    "core.ui.pipelines.panels.visual_region.limit": "Drawing limit reached. Undo a stroke or clear the region to continue.",
+    "core.ui.pipelines.panels.visual_region.keyboard": "Arrow keys move the cursor; Enter applies the brush or eraser",
+    "core.ui.pipelines.panels.visual_region.undo": "Undo",
+    "core.ui.pipelines.panels.visual_region.navigate": "Navigate",
     "core.ui.pipelines.panels.image_draw.motion_mask.erase": "Erase",
     "core.ui.pipelines.panels.image_draw.snapshot_alt": "Camera snapshot",
     "core.ui.pipelines.panels.image_draw.no_snapshot": "Snapshot unavailable.",
@@ -2780,6 +2798,8 @@ const translationsByLocale: Record<Locale, Translations> = {
   },
   "pt-BR": {
     ...pipelineOperatorTranslations["pt-BR"],
+    ...inspectionTranslations["pt-BR"],
+    ...activityTranslations["pt-BR"],
     "core.map.element": "Elemento",
     "core.map.devices": "{{count}} dispositivos",
     "core.map.selection_unpositioned": "{{name}} ainda não tem posição geográfica. Use Posicionar no mapa ao lado do nome.",
@@ -3039,6 +3059,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.graphics_quality.detailed_desc": "Mais detalhes e efeitos. Exige mais do computador.",
     "core.ui.settings.title": "Configurações",
     "core.ui.settings.aria": "Configurações",
+    "core.ui.automatic.add_in_area": "Adicionar atividade nesta área",
     "core.ui.settings.sections.view": "Visualização",
     "core.ui.settings.sections.view_desc": "Tema, paredes, interatividade e gráficos.",
     "core.ui.settings.sections.compositions": "Composições",
@@ -3145,6 +3166,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.settings.extensions.summary.recommended": "Recomendadas",
     "core.ui.settings.extensions.recommended": "recomendada",
     "core.ui.settings.extensions.managed": "gerenciada",
+    "core.ui.settings.extensions.dependents": "Atividades e fluxos afetados ao desabilitar ou remover esta extensão:",
     "core.ui.settings.extensions.installed": "instalada",
     "core.ui.settings.extensions.editable": "editável",
     "core.ui.settings.extensions.status.active": "Ativa",
@@ -3547,6 +3569,8 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.status.enabled": "habilitado",
     "core.ui.pipelines.status.disabled": "desativado",
     "core.ui.pipelines.status.read_only": "somente leitura",
+    "core.ui.pipelines.status.automatic": "gerenciado pelo Automático",
+    "core.ui.pipelines.open_automatic": "Editar no Automático",
     "core.ui.pipelines.generated.separator": "Fluxos gerados automaticamente",
     "core.ui.pipelines.generated.show": "Mostrar fluxos gerados automaticamente",
     "core.ui.pipelines.generated.hide": "Ocultar fluxos gerados automaticamente",
@@ -3893,6 +3917,10 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.modes.json": "JSON",
     "core.ui.pipelines.modes.python_one_way": "Python (sem volta)",
     "core.ui.pipelines.confirm_delete": "Excluir fluxo '{{name}}'?",
+    "core.ui.pipelines.save_conflict": "Este fluxo mudou em outra edição. Nada foi sobrescrito. Seu rascunho recusado está preservado abaixo. Carregue a versão salva e revise as alterações antes de salvar novamente.",
+    "core.ui.pipelines.saving": "Salvando…",
+    "core.ui.pipelines.conflict_draft": "Rascunho preservado (selecione e copie para recuperar alterações)",
+    "core.ui.pipelines.conflict_reload": "Carregar versão salva; manter rascunho recusado abaixo",
     "core.ui.pipelines.error.no_selection": "Nenhum fluxo selecionado.",
 
     "core.ui.pipelines.duplicate.title": "Duplicar fluxo",
@@ -4025,6 +4053,7 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.operator_name.core.debug": "Inspecionar fluxo",
     "core.ui.pipelines.operator_name.core.stream_state_snapshot": "Capturar estado do stream",
     "core.ui.pipelines.operator_name.core.passthrough": "Encaminhar fluxo",
+    "core.ui.pipelines.operator_name.core.result_input": "Usar resultado compartilhado",
     "core.ui.pipelines.operator_name.core.sink": "Encerrar fluxo",
     "core.ui.pipelines.operator_name.dist.remote_source": "Receber pacotes remotos",
     "core.ui.pipelines.operator_name.dist.target_filter": "Rotear pacotes remotos",
@@ -4790,6 +4819,11 @@ const translationsByLocale: Record<Locale, Translations> = {
     "core.ui.pipelines.panels.image_draw.motion_mask_instructions": "Clique e arraste para pintar. Segure Shift para apagar.",
     "core.ui.pipelines.panels.image_draw.motion_mask.mode": "Modo",
     "core.ui.pipelines.panels.image_draw.motion_mask.paint": "Pintar",
+    "core.ui.pipelines.panels.visual_region.brush": "Pincel",
+    "core.ui.pipelines.panels.visual_region.limit": "Limite de desenho atingido. Desfaça um traço ou limpe a região para continuar.",
+    "core.ui.pipelines.panels.visual_region.keyboard": "Setas movem o cursor; Enter aplica o pincel ou a borracha",
+    "core.ui.pipelines.panels.visual_region.undo": "Desfazer",
+    "core.ui.pipelines.panels.visual_region.navigate": "Navegar",
     "core.ui.pipelines.panels.image_draw.motion_mask.erase": "Apagar",
     "core.ui.pipelines.panels.image_draw.snapshot_alt": "Snapshot da câmera",
     "core.ui.pipelines.panels.image_draw.no_snapshot": "Snapshot indisponível.",

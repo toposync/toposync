@@ -134,6 +134,7 @@ class PanoramaCamera:
         self._camera: dict[str, Any] = {}
         self._source: dict[str, Any] = {}
         self._capabilities: dict[str, Any] | None = None
+        self._discovered_monotonic: float | None = None
         self._device_information: dict[str, Any] = {}
         self._reolink: ReolinkCgiClient | None = None
         self._renewal: asyncio.Task[Any] | None = None
@@ -149,6 +150,7 @@ class PanoramaCamera:
         self._return_may_change_zoom = False
         self._automation: dict[str, bool | None] = {"auto_tracking": None, "automatic_return": None}
         self._continuous_preparation: asyncio.Task | None = None
+        self.dispatch_guard: Callable[[], None] | None = None
 
     async def _configuration(self) -> None:
         settings = await self.dependencies.config_store.get_settings()
@@ -167,6 +169,24 @@ class PanoramaCamera:
         if self._signature and self._signature != signature:
             raise PanoramaCaptureError("camera_configuration_changed")
         self._signature, self._camera, self._source = signature, camera, source
+
+    def reuse_discovery_from(self, previous: PanoramaCamera) -> bool:
+        """Copy recent protocol metadata, never control, capture or observation ownership."""
+        if (not isinstance(previous, PanoramaCamera) or self._capabilities is not None
+                or (self.camera_id, self.source_id) != (previous.camera_id, previous.source_id)
+                or previous._capabilities is None or previous._discovered_monotonic is None
+                or not 0 <= time.monotonic() - previous._discovered_monotonic <= 30
+                or previous.lease is not None or previous._capture_lease is not None
+                or previous._renewal is not None or previous._continuous_preparation is not None
+                or previous._control_error):
+            return False
+        # The signature makes the next configuration read reject changed endpoints or optics.
+        for name in ("_client", "_ptz_xaddr", "_media_xaddr", "_profile_token", "_signature",
+                     "_reolink", "_discovered_monotonic"):
+            setattr(self, name, getattr(previous, name))
+        self._device_information = copy.deepcopy(previous._device_information)
+        self._capabilities = copy.deepcopy(previous._capabilities)
+        return True
 
     async def discover(self) -> dict[str, Any]:
         """Read capabilities and the exact optical profile; never acquire control."""
@@ -292,6 +312,7 @@ class PanoramaCamera:
                 for axis, bounds in (("pan", selected.get("x")), ("tilt", selected.get("y")))
             }
             self._capabilities = capabilities
+            self._discovered_monotonic = time.monotonic()
             return capabilities
         except PanoramaCaptureError:
             raise
@@ -343,6 +364,11 @@ class PanoramaCamera:
             "source_identity": {**self._capabilities["source_identity"], "zoom": position["zoom"],
                                 "zoom_state": "reported" if position["zoom"] is not None else "unreported"},
         }
+        return self._capabilities
+
+    async def acquire_with_capabilities(self) -> dict[str, Any]:
+        """Acquire with fresh observations and return those same capabilities."""
+        await self.acquire()
         return self._capabilities
 
     async def acquire(self) -> dict[str, Any]:
@@ -517,8 +543,9 @@ class PanoramaCamera:
         except Exception:
             raise PanoramaCaptureError("position_unavailable") from None
 
-    async def _submit(self, command: dict[str, Any]) -> dict[str, Any]:
+    async def _submit(self, command: dict[str, Any], *, dispatch_guard: Callable[[], None] | None = None) -> dict[str, Any]:
         stopping = command.get("kind") == "stop"
+        guard = dispatch_guard if dispatch_guard is not None else self.dispatch_guard
         await self._guard(stopping=stopping)
         if not stopping:
             await self.renew()
@@ -528,7 +555,10 @@ class PanoramaCamera:
             receipt = await self.services.call(
                 "cameras.control.submit", lease_id=lease["lease_id"], fence=lease["fence"],
                 command_id=command_id, command=command,
+                **({"dispatch_guard": guard} if not stopping and guard is not None else {}),
             )
+        except PanoramaCaptureError:
+            raise
         except PtzControlError as error:
             raise PanoramaCaptureError(
                 "movement_unconfirmed",
@@ -578,7 +608,8 @@ class PanoramaCamera:
         return await self._submit(command)
 
     async def move_velocity(
-        self, *, pan: float = 0.0, tilt: float = 0.0, timeout_s: float = 0.5
+        self, *, pan: float = 0.0, tilt: float = 0.0, timeout_s: float = 0.5,
+        dispatch_guard: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         if not self._capabilities or not self._capabilities.get("velocity_supported"):
             raise PanoramaCaptureError("normalized_motion_unavailable")
@@ -594,7 +625,8 @@ class PanoramaCamera:
         pan, tilt = self._motion_coordinates("continuous", pan, tilt)
         return await self._submit(
             {"kind": "continuous_move", "pan": pan, "tilt": tilt, "zoom": 0.0,
-             "timeout_s": timeout_s, "allow_relative_fallback": False}
+             "timeout_s": timeout_s, "allow_relative_fallback": False},
+            **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
         )
 
     async def move_relative(self, *, pan: float = 0.0, tilt: float = 0.0) -> dict:
@@ -671,9 +703,11 @@ class PanoramaCamera:
             parameters.update(
                 rtsp_url=uri, username=self._client.username, password=self._client.password,
             )
+        # Keep snapshot consumers from replacing the decoder during a physical observation.
+        source_fps = _finite(self._source.get("video", {}).get("fps")) or 5.0
         request = CameraCaptureRequest(
             owner_id=f"panorama:{self.owner_id}", camera_id=self.camera_id,
-            source_id=self.source_id, fps=12.0, **parameters,
+            source_id=self.source_id, fps=max(12.0, min(60.0, source_fps)), **parameters,
         )
         try:
             self._capture_lease = await self.capture_service.open(request, self.dependencies)
@@ -901,6 +935,8 @@ class PanoramaCamera:
                 "preset_name": name, "owner_id": self.owner_id,
                 "baseline_tokens": [str(item["token"]) for item in inventory],
                 "zoom": pose["zoom"],
+                # A later session may recreate a preset already removed by this job.
+                "idempotency_key": f"panorama-return:{self.owner_id}:{role}:{uuid.uuid4().hex}",
             }
             if optical_state is not None:
                 pending["optical_state"] = optical_state
@@ -913,7 +949,7 @@ class PanoramaCamera:
                 result = await self.services.call(
                     "cameras.ptz.set_preset", camera_id=self.camera_id,
                     camera_source_id=self.source_id, preset_name=name,
-                    idempotency_key=f"panorama-return:{self.owner_id}:{role}",
+                    idempotency_key=pending["idempotency_key"],
                 )
                 token = str(result.get("token") or "") if isinstance(result, dict) else ""
                 if token in pending["baseline_tokens"]:

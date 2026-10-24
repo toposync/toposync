@@ -3,7 +3,7 @@ import type { Notification } from "@toposync/plugin-api";
 import { builtinNotificationRenderers, renderNotificationSpatialStatus } from "./pipelinesNotifications";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const renderer = builtinNotificationRenderers[0];
+const renderer = builtinNotificationRenderers.find(item => item.type === "pipelines.event")!;
 const actions = { openImage: () => undefined };
 function record(compositionId?: string): Notification {
   return { id:"event", type:"pipelines.event", title:"Recorded", payload:{ world:{ x:2,z:3,composition_id:compositionId } } };

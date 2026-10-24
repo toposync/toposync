@@ -18,6 +18,32 @@ class _Context:
         return func(*args, **kwargs)
 
 
+def test_capture_union_masks_are_current_and_keep_transparency():
+    async def scenario():
+        capture = {'capture_instance': 'fixture', 'generation': 1, 'sequence': 1}
+        image = np.full((20, 20, 3), 150, dtype=np.uint8)
+        masks = [np.zeros((20, 20), dtype=np.uint8) for _ in range(2)]
+        masks[0][2:18, 2:6] = 1
+        masks[1][2:18, 12:16] = 1
+        source = Packet.create(stream_id='group', payload={'subject': {'id': 'group', 'bbox01': [0, 0, 1, 1]},
+            'capture_evidence': capture, 'association': {'group': {'members': ['first', 'second']}},
+            'vision': {'segmentations': [{'actor_subject_id': 'group', 'mask_artifact_name': str(index)} for index in range(2)]}},
+            artifacts={'main': Artifact('main', image), **{str(index): Artifact(str(index), mask,
+                metadata={'capture_evidence': capture}) for index, mask in enumerate(masks)}})
+        runtime = VisionCropObjectsRuntime({'output_artifact_name': 'activity_capture', 'use_segmentation': True})
+        [output] = await runtime.process_packet(source, None)
+        crop = output.artifacts['activity_capture']
+        assert crop.metadata['kind'] == 'segmentation' and crop.data.shape == (20, 20, 4)
+        assert crop.data[5, 3, 3] == 255 and crop.data[5, 14, 3] == 255 and crop.data[5, 9, 3] == 0
+        assert crop.metadata['members'] == ['first', 'second']
+        source.payload['capture_evidence'] = {**capture, 'sequence': 2}
+        [fallback] = await runtime.process_packet(source, None)
+        assert fallback.artifacts['activity_capture'].metadata['kind'] == 'rectangle'
+        private = source.with_artifact(Artifact('main', image, private=True))
+        assert await runtime.process_packet(private, None) == []
+    asyncio.run(scenario())
+
+
 class _OneObjectDetector:
     backend_id = "fake_detector"
 

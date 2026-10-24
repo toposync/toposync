@@ -106,7 +106,7 @@ function CinematicSettingsPanelContent({ i18n, api }: { i18n: HostI18n; api: Hos
                 <i className="fa-solid fa-rotate" aria-hidden="true" />
                 <span>{t("ext.cinematic.settings.refresh", {}, "Atualizar")}</span>
               </button>
-              <button className="chipButton primary" type="button" onClick={() => setWizardOpen(true)}>
+              <button className="primaryButton" type="button" onClick={() => setWizardOpen(true)}>
                 <i className="fa-solid fa-plus" aria-hidden="true" />
                 <span>{t("ext.cinematic.settings.create", {}, "Criar pipeline")}</span>
               </button>
@@ -457,7 +457,7 @@ function CinematicWizard({
       }}
     >
       {created ? (
-        <div style={{ display: "grid", gap: 12 }}>
+        <div className="formGrid">
           <div className="settingsInlinePanel">
             <div className="cardTitle">{t("ext.cinematic.wizard.created", {}, "Pipeline criado.")}</div>
             <div className="cardMeta" style={{ marginTop: 4 }}>{created.pipeline_name}</div>
@@ -467,14 +467,14 @@ function CinematicWizard({
             <button className="chipButton" type="button" onClick={onClose}>
               {t("ext.cinematic.common.close", {}, "Fechar")}
             </button>
-            <button className="chipButton primary" type="button" onClick={() => openPipelineScreen(created.pipeline_name)}>
+            <button className="primaryButton" type="button" onClick={() => openPipelineScreen(created.pipeline_name)}>
               <i className="fa-solid fa-diagram-project" aria-hidden="true" />
               <span>{t("ext.cinematic.wizard.open_pipeline", {}, "Abrir pipeline")}</span>
             </button>
           </div>
         </div>
       ) : (
-        <div style={{ display: "grid", gap: 12 }}>
+        <div className="formGrid">
           {loading ? <div className="settingsStatusMuted">{t("ext.cinematic.common.loading", {}, "Carregando...")}</div> : null}
           {loadError ? <div className="errorText">{loadError}</div> : null}
           {createError ? <div className="errorText">{createError}</div> : null}
@@ -643,7 +643,7 @@ function CinematicWizard({
             <button className="chipButton" type="button" onClick={onClose} disabled={createBusy}>
               {t("ext.cinematic.common.close", {}, "Fechar")}
             </button>
-            <button className="chipButton primary" type="button" onClick={() => void submit()} disabled={createBusy || loading || !transmissionId}>
+            <button className="primaryButton" type="button" onClick={() => void submit()} disabled={createBusy || loading || !transmissionId}>
               <i className="fa-solid fa-wand-magic-sparkles" aria-hidden="true" />
               <span>{t("ext.cinematic.wizard.create", {}, "Criar")}</span>
             </button>

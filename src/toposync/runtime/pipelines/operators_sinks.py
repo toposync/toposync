@@ -1043,6 +1043,7 @@ class _NotifyState:
     historical_evidence: dict[str, Any] = field(default_factory=dict)
     spatial_status: dict[str, Any] = field(default_factory=dict)
     mapping_gap: bool = False
+    access_scope: dict[str, Any] = field(default_factory=lambda: {"camera_ids": [], "area_ids": [], "complete": True})
     spatial_history: SpatialHistory = field(default_factory=SpatialHistory)
 
     def event(self) -> dict[str, Any]:
@@ -1143,6 +1144,28 @@ class NotifyRuntime(SinkRuntime):
             elif state.duration_valid:
                 state.last_ts = max(state.last_ts, sample_ts)
         self._state.move_to_end(dedupe_key)
+
+        for key, identifier in (("camera_ids", _resolve_string(packet, "camera_id")),
+                                ("area_ids", _resolve_string(packet, "area_id"))):
+            if identifier and identifier not in state.access_scope[key]:
+                if len(state.access_scope[key]) >= 128:
+                    state.access_scope["complete"] = False
+                else:
+                    state.access_scope[key].append(identifier)
+        activity = packet.payload.get("entity_activity")
+        if isinstance(activity, dict):
+            origins = activity.get("origins")
+            if not isinstance(origins, (list, tuple)) or len(origins) > 128:
+                state.access_scope["complete"] = False
+                origins = []
+            for origin in origins:
+                if not isinstance(origin, (list, tuple)) or len(origin) != 2 or not isinstance(origin[0], str):
+                    state.access_scope["complete"] = False
+                elif origin[0] not in state.access_scope["camera_ids"]:
+                    if len(state.access_scope["camera_ids"]) >= 128:
+                        state.access_scope["complete"] = False
+                    else:
+                        state.access_scope["camera_ids"].append(origin[0])
 
         previous_history = state.spatial_history.snapshot()
         state.spatial_history.observe(packet)
@@ -1316,6 +1339,7 @@ class NotifyRuntime(SinkRuntime):
                 "lifecycle": lifecycle.value,
                 "priority": priority,
                 "revision": int(state.revision),
+                "access_scope": state.access_scope,
                 "duration_status": state.event()["duration_status"],
                 **projection_signature,
                 **({"historical_evidence": state.historical_evidence} if self._config.historical_evidence_paths else {}),
@@ -1340,6 +1364,8 @@ class NotifyRuntime(SinkRuntime):
         status = "closed" if lifecycle == Lifecycle.CLOSE else "open"
         payload = {
             "source": "pipelines",
+            "access_scope": {"camera_ids": list(state.access_scope["camera_ids"]), "area_ids": list(state.access_scope["area_ids"]),
+                             "complete": state.access_scope["complete"] and bool(state.access_scope["camera_ids"])},
             **(
                 {"notification_occurrence_id": state.notification_occurrence_id}
                 if state.notification_occurrence_id else {}
@@ -1425,6 +1451,9 @@ class NotifyRuntime(SinkRuntime):
                     ),
                     payload={
                         "source": "pipelines",
+                        "access_scope": {"camera_ids": list(state.access_scope["camera_ids"]),
+                                         "area_ids": list(state.access_scope["area_ids"]),
+                                         "complete": state.access_scope["complete"] and bool(state.access_scope["camera_ids"])},
                         **(
                             {"notification_occurrence_id": state.notification_occurrence_id}
                             if state.notification_occurrence_id else {}
@@ -1657,6 +1686,9 @@ def _select_notification_data(packet: Packet) -> dict[str, Any]:
 
 
 def register_sink_operators(registry: OperatorRegistry) -> None:
+    from .occurrence_sink import register_occurrence_sink
+
+    register_occurrence_sink(registry)
     registry.register_operator(
         operator_id="core.store_images",
         description="Stores selected image artifacts to local /files storage as WebP/PNG/JPG and attaches references.",

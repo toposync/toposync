@@ -214,22 +214,63 @@ def fit_frame_rotation(
 
 
 class PanoramaLocalizer:
+    def with_reference_mask(self, mask):
+        """Keep region-specific matches and anchors isolated from navigation."""
+        from copy import copy
+
+        with self._lock:
+            prepared = copy(self)
+            prepared.reference_mask = mask.copy()
+            prepared.reference_mask.flags.writeable = False
+            prepared.references = [{key: value for key, value in reference.items()
+                                    if not key.startswith("contextual_")} for reference in self.references]
+        prepared._lock = threading.RLock()
+        prepared.results = OrderedDict()
+        prepared._anchors = OrderedDict()
+        prepared._contextual_matcher = None
+        prepared._matching_retry_after = 0.0
+        prepared.last_reference = None
+        return prepared
+
+    def _reference_support(self, reference, pixels):
+        from .visual_region import frame_to_reference, reference_mask_points
+
+        mask = getattr(self, "reference_mask", None)
+        if mask is None:
+            return np.ones(len(pixels), dtype=bool)
+        mapped = frame_to_reference(pixels, {"lens": self.lens, "rotation_matrix": reference["rotation_matrix"]},
+                                    {"to_source": np.eye(3)}, mask.shape[1::-1])
+        return reference_mask_points(mask, mapped)
+
     def calibrated_transition(self, previous: np.ndarray, current: np.ndarray) -> dict | None:
         """Recover observed displacement, never arrival, using the bound lens.
 
-        Reuse the loaded contextual matcher. No panorama target or cached pose
+        Reuse native features or the loaded contextual matcher. No target or cached pose
         participates in this independent two-frame rotation estimate.
         """
         matching = self._contextual_matcher
-        if (matching is None or previous.shape != current.shape or current.ndim != 2
-                or (matching.height, matching.width) != current.shape):
+        if previous.shape != current.shape or current.ndim != 2:
             return None
         matrix, distortion, width, height = _lens_arrays(self.lens)
         if abs(current.shape[1] / current.shape[0] - width / height) > 1e-6:
             return None
-        before, after = matching.correspondences(matching.features(previous), matching.features(current))
         scale = width / current.shape[1]
-        fitted = fit_frame_rotation(after * scale, before * scale, self.lens, np.eye(3))
+        before_points, before_features, _ = self._features(previous)
+        after_points, after_features, _ = self._features(current)
+        fitted = None
+        if before_features is not None and after_features is not None:
+            pairs = _mutual_matches(cv2.BFMatcher(), _matching_descriptors(before_features),
+                                    _matching_descriptors(after_features))
+            if pairs:
+                before = np.asarray([before_points[pair.queryIdx] for pair in pairs])
+                after = np.asarray([after_points[pair.trainIdx] for pair in pairs])
+                fitted = fit_frame_rotation(after * scale + (scale - 1) / 2,
+                    before * scale + (scale - 1) / 2, self.lens, np.eye(3))
+        if (fitted is None and matching is not None
+                and (matching.height, matching.width) == current.shape):
+            before, after = matching.correspondences(matching.features(previous), matching.features(current))
+            fitted = fit_frame_rotation(after * scale + (scale - 1) / 2,
+                before * scale + (scale - 1) / 2, self.lens, np.eye(3))
         if fitted is None:
             return None
         grid = np.asarray([(width * x, height * y) for y in (.15, .5, .85)
@@ -445,12 +486,17 @@ class PanoramaLocalizer:
 
     def locate_diagnostic(self, image: np.ndarray, evidence: dict[str, Any]) -> dict[str, Any]:
         """Private navigation replay; no images or feature arrays enter the API."""
+        started = time.monotonic()
         with self._lock:
+            acquired = time.monotonic()
             diagnostics: dict[str, Any] = {}
             result = self._locate_frame(image, evidence, None, diagnostics)
             return {**result, "diagnostics": {"model_sha256": self.model_digest,
                 "references": {reference["id"]: reference["sha256"] for reference in self.references},
-                **diagnostics}}
+                **diagnostics, "call_timing": {
+                    "lock_wait_seconds": acquired - started,
+                    "compute_seconds": time.monotonic() - acquired,
+                }}}
 
     def _locate_frame(
         self, image: np.ndarray, evidence: dict[str, Any], image_geometry: dict | None,
@@ -550,6 +596,8 @@ class PanoramaLocalizer:
                 continue
             current_points = points[[pair.queryIdx for pair in pairs]]
             reference_points = reference[prefix + "points"][[pair.trainIdx for pair in pairs]]
+            selected = self._reference_support(reference, reference_points)
+            current_points, reference_points = current_points[selected], reference_points[selected]
             scale = min(1.0, ANALYSIS_WIDTH / self.lens["width"])
             overlay = stationary_overlay_points(current_points * scale, reference_points * scale)
             candidate = {} if diagnostics is not None else None
@@ -661,7 +709,7 @@ class PanoramaLocalizer:
                 return None
             key, anchor = candidate
         pairs = []
-        if anchor is not None and (other_capture or identity[2] > anchor["sequence"]):
+        if anchor is not None:
             # All references share the same two rasters. Build their optical
             # flow pyramids once per attempt, then keep each reference's pairs
             # separate for fitting and ambiguity checks.
@@ -685,11 +733,14 @@ class PanoramaLocalizer:
                         or result.get("reason") == "panorama_visual_localization_ambiguous"):
                     break
             if result["status"] == "localized":
-                anchor["seen"] = started
-                if not other_capture:
-                    anchor["sequence"] = identity[2]
-                anchor["neighbors"] = self._recognition_neighbors(result)
-                self._anchors.move_to_end(key)
+                # Shared consumers can finish out of order. Fit each raster independently,
+                # but an older/repeated sequence must not renew the anchor's lifetime.
+                if other_capture or identity[2] > anchor["sequence"]:
+                    anchor["seen"] = started
+                    if not other_capture:
+                        anchor["sequence"] = identity[2]
+                    anchor["neighbors"] = self._recognition_neighbors(result)
+                    self._anchors.move_to_end(key)
                 return result
             if result.get("reason") == "panorama_visual_localization_ambiguous":
                 self._anchors.pop(key, None)
@@ -841,6 +892,8 @@ class PanoramaLocalizer:
             diagnostics["photometry"] = method
             diagnostics["candidates"] = []
         for reference, a, b in pairs:
+            selected = self._reference_support(reference, b)
+            a, b = a[selected], b[selected]
             a = (a + 0.5) * [image.shape[1] / width, image.shape[0] / height] - 0.5
             a = source_pixels(a, matrix)
             candidate = {} if diagnostics is not None else None

@@ -9,6 +9,7 @@ from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.pipelines import Lifecycle, OperatorRegistry, PipelineGraphCompiler
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Packet
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.services import ServiceRegistry
 from toposync_ext_cameras.pipelines.operators import register_camera_pipeline_operators
 from toposync_ext_home_assistant.pipelines import (

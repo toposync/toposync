@@ -717,7 +717,8 @@ def test_control_verification_uses_one_coarse_recall_per_return_epoch(
     async def confirm_stop():
         scanner.physical_state = "stopped"
 
-    async def leave_unconfirmed(owner, _reference, result):
+    async def leave_unconfirmed(owner, _reference, result, *, maximum_error_pixels):
+        assert maximum_error_pixels == 3
         owner.physical_state = "stopped"
         return result
 
@@ -2102,10 +2103,12 @@ def test_relative_pulse_uses_displacement_and_never_calls_velocity(tmp_path):
         return options
 
     scanner._move, camera.move_relative = move, relative
-    result = asyncio.run(scanner._pulse("pan", -1, 0.3))
+    estimator = lambda before, after: None
+    result = asyncio.run(scanner._pulse("pan", -1, 0.3, transition_estimator=estimator))
     assert moves == [{"pan": -0.03, "tilt": 0.0}]
     assert "duration" not in result
     assert "velocity" not in _event_names(camera)
+    assert result["transition_estimator"] is estimator
 
 
 def test_legacy_continuous_job_requires_a_new_capture_for_precise_resume():
@@ -2198,7 +2201,8 @@ def test_large_overlapping_absolute_return_uses_coarse_recall_before_visual_fini
     camera.return_offset = 0.06
     scanner.last_frame = asyncio.run(camera.frame())
     corrected = []
-    async def exhausted_return(owner, reference, result):
+    async def exhausted_return(owner, reference, result, *, maximum_error_pixels):
+        assert maximum_error_pixels == 3
         corrected.append(owner)
         return result
 
@@ -2272,7 +2276,8 @@ def test_unclosed_pilot_uses_one_coarse_recall_then_safe_visual_finish(
 
     visual_calls = []
 
-    async def visual_finish(owner, reference, result):
+    async def visual_finish(owner, reference, result, *, maximum_error_pixels):
+        assert maximum_error_pixels == 3
         visual_calls.append((owner, result))
         return result
 
@@ -3121,6 +3126,27 @@ def test_reference_window_starts_after_decoder_startup_within_total_budget(
     assert json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1] == attempt
 
 
+@pytest.mark.parametrize("expires", [False, True])
+def test_reference_window_observes_target_without_moving_or_weakening_stability(tmp_path, monkeypatch, expires):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    observations = []
+    def observe():
+        observations.append(scanner.last_frame["received_monotonic"])
+        if expires and len(observations) == 3:
+            raise PanoramaCaptureError("following_observation_expired")
+    if expires:
+        with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+            asyncio.run(scanner._reference_window(observation_guard=observe))
+        assert len(observations) == 3
+    else:
+        reference = asyncio.run(scanner._reference_window(observation_guard=observe))
+        assert len(observations) >= 5 and observations[-1] - observations[0] >= .8
+        assert reference["return_reference_evidence"]["provisional"] is True
+    assert not camera.events, "Collect target evidence while stopped, never issue a command"
+
+
 def test_reference_window_ignores_interleaved_duplicates_between_distinct_candidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3279,6 +3305,49 @@ def test_attempt_diagnostics_are_bounded_and_exclude_unlisted_frame_fields(
     assert '"image"' not in persisted
 
 
+@pytest.mark.parametrize("source_size", [(640, 360), (1920, 1080), (1001, 563)])
+def test_movement_replay_keeps_capture_bound_resize_geometry(tmp_path, source_size):
+    from toposync.runtime.pipelines.image_geometry import geometry_matrix, source_pixels
+
+    width, height = source_size
+    frame = {
+        "image": np.zeros((height, width, 3), dtype=np.uint8),
+        "width": 99, "height": 99,  # Geometry belongs to the pixels, not a stale hint.
+        "capture_evidence": {
+            "capture_instance": "original-decoder", "generation": 3, "sequence": 17,
+            "published_at": 123.5, "received_monotonic": 45.5,
+            "physical_timestamp_verified": False, "captured_monotonic": None,
+            "password": "private-secret",
+        },
+        "received_monotonic": 45.5, "sequence": 17, "generation": 3,
+    }
+    scanner = scan._Scan(SimulatedCamera(), tmp_path, _progress, lambda: False, None)
+    attempt = scan._AttemptDiagnostic("movement")
+    attempt.frame(frame, {"code": "moving"})
+    frame["capture_evidence"]["sequence"] = 18
+    attempt.value["outcome"] = "capture_stable"
+    asyncio.run(scanner._preserve_replay(attempt))
+    record_path, = tmp_path.glob("replay-accepted-*.json")
+    record = json.loads(record_path.read_text())["frames"][0]
+    evidence = record["capture_evidence"]
+    assert evidence == {
+        "capture_instance": "original-decoder", "generation": 3, "sequence": 17,
+        "published_at": 123.5, "received_monotonic": 45.5,
+        "physical_timestamp_verified": False, "captured_monotonic": None,
+    }
+    assert "private-secret" not in record_path.read_text()
+    with np.load(record_path.with_suffix(".npz"), allow_pickle=False) as images:
+        image = images["frame_0"]
+        geometry = record["image_geometry"]
+        assert geometry["capture_evidence"] == evidence
+        assert geometry["source_size"] == [width, height]
+        matrix = geometry_matrix(geometry, image.shape[1], image.shape[0])
+        points = np.array([[0, 0], [image.shape[1] - 1, image.shape[0] - 1], [300, 200]])
+        # OpenCV resize maps pixel centres, independently on rounded axes.
+        expected = (points + .5) * [width / image.shape[1], height / image.shape[0]] - .5
+        np.testing.assert_allclose(source_pixels(points, matrix), expected)
+
+
 def test_movement_replay_is_lossless_bounded_and_keeps_timing_without_secrets(tmp_path, monkeypatch):
     camera = SimulatedCamera()
     _clock(monkeypatch, camera)
@@ -3299,6 +3368,8 @@ def test_movement_replay_is_lossless_bounded_and_keeps_timing_without_secrets(tm
     assert not record["complete"]
     assert record["frames"][0]["sequence"] == frame["sequence"]
     assert record["frames"][0]["received_monotonic"] == frame["received_monotonic"]
+    assert record["frames"][0]["capture_evidence"] == frame.get("capture_evidence", {})
+    assert record["frames"][0]["image_geometry"]["source_size"] == list(frame["image"].shape[1::-1])
     assert "private-secret" not in records[0].read_text()
     with np.load(records[0].with_suffix(".npz"), allow_pickle=False) as images:
         assert list(images) == ["frame_0"]
@@ -5754,8 +5825,9 @@ def test_relocalization_keeps_early_pilot_evidence_as_the_scan_grows_without_rel
     assert not set(_event_names(camera)) & {"absolute", "velocity", "return"}
 
 
+@pytest.mark.parametrize("size,fps,noise_level", [((2880, 1620), 12, .5), ((3840, 2160), 24, 32)])
 def test_high_resolution_timeout_keeps_a_full_terminal_window_inside_shared_memory_budget(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size, fps, noise_level
 ):
     class HighResolutionWall(SimulatedCamera):
         async def move_absolute(self, **target):
@@ -5766,12 +5838,12 @@ def test_high_resolution_timeout_keeps_a_full_terminal_window_inside_shared_memo
             frame = await super().frame(**options)
             # 12 fps and 2880x1620 reproduce the real buffer pressure. Seven
             # integral RGB frames fit in96MiB, but span only half a second.
-            self.now -= 0.1 - 1 / 12
+            self.now -= 0.1 - 1 / fps
             frame["received_monotonic"] = self.now
-            frame["media_time"] = frame["sequence"] / 12
-            noise = np.random.default_rng(frame["sequence"]).normal(0, 0.5, (540, 960))
+            frame["media_time"] = frame["sequence"] / fps
+            noise = np.random.default_rng(frame["sequence"]).normal(0, noise_level, (540, 960))
             gray = np.clip(127 + noise, 0, 255).astype(np.uint8)
-            frame["image"] = cv2.cvtColor(cv2.resize(gray, (2880, 1620)), cv2.COLOR_GRAY2BGR)
+            frame["image"] = cv2.cvtColor(cv2.resize(gray, size), cv2.COLOR_GRAY2BGR)
             return frame
 
     camera = HighResolutionWall()
@@ -5780,16 +5852,19 @@ def test_high_resolution_timeout_keeps_a_full_terminal_window_inside_shared_memo
         camera, tmp_path, _progress, lambda: False, {"plan": [{"pan": 0.1, "tilt": 0.05, "row": 0}]}
     )
     scanner.last_pose = camera._position()
-    asyncio.run(scanner._absolute_scan(camera.capabilities["limits"]))
+    with pytest.raises(PanoramaCaptureError):
+        asyncio.run(scanner._absolute({"pan": 0.1, "tilt": 0.05}))
     assert _event_names(camera).count("absolute") == 1
     attempt = scanner.checkpoint["diagnostics"]["attempts"][-1]
     assert attempt["terminal_frame_count"] >= 10
     assert attempt["terminal_window_seconds"] >= 0.8
     assert attempt["frame_buffer_peak_bytes"] <= 96 * 1024**2
-    assert attempt["terminal_scene"]["classification"] == "scene_texture_insufficient"
+    assert attempt["terminal_scene"]["transport_window_verified"] is True
+    if noise_level < 1:
+        assert attempt["terminal_scene"]["classification"] == "scene_texture_insufficient"
     rejected = scanner.checkpoint["rejected_observations"][-1]
     assert (rejected["image_width"], rejected["image_height"]) == (960, 540)
-    assert (rejected["source_width"], rejected["source_height"]) == (2880, 1620)
+    assert (rejected["source_width"], rejected["source_height"]) == size
     assert rejected["image_representation"] == "analysis" and rejected["qualified_capture"] is False
     assert cv2.imread(rejected["path"]).shape[:2] == (540, 960)
     assert not scanner.captures and not scanner.boundaries
@@ -9871,7 +9946,9 @@ def test_fine_pulse_never_uses_unqualified_smaller_velocity(tmp_path):
     assert not camera.events
 
 
-def test_fine_pulse_can_explicitly_qualify_a_lower_bounded_velocity(tmp_path):
+@pytest.mark.parametrize("speed,duration", [(0.025, 0.05), (0.2, 0.12), (0.2, 0.24)])
+def test_pulse_can_explicitly_qualify_a_bounded_velocity(tmp_path, speed, duration):
+    import time
     camera = SimulatedCamera()
     scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
     scanner.capabilities = {
@@ -9898,10 +9975,57 @@ def test_fine_pulse_can_explicitly_qualify_a_lower_bounded_velocity(tmp_path):
         return {"frame": await camera.frame()}
 
     scanner._move = move
-    asyncio.run(scanner._pulse("pan", -1, 0.05, speed=0.025))
+    scanner.physical_state = "stopped"
+    baseline = {"received_monotonic": time.monotonic()}
+    estimator = lambda before, after: None
+    asyncio.run(scanner._pulse("pan", -1, duration, speed=speed, expected_frame=baseline,
+                              transition_estimator=estimator))
     event = next(payload for name, payload in camera.events if name == "velocity")
-    assert event == {"pan": -0.025, "tilt": 0.0, "timeout_s": 0.05}
-    assert movement_options["requested_velocity"] == {"pan": -0.025, "tilt": 0.0}
+    assert event == {"pan": -speed, "tilt": 0.0, "timeout_s": duration}
+    assert movement_options["requested_velocity"] == {"pan": -speed, "tilt": 0.0}
+    assert movement_options["expected_frame"] is baseline
+    assert movement_options["transition_estimator"] is estimator
+
+
+@pytest.mark.parametrize("state,baseline,duration", [
+    ("moving", True, .12), ("stopped", False, .12), ("stopped", True, .241),
+])
+def test_faster_probe_requires_stopped_baseline_and_short_duration(tmp_path, state, baseline, duration):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
+    scanner.capabilities = {"velocity_supported": True, "axes": {"pan": True}}
+    scanner.physical_state = state
+    with pytest.raises(PanoramaCaptureError, match="invalid_velocity"):
+        asyncio.run(scanner._pulse("pan", 1, duration, speed=.2,
+            expected_frame={} if baseline else None))
+    assert not camera.events
+
+
+@pytest.mark.parametrize("speed", [.025, .2])
+def test_alternative_velocity_never_falls_back_to_relative_displacement(tmp_path, speed):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
+    scanner.capabilities = {"relative_supported": True, "axes": {"pan": True}}
+    scanner.physical_state = "stopped"
+    with pytest.raises(PanoramaCaptureError, match="visual_control_resolution_unverified"):
+        asyncio.run(scanner._pulse("pan", 1, .12, speed=speed, expected_frame={}))
+    assert not camera.events
+
+
+@pytest.mark.parametrize("returning,intent,cursor", [
+    (True, "seek_pulse", None), (False, "connection_anchor_return", None),
+    (False, "seek_pulse", {}),
+])
+def test_faster_probe_never_changes_recovery_movement(tmp_path, returning, intent, cursor):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
+    scanner.capabilities = {"velocity_supported": True, "axes": {"pan": True}}
+    scanner.physical_state, scanner.returning = "stopped", returning
+    scanner.checkpoint["continuous_cursor"] = cursor
+    with pytest.raises(PanoramaCaptureError, match="invalid_velocity"):
+        asyncio.run(scanner._pulse("pan", 1, .12, speed=.2,
+            expected_frame={}, intent_type=intent))
+    assert not camera.events
 
 
 def test_fine_pulse_rejects_a_velocity_that_the_advertised_space_would_clamp(tmp_path):
@@ -9931,7 +10055,8 @@ def test_fine_pulse_rejects_a_velocity_that_the_advertised_space_would_clamp(tmp
     "invalidity",
     ["duplicate", "not_normalized", "missing_bounds", "default_mismatch"],
 )
-def test_lower_velocity_requires_one_exact_normalized_default_space(tmp_path, invalidity):
+@pytest.mark.parametrize("speed", [.025, .2])
+def test_alternative_velocity_requires_one_exact_normalized_default_space(tmp_path, invalidity, speed):
     camera = SimulatedCamera()
     scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
     selected = {
@@ -9957,8 +10082,9 @@ def test_lower_velocity_requires_one_exact_normalized_default_space(tmp_path, in
         "defaults": {"continuous": default},
     }
 
+    scanner.physical_state = "stopped"
     with pytest.raises(PanoramaCaptureError, match="visual_control_resolution_unverified"):
-        asyncio.run(scanner._pulse("pan", 1, 0.05, speed=0.025))
+        asyncio.run(scanner._pulse("pan", 1, 0.05, speed=speed, expected_frame={}))
 
     assert not camera.events
 
@@ -10655,3 +10781,687 @@ def test_return_failure_keeps_one_reserved_replay_after_regular_quota(tmp_path, 
     assert json.loads(records[0].read_text())["attempt"]["return_correction_failure"] == "visual_error_increased"
     assert records[0].with_suffix(".npz").exists()
     assert attempt.value["return_failure_replay_id"] == records[0].stem
+
+@pytest.mark.parametrize('limit, displacement, accepted', [(3, 5.46, False), (12, 5.46, True), (12, 12.01, False)])
+def test_return_precision_is_requested_without_changing_capture_default(tmp_path, monkeypatch, limit, displacement, accepted):
+    camera = SimulatedCamera()
+    frame = asyncio.run(camera.frame())
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
+    scanner.physical_state = 'stopped'
+    monkeypatch.setattr(scan, '_match', lambda *args: {'verified': True, 'overlap': .99, 'displacement': displacement})
+    result = asyncio.run(scanner._validate_return(frame['image'], frame, maximum_error_pixels=limit))
+    assert (scanner.physical_state == 'restored') is accepted
+    assert result['maximum_error_pixels'] == limit
+
+
+def test_return_can_accept_current_stopped_view_without_resetting_exhausted_budget(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    camera = SimulatedCamera()
+    frame = asyncio.run(camera.frame())
+    path = tmp_path / 'initial.png'
+    cv2.imwrite(str(path), frame['image'])
+    commands = [{'command': index} for index in range(4)]
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {
+        'initial_path': str(path), 'return': {'kind': 'preset', 'token': 'owned'},
+        'return_epoch': 'final', 'return_correction_state': 'budget_exhausted',
+        'return_correction_commands': commands})
+    scanner.last_frame = frame
+    scanner.physical_state = 'stopped'
+    scanner._recover_pilot_response = AsyncMock()
+    async def stop():
+        scanner.physical_state = 'stopped'
+    scanner._confirm_stop = AsyncMock(side_effect=stop)
+    scanner._move = AsyncMock(side_effect=AssertionError('No new movement allowed'))
+    monkeypatch.setattr(scan, '_match', lambda *args: {'verified': True, 'overlap': .99, 'displacement': 5.46})
+    asyncio.run(scanner._restore(maximum_error_pixels=12))
+    assert scanner.physical_state == 'restored'
+    assert scanner.checkpoint['return_epoch'] == 'final'
+    assert scanner.checkpoint['return_correction_commands'] == commands
+    scanner._move.assert_not_awaited()
+    scanner._confirm_stop.assert_awaited_once()
+
+
+def test_stop_reference_diagnostics_preserve_bounded_motion_samples_without_images():
+    diagnostic = scan._AttemptDiagnostic("return_reference")
+    for sequence in range(scan.MAX_TELEMETRY_SAMPLES * 3):
+        diagnostic.frame(
+            {"sequence": sequence, "generation": 1, "received_monotonic": sequence / 25},
+            {"code": "moving" if sequence % 2 else "settling", "state": "observing",
+             "timing_basis": "local_observation", "motion_pixels": .2 if sequence % 2 else .05,
+             "speed_px_s": 99, "private": "must not escape"})
+    samples = diagnostic.value["samples"]
+    assert len(samples) <= scan.MAX_TELEMETRY_SAMPLES
+    assert samples[0]["sequence"] == 0
+    assert samples[-1]["sequence"] == scan.MAX_TELEMETRY_SAMPLES * 3 - 1
+    assert samples[-1]["code"] == "moving"
+    assert samples[-1]["motion_pixels"] == .2
+    assert all(item["speed_px_s"] is None and "private" not in item for item in samples)
+    assert diagnostic.replay == []
+    assert diagnostic.telemetry() is None
+
+
+@pytest.mark.parametrize("observer_fails", [False, True])
+def test_motion_frame_offer_does_not_replace_stop_or_stability(tmp_path, monkeypatch, observer_fails):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    observations = []
+
+    async def scenario():
+        scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+        def offer(frame):
+            observations.append((frame["sequence"], "stop" in _event_names(camera)))
+            assert scanner.physical_state != "stopped"
+            if observer_fails:
+                raise RuntimeError("optional observer failed")
+        result = await scanner._move(
+            lambda: camera.move_velocity(pan=.1, timeout_s=.6),
+            duration=.6, allow_stationary=True, frame_observer=offer,
+        )
+        assert scanner.physical_state == "stopped"
+        return result
+
+    result = asyncio.run(scenario())
+    assert observations and any(not stopped for _, stopped in observations)
+    assert "stop" in _event_names(camera) and result["stable"] is True
+    diagnostic = json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1]
+    assert bool(diagnostic.get("frame_observer_failed")) == observer_fails
+    assert diagnostic["stop_command_accepted"] is True
+
+
+@pytest.mark.parametrize("stop_fails", [False, True])
+def test_visual_feedback_uses_existing_stop_before_pulse_deadline(tmp_path, monkeypatch, stop_fails):
+    class Camera(SimulatedCamera):
+        stop_at = None
+        async def stop(self):
+            self.stop_at = self.now
+            result = await super().stop()
+            if stop_fails:
+                raise PanoramaCaptureError("stop_unconfirmed")
+            return result
+    camera = Camera()
+    _clock(monkeypatch, camera)
+    offered = []
+    async def scenario():
+        scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+        scanner.last_pose = await camera.position()
+        start = camera.now
+        def request_stop():
+            return "visual_feedback_target_reached" if len(offered) >= 3 else None
+        result = await scanner._move(lambda: camera.move_velocity(pan=.1, timeout_s=1.2),
+            duration=1.2, allow_stationary=True, frame_observer=lambda f: offered.append(f),
+            motion_stop_requested=request_stop)
+        assert result["stable"] is True
+        assert result["motion_feedback_stop"] == "visual_feedback_target_reached"
+        assert camera.stop_at - start < 1.2
+    if stop_fails:
+        with pytest.raises(PanoramaCaptureError, match="stop_unconfirmed"):
+            asyncio.run(scenario())
+    else:
+        asyncio.run(scenario())
+    assert _event_names(camera).count("velocity") == 1
+    assert _event_names(camera).count("stop") == 1
+
+
+@pytest.mark.parametrize("failure", ["expired_target", "invalid_reason"])
+def test_visual_feedback_failure_still_stops_the_shared_command(tmp_path, monkeypatch, failure):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    def request_stop():
+        if failure == "expired_target":
+            raise PanoramaCaptureError("following_observation_expired")
+        return "untrusted reason"
+    async def scenario():
+        await scanner._move(lambda: camera.move_velocity(pan=.1, timeout_s=1.2),
+            duration=1.2, allow_stationary=True, motion_stop_requested=request_stop)
+    expected = "following_observation_expired" if failure == "expired_target" else "invalid_visual_feedback"
+    with pytest.raises(PanoramaCaptureError, match=expected):
+        asyncio.run(scenario())
+    assert len([event for event in camera.events if event[0] == "velocity"]) == 1
+    assert len([event for event in camera.events if event[0] == "stop"]) == 1
+
+
+@pytest.mark.parametrize("case", ["success", "two_updates", "reverse", "other_axis", "overspeed", "stale", "reject", "budget", "region_budget", "stop_rejected", "delayed_guard", "slow_persistence", "slow_dispatch", "fresh_slow_dispatch", "cancel"])
+def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypatch, case):
+    updates = []
+    reserved = []
+    offered = []
+    class Camera(SimulatedCamera):
+        async def move_velocity(self, *, dispatch_guard=None, **kwargs):
+            if dispatch_guard is not None:
+                if case == "delayed_guard": self.now += 1.2
+                if case in {"slow_dispatch", "fresh_slow_dispatch"}: self.now += .15
+                dispatch_guard()
+                if case == "cancel": raise asyncio.CancelledError()
+                updates.append((self.now, dict(kwargs)))
+                if case == "reject":
+                    raise PanoramaCaptureError("movement_unconfirmed")
+            return await super().move_velocity(**kwargs)
+        async def stop(self):
+            value = await super().stop()
+            if case == "stop_rejected":
+                raise PanoramaCaptureError("stop_unconfirmed")
+            return value
+    camera = Camera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(velocity_supported=True, defaults={"continuous": "normalized"},
+        spaces={"continuous": [{"uri": "normalized", "normalized": True,
+            "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]})
+    if case == "slow_persistence":
+        persist = scanner._persist
+        async def delayed_persist():
+            camera.now += .15
+            await persist()
+        scanner._persist = delayed_persist
+    if case == "region_budget":
+        scanner.region_policy = {"maximum_active_seconds": 100, "return_seconds_reserved": 10,
+            "maximum_captures": 10, "maximum_commands": 1, "return_commands_reserved": 0}
+    planned = []
+    def feedback(context):
+        limit = 2 if case == "two_updates" else 1
+        if len(planned) >= limit or len(offered) < 2 * (len(planned) + 1): return None
+        planned.append(context)
+        def reserve(entry):
+            assert entry["state"] == "pending"
+            if case == "budget": raise PanoramaCaptureError("visual_navigation_budget_exhausted")
+            reserved.append(True)
+        return {"velocity": {"pan": -.05 if case == "reverse" else .2 if case == "overspeed" else .05,
+                             "tilt": .01 if case == "other_axis" else 0.},
+            "frame_received_monotonic": camera.now - (1. if case == "stale" else .275 if case in {"slow_persistence", "slow_dispatch"} else 0.),
+            "capture_evidence": {"capture_instance": camera.capture_instance, "generation": 1, "sequence": camera.sequence},
+            "dispatch_guard": lambda: None, "reserve": reserve}
+    async def scenario():
+        return await scanner._move(lambda: camera.move_velocity(pan=.1, timeout_s=1.2),
+            duration=1.2, allow_stationary=True, requested_velocity={"pan": .1, "tilt": 0.},
+            frame_observer=offered.append, motion_velocity_update=feedback)
+    expected = {"reverse": "invalid_visual_feedback", "other_axis": "invalid_visual_feedback", "overspeed": "invalid_visual_feedback",
+        "stale": "visual_feedback_expired", "reject": "movement_unconfirmed", "budget": "visual_navigation_budget_exhausted",
+        "stop_rejected": "stop_unconfirmed", "delayed_guard": "visual_feedback_expired", "region_budget": "region_budget_exhausted",
+        "slow_persistence": "visual_feedback_expired", "slow_dispatch": "visual_feedback_expired", "fresh_slow_dispatch": "visual_feedback_expired"}
+    if case == "cancel":
+        with pytest.raises(asyncio.CancelledError): asyncio.run(scenario())
+    elif case in expected:
+        with pytest.raises(PanoramaCaptureError, match=expected[case]): asyncio.run(scenario())
+    else:
+        result = asyncio.run(scenario())
+        assert result["stable"] is True and result["motion_velocity_updates"][0]["state"] == "accepted"
+        count = 2 if case == "two_updates" else 1
+        assert len(reserved) == len(updates) == count
+        assert all(at + command["timeout_s"] <= planned[0]["deadline_monotonic"] for at, command in updates)
+        if count == 2:
+            assert planned[1]["accepted_monotonic"] > planned[0]["accepted_monotonic"]
+            assert planned[1]["deadline_monotonic"] == planned[0]["deadline_monotonic"]
+    assert _event_names(camera).count("stop") == 1
+    if case in {"slow_persistence", "slow_dispatch", "fresh_slow_dispatch", "reject", "delayed_guard", "cancel"}:
+        diagnostic = json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1]
+        update = diagnostic["motion_velocity_updates"][0]
+        assert update["state"] == ("cancelled" if case == "cancel" else "failed")
+        assert update["acceptance_confirmed"] is False
+        assert update["failure_code"] == ("cancelled" if case == "cancel" else expected[case])
+        if case in {"slow_persistence", "slow_dispatch", "fresh_slow_dispatch"}:
+            assert update["failure_stage"] == ("pre_dispatch_guard" if case == "slow_persistence" else "transport_dispatch_guard")
+            assert update["failure_constraint"] == ("frame_age" if case == "slow_persistence" else "reserved_dispatch_time")
+            assert update["last_guard_frame_age_seconds"] >= (.15 if case == "fresh_slow_dispatch" else .425) - 1e-6
+            if case == "fresh_slow_dispatch":
+                assert update["last_guard_frame_age_seconds"] < .35
+            if case == "slow_persistence":
+                assert update["persistence_seconds"] >= .15
+                assert "transport_started_monotonic" not in update
+            else:
+                assert update["transport_started_monotonic"] <= update["last_guard_monotonic"]
+    if case in {"reverse", "other_axis", "overspeed", "stale", "budget", "region_budget", "delayed_guard", "slow_persistence", "slow_dispatch", "fresh_slow_dispatch", "cancel"}:
+        assert not updates
+
+
+@pytest.mark.parametrize("case", ["following", "expired", "cancelled", "no_observations", "late_dispatch", "oversized", "renewal_without_window", "qualified_reverse", "unqualified_reverse", "slower_start", "slower_reverse", "envelope_overspeed", "envelope_other_axis"])
+def test_following_window_renews_short_commands_without_stopping_between_them(tmp_path, monkeypatch, case):
+    updates, offered, contexts = [], [], []
+    class Camera(SimulatedCamera):
+        async def move_velocity(self, *, dispatch_guard=None, **kwargs):
+            if dispatch_guard is not None:
+                if case == "late_dispatch": self.now += 1.3
+                dispatch_guard()
+                updates.append((self.now, kwargs))
+                assert "stop" not in _event_names(self)
+            return await super().move_velocity(**kwargs)
+    camera = Camera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={"pan": True}, velocity_supported=True, defaults={"continuous": "normalized"},
+        spaces={"continuous": [{"uri": "normalized", "normalized": True,
+            "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]})
+    def target_guard():
+        if len(updates) >= 2:
+            if case == "expired": raise PanoramaCaptureError("following_observation_expired")
+            if case == "cancelled": raise asyncio.CancelledError()
+    def feedback(context):
+        # The first useful pose arrives after most of the original pulse.
+        if case == "no_observations" or context["deadline_monotonic"] - camera.now > .55:
+            return None
+        if camera.now + .3 >= context.get("window_deadline_monotonic", float("inf")):
+            return None
+        contexts.append(context)
+        return {"velocity": {"pan": -.08 if case == "slower_reverse" else -.05 if case in {"qualified_reverse", "unqualified_reverse"} else .11 if case == "envelope_overspeed" else .08 if case == "slower_start" else .05, "tilt": .01 if case == "envelope_other_axis" else 0.},
+            "reversal_qualified": case in {"qualified_reverse", "slower_reverse"},
+            "duration_seconds": 1.3 if case == "oversized" else 1.2,
+            "frame_received_monotonic": camera.now,
+            "capture_evidence": {"capture_instance": camera.capture_instance, "generation": 1, "sequence": camera.sequence},
+            "dispatch_guard": target_guard, "reserve": lambda entry: None}
+    async def scenario():
+        return await scanner._pulse("pan", 1, 1.2,
+            **({"speed": .04, "maximum_following_speed": .1} if case in {"slower_start", "slower_reverse", "envelope_overspeed", "envelope_other_axis"} else {}),
+            frame_observer=offered.append, observation_guard=target_guard,
+            motion_stop_requested=lambda: None, motion_velocity_update=feedback,
+            **({"following_seconds": 3.2} if case != "renewal_without_window" else {}))
+    errors = {"expired": "following_observation_expired", "late_dispatch": "visual_feedback_expired", "unqualified_reverse": "invalid_visual_feedback",
+        "envelope_overspeed": "invalid_visual_feedback", "envelope_other_axis": "invalid_visual_feedback",
+        "oversized": "invalid_visual_feedback", "renewal_without_window": "invalid_visual_feedback"}
+    if case == "cancelled":
+        with pytest.raises(asyncio.CancelledError): asyncio.run(scenario())
+    elif case in errors:
+        with pytest.raises(PanoramaCaptureError, match=errors[case]): asyncio.run(scenario())
+    else:
+        result = asyncio.run(scenario())
+        assert result["stable"] is True and scanner.physical_state == "stopped"
+    assert _event_names(camera).count("stop") == 1
+    if case in {"following", "expired", "cancelled", "qualified_reverse", "slower_start", "slower_reverse"}:
+        if case in {"slower_start", "slower_reverse"}:
+            assert contexts[0]["velocity"]["pan"] == .04
+            assert all(abs(command["pan"]) <= .1 and command["tilt"] == 0 for _, command in updates)
+        assert len(updates) >= 2
+        assert updates[-1][0] > contexts[0]["deadline_monotonic"]
+        hard_deadline = contexts[0]["window_deadline_monotonic"]
+        assert all(at + command["timeout_s"] <= hard_deadline for at, command in updates)
+        assert all(command["timeout_s"] <= 1.2 for _, command in updates)
+        assert all(context["window_deadline_monotonic"] == hard_deadline for context in contexts)
+    else:
+        assert not updates
+
+
+@pytest.mark.parametrize("case", ["too_long", "nonfinite", "no_target_guard", "return", "relative"])
+def test_following_window_requires_bounded_live_velocity_control(tmp_path, case):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={"pan": True}, velocity_supported=case != "relative", relative_supported=case == "relative")
+    scanner.returning = case == "return"
+    async def scenario():
+        await scanner._pulse("pan", 1, 1.2,
+            following_seconds=7. if case == "too_long" else float("nan") if case == "nonfinite" else 6.,
+            observation_guard=None if case == "no_target_guard" else lambda: None,
+            frame_observer=lambda _: None, motion_stop_requested=lambda: None,
+            motion_velocity_update=lambda _: None)
+    with pytest.raises(PanoramaCaptureError, match="visual_feedback_unavailable"):
+        asyncio.run(scenario())
+    assert not camera.events
+
+
+@pytest.mark.parametrize("delay_frames,localization_seconds,target_delay", [(0, 0, 0), (2, 0, 0),
+    (4, 0, 0), (5, 0, 0), (4, .25, 0), (4, .25, .3)])
+def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path, monkeypatch, delay_frames, localization_seconds, target_delay):
+    from toposync_ext_cameras import panorama_navigation as navigation
+    history, errors, updates = [], [], []
+    class Camera(SimulatedCamera):
+        def __init__(self):
+            super().__init__()
+            self.velocity, self.expires, self.started = 0., 0., None
+            self.mechanical_velocity = 0.
+        async def move_velocity(self, *, pan=0., tilt=0., timeout_s=.5, dispatch_guard=None):
+            if dispatch_guard is not None:
+                dispatch_guard()
+                updates.append(self.now)
+            self.events.append(("velocity", {"pan": pan, "tilt": tilt, "timeout_s": timeout_s}))
+            self.velocity, self.expires = pan, self.now + timeout_s
+            if self.started is None: self.started = self.now
+            return {"pulse_remaining_seconds": timeout_s}
+        async def frame(self, **options):
+            if localization_seconds:
+                requested = self.velocity if self.now < self.expires else 0.
+                self.mechanical_velocity += np.clip(requested - self.mechanical_velocity, -.1 / 3, .1 / 3)
+                self.pan += 2 * self.mechanical_velocity * .1
+            else:
+                self.pan += 2 * self.velocity * min(.1, max(0., self.expires - self.now))
+            result = await super().frame(**options)
+            history.append((result["image"], self.pan, self.now))
+            # A synthetic localized pose and target share the delayed video;
+            # command time is independent from their exposure.
+            result["image"], result["test_angle"], result["test_exposure"] = history[max(0, len(history) - 1 - delay_frames)]
+            return result
+        async def stop(self):
+            self.velocity = 0.
+            return await super().stop()
+    camera = Camera()
+    _clock(monkeypatch, camera)
+    monkeypatch.setattr(navigation, "time", SimpleNamespace(monotonic=lambda: camera.now))
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={"pan": True}, velocity_supported=True, defaults={"continuous": "normalized"},
+        spaces={"continuous": [{"uri": "normalized", "normalized": True,
+            "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]})
+    lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    model = SimpleNamespace(lens=lens, coverage_mask=np.ones((20, 40)), target_reference=lambda _: {"id": "reference"})
+    navigator = navigation.VisualNavigator(scanner, model)
+    navigator.following_seconds, navigator.trace = 6., [{}]
+    # Acceleration makes a stopped finite-pulse gain smaller than cruise rate.
+    pulse_gain = .15 if localization_seconds else .2
+    navigator.response["pan"] = np.array([-pulse_gain, 0.])
+    navigator.response_rotations["pan"] = np.eye(3)
+    navigator.direction_responses[("pan", 1)] = (.6, np.array([-.6 * pulse_gain, 0.]))
+    navigator.pulse_limits["pan"] = 1.2
+    motion = navigation.TargetMotion()
+    ray = [np.array([1., 0., 0.])]
+    target_queue = []
+    if target_delay:
+        ray[0] = np.array([np.cos(.26), np.sin(.26), 0.])
+    observer = SimpleNamespace(closed=False, latest=None, command=1)
+    navigator.motion_feedback_target = lambda: (ray[0], 12.)
+    navigator.motion_prediction = lambda geometry, seconds: navigator._predict_target(motion, geometry, 12., seconds)
+    published = []
+    pending = [None]
+    processing = [None]
+    def publish():
+        if processing[0] is not None and processing[0][0] <= camera.now:
+            observer.latest = processing[0][1]
+            published.append((camera.now - camera.started,
+                observer.latest["frame_received_monotonic"] - camera.started,
+                navigator._error(ray[0], observer.latest["frame_geometry"]).tolist()))
+            processing[0] = None
+        if processing[0] is None and pending[0] is not None:
+            processing[0], pending[0] = (camera.now + localization_seconds, pending[0]), None
+            if not localization_seconds: publish()
+    def observe(frame):
+        if camera.started is None: return
+        target_angle = (.26 if localization_seconds else .06) + (.05 if localization_seconds else .15) * max(0., frame["test_exposure"] - camera.started)
+        observed_ray = np.array([np.cos(target_angle), np.sin(target_angle), 0.])
+        capture = {"capture_instance": "test", "generation": 1, "sequence": frame["sequence"]}
+        c, s = np.cos(frame["test_angle"]), np.sin(frame["test_angle"])
+        geometry = {"rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]],
+            "analysis_width": 960, "validation_p95_pixels": 1., "validation_matches": 24,
+            "inlier_fraction": .9, "capture_evidence": capture}
+        if not target_delay or frame["sequence"] % 3 == 0:
+            target_queue.append((camera.now + target_delay, observed_ray,
+                {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+                 **capture, "observed_monotonic": camera.now}))
+        while target_queue and target_queue[0][0] <= camera.now + 1e-9:
+            _, ray[0], target_observation = target_queue.pop(0)
+            motion.observe(target_observation, ray[0], camera.now)
+        pending[0] = {"status": "localized", "command": 1, "frame_received_monotonic": camera.now,
+            "capture_evidence": capture, "frame_geometry": geometry}
+        publish()
+        errors.append((camera.now - camera.started, abs(target_angle - frame["test_angle"])))
+    async def scenario():
+        return await scanner._pulse("pan", 1, 1.2, following_seconds=6., frame_observer=observe,
+            observation_guard=lambda: None,
+            motion_stop_requested=lambda: (publish(), navigator._motion_stop_reason(observer, "pan", 1))[1],
+            motion_velocity_update=navigator._velocity_feedback(observer, "pan", 1, .1))
+    result = asyncio.run(scenario())
+    assert len(updates) >= 2, {"stop": result.get("motion_feedback_stop"), "poses": published, "errors": errors}
+    assert updates[-1] - camera.started > 1.2
+    assert len(updates) <= 8
+    if localization_seconds:
+        assert updates[-1] - camera.started >= 4.5, "Continue tracking beyond the acquisition transient"
+    assert _event_names(camera).count("stop") == 1 and result["stable"] is True
+    following = [error for elapsed, error in errors if (3 if localization_seconds else 2) <= elapsed <= (5 if localization_seconds else 4)]
+    assert len(following) >= 8
+    if np.percentile(following, 95) * 560 > 12:
+        print("FOLLOWING_DIAGNOSTIC", result.get("motion_feedback_stop"), result.get("stop_reason"),
+            [(round(t - camera.started, 3)) for t in updates], result["motion_velocity_updates"][-1].get("measurement"))
+        print("CONTROL_TIMELINE", [(round(t - camera.started, 3), entry["velocity"], entry.get("measurement"))
+            for t, entry in zip(updates, result["motion_velocity_updates"])])
+    assert np.percentile(following, 95) * 560 <= 12, {
+        "stop": result.get("motion_feedback_stop"), "updates": updates,
+        "errors_sample": errors[::5], "poses_sample": published[::3],
+        "velocities": [entry["velocity"] for entry in result["motion_velocity_updates"]]}
+
+    print("FOLLOWING_METRICS", {"delay_frames": delay_frames, "localization_seconds": localization_seconds,
+        "target_delay": target_delay, "p95_pixels": float(np.percentile(following, 95) * 560),
+        "updates_seconds": [round(t-camera.started, 3) for t in updates], "feedback_stop": result.get("motion_feedback_stop")})
+
+
+@pytest.mark.parametrize("phase", ["before_transport", "during_motion", "after_stop"])
+def test_target_validity_guards_probes_and_settling_without_skipping_stop(tmp_path, monkeypatch, phase):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    checked = []
+    def guard():
+        names = _event_names(camera)
+        checked.append(tuple(names))
+        if (phase == "before_transport" or phase == "during_motion" and "velocity" in names
+                or phase == "after_stop" and "stop" in names):
+            raise PanoramaCaptureError("following_observation_expired")
+    async def scenario():
+        await scanner._move(lambda: camera.move_velocity(pan=.1, timeout_s=.12),
+            duration=.12, allow_stationary=True, observation_guard=guard)
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        asyncio.run(scenario())
+    assert checked
+    names = _event_names(camera)
+    if phase == "before_transport":
+        assert "velocity" not in names
+    else:
+        assert names.count("velocity") == 1 and names.count("stop") == 1
+        diagnostic = json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1]
+        assert diagnostic["outcome"] == "following_observation_expired"
+        assert diagnostic["stop_command_accepted"] is True
+
+
+@pytest.mark.parametrize("transport", ["velocity", "relative", "absolute"])
+def test_live_observation_guard_is_preserved_by_each_scanner_transport(tmp_path, transport):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={"pan": True, "tilt": True}, velocity_supported=transport == "velocity",
+        relative_supported=transport == "relative", absolute_supported=transport == "absolute")
+    calls = []
+    def guard():
+        calls.append("checked")
+        raise PanoramaCaptureError("following_observation_expired")
+    async def move(command, **options):
+        options["observation_guard"]()
+        pytest.fail("Expired target must not reach transport")
+    scanner._move = move
+    async def scenario():
+        if transport == "absolute":
+            await scanner._absolute({"pan": .1, "tilt": 0}, observation_guard=guard)
+        else:
+            await scanner._pulse("pan", 1, .12, observation_guard=guard)
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        asyncio.run(scenario())
+    assert calls == ["checked"]
+    assert not any(name in _event_names(camera) for name in ("velocity", "relative", "absolute"))
+
+
+@pytest.mark.parametrize('failure', ['no_capacity', 'write', 'rename'])
+def test_optional_replay_storage_failure_preserves_motion_outcome_and_existing_evidence(tmp_path, monkeypatch, failure):
+    from contextlib import nullcontext
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.replay_storage_guard = lambda: nullcontext(0 if failure == 'no_capacity' else 4 * 1024**2)
+    old = tmp_path / 'replay-rejected-existing.json'
+    old.write_text('preserved evidence')
+    old_pixels = old.with_suffix('.npz')
+    old_pixels.write_bytes(b'preserved pixels')
+    attempt = scan._AttemptDiagnostic('movement')
+    attempt.frame(asyncio.run(camera.frame()), {'code': 'moving'})
+    attempt.value['outcome'] = 'motion_not_observed'
+    if failure == 'write':
+        monkeypatch.setattr(np.lib.format, 'write_array', lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('disk unavailable')))
+    elif failure == 'rename':
+        original = Path.replace
+        def replace(path, target):
+            if path.name.endswith('.json.tmp'):
+                raise OSError('metadata publication failed')
+            return original(path, target)
+        monkeypatch.setattr(Path, 'replace', replace)
+    asyncio.run(scanner._preserve_replay(attempt))
+    assert attempt.value['outcome'] == 'motion_not_observed'
+    assert attempt.value['replay_unavailable'] == ('storage_budget' if failure == 'no_capacity' else 'storage_write_failed')
+    assert 'replay_id' not in attempt.value
+    assert old.read_text() == 'preserved evidence' and old_pixels.read_bytes() == b'preserved pixels'
+    assert set(tmp_path.iterdir()) == {old, old_pixels}
+
+
+@pytest.mark.parametrize('source_delay', [0.0, 0.3])
+@pytest.mark.parametrize('target_start', [-0.3, -0.22, -0.14], ids=['long_acquisition', 'short_acquisition', 'near_center'])
+@pytest.mark.parametrize('target_direction', [-1, 1], ids=['right_to_left', 'left_to_right'])
+def test_prepared_moving_acquisition_crosses_center_with_delayed_images(tmp_path, monkeypatch, source_delay, target_start, target_direction, record_property):
+    """Synthetic full acquisition with prepared response, delayed video, and source observations."""
+    from toposync_ext_cameras import panorama_navigation as nav
+    target_rate, pulse_limit = (0.06 if target_start == -0.14 else 0.05, 1.2)
+    motion = nav.TargetMotion()
+    target_queue = []
+    history, errors, updates, entries = ([], [], [], [])
+    latest_target = {'ray': np.array([np.cos(-0.17722518825877848), np.sin(-0.17722518825877848), 0.0]), 'observation': None}
+    geometries = {}
+    timeline_start = [None]
+
+    class Camera(SimulatedCamera):
+
+        def __init__(self):
+            super().__init__()
+            self.velocity, self.expires, self.started, self.mechanical_velocity = (0.0, 0.0, None, 0.0)
+            self.dispatch_guard = None
+
+        async def move_velocity(self, *, pan=0.0, tilt=0.0, timeout_s=0.5, dispatch_guard=None):
+            if dispatch_guard is not None:
+                dispatch_guard()
+                updates.append(self.now)
+            self.events.append(('velocity', {'pan': pan, 'timeout_s': timeout_s}))
+            self.velocity, self.expires = (pan, self.now + timeout_s)
+            if self.started is None:
+                self.started = self.now
+            return {'pulse_remaining_seconds': timeout_s}
+
+        async def frame(self, **options):
+            requested = self.velocity if self.now < self.expires else 0.0
+            self.mechanical_velocity += np.clip(requested - self.mechanical_velocity, -0.1 / 3, 0.1 / 3)
+            self.pan += 2 * self.mechanical_velocity * 0.1
+            result = await super().frame(**options)
+            history.append((result['image'], self.pan, self.now))
+            result['image'], angle, exposure = history[max(0, len(history) - 5)]
+            capture = {'capture_instance': self.capture_instance, 'generation': 1, 'sequence': result['sequence'], 'published_at': self.now, 'received_monotonic': self.now}
+            result['capture_evidence'] = capture
+            c, s = (np.cos(angle), np.sin(angle))
+            geometry = {'rotation_matrix': [[c, 0, s], [0, 1, 0], [-s, 0, c]], 'reference_id': 'reference', 'status': 'localized', 'analysis_width': 960, 'validation_p95_pixels': 1.0, 'validation_matches': 24, 'inlier_fraction': 0.9, 'capture_evidence': capture}
+            geometries[result['sequence']] = geometry
+            if timeline_start[0] is None:
+                timeline_start[0] = self.now
+            target = target_direction * (target_start + target_rate * min(8.0, max(0.0, exposure - timeline_start[0])))
+            if not source_delay or result['sequence'] % 3 == 0:
+                target_queue.append((self.now + source_delay, np.array([np.cos(target), np.sin(target), 0.0]), {'scope': ['camera', 'wide', 'job', 1, 'artifact', 'geometry'], **capture, 'observed_monotonic': self.now}))
+            while target_queue and target_queue[0][0] <= self.now + 1e-09:
+                _, target_ray, observation = target_queue.pop(0)
+                latest_target.update(ray=target_ray, observation=observation)
+                motion.observe(observation, target_ray, self.now)
+            if self.started is not None:
+                errors.append((self.now - self.started, abs(np.tan(target - angle)) * 560))
+            return result
+
+        async def stop(self):
+            self.velocity = 0.0
+            return await super().stop()
+    camera = Camera()
+    _clock(monkeypatch, camera)
+    monkeypatch.setattr(nav, 'time', SimpleNamespace(monotonic=lambda: camera.now))
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={'pan': True}, velocity_supported=True, defaults={'continuous': 'normalized'}, spaces={'continuous': [{'uri': 'normalized', 'normalized': True, 'x': {'min': -1.0, 'max': 1.0}, 'y': {'min': -1.0, 'max': 1.0}}]})
+    lens = {'width': 960, 'height': 540, 'fx': 560.0, 'fy': 560.0, 'cx': 479.5, 'cy': 269.5}
+    reference = {'id': 'reference', 'rotation_matrix': np.eye(3).tolist()}
+    model = SimpleNamespace(lens=lens, coverage_mask=np.ones((20, 40)), references=[reference], model={'overlap_links': []}, target_reference=lambda _: reference)
+
+    class DelayedPose:
+
+        def __init__(self, localizer, records, command):
+            self.command, self.records, self.closed, self.qualified_rate = (command, records, False, None)
+            self.pending = self.processing = self._latest = None
+
+        @property
+        def latest(self):
+            if self.processing is not None and self.processing[0] <= camera.now:
+                self._latest = self.processing[1]
+                self.records.append(self._latest)
+                self.processing = None
+            if self.processing is None and self.pending is not None:
+                self.processing = (camera.now + 0.25, self.pending)
+                self.pending = None
+            return self._latest
+
+        def offer(self, frame):
+            if self.closed:
+                return
+            self.pending = {'status': 'localized', 'command': self.command, 'capture_evidence': frame['capture_evidence'], 'frame_received_monotonic': frame['received_monotonic'], 'frame_geometry': geometries[frame['sequence']]}
+            self.latest
+
+        async def close(self):
+            self.closed = True
+    monkeypatch.setattr(nav, 'MotionFrameObservations', DelayedPose)
+    result = {}
+
+    class Navigator(nav.VisualNavigator):
+
+        async def locate(self):
+            return geometries[self.scanner.last_frame['sequence']]
+
+        async def _target_measurement(self, ray, located):
+            return nav.localized_axis_measurement(ray, lens, located)
+
+        async def _pulse(self, axis, amount, **options):
+            entries.append({'axis': axis, 'amount': amount, 'following_seconds': self.following_seconds})
+            try:
+                await super()._pulse(axis, amount, **options)
+            finally:
+                result.update(trace=self.trace, diagnostics=self.scanner.checkpoint.get('diagnostics', {}))
+            return
+    navigator = Navigator(scanner, model)
+    navigator.response['pan'] = np.array([-0.1437689184737356, 0.004264422230247329])
+    navigator.response_rotations['pan'] = np.eye(3)
+    navigator.direction_responses['pan', 1] = (0.6, np.array([-0.08626135108424136, 0.0025586533381483974]))
+    navigator.direction_responses['pan', -1] = (0.6, np.array([0.08626135108424136, -0.0025586533381483974]))
+    navigator.pulse_limits['pan'] = pulse_limit
+    navigator.pulse_capacity['pan'] = {'limit_seconds': pulse_limit, 'observed_monotonic': camera.now, 'rotation_matrix': np.eye(3), 'response': navigator.response['pan'].copy(), 'pixel_budget': navigator._response_pixel_delta(np.zeros(2), navigator.response['pan'] * pulse_limit)}
+
+    async def scenario():
+        for _ in range(14):
+            scanner.last_frame = await camera.frame()
+        scanner.physical_state = 'stopped'
+        result['arrival'] = await navigator.aim(latest_target['ray'], target_provider=lambda: latest_target['ray'], target_observation_provider=lambda: latest_target['observation'], target_motion=motion)
+    asyncio.run(scenario())
+    acquired = next((elapsed for elapsed, error in errors if error <= 96), None)
+    assessed = [error for elapsed, error in errors if acquired is not None and acquired <= elapsed <= 6.5]
+    result.update(source_delay=source_delay, entries=entries, updates_seconds=[t - camera.started for t in updates], errors=errors, stop_count=_event_names(camera).count('stop'), p95_pixels=float(np.percentile(assessed, 95)) if assessed else None, evaluated_seconds=errors[-1][0] if errors else 0.0, commands=navigator.commands)
+    record_property('crossing', {key: result[key] for key in ('source_delay', 'p95_pixels', 'commands', 'stop_count')})
+    assert acquired is not None and acquired <= 1.5
+    assert len(updates) >= 2 and updates[-1] - camera.started >= 4.5
+    assert len(assessed) >= 30 and result['p95_pixels'] <= 96
+    assert result.get('arrival', {}).get('verified') is True
+    assert _event_names(camera).count('stop') >= 1 and scanner.physical_state == 'stopped'
+    updates_in_trace = [entry for step in navigator.trace for entry in step.get('velocity_updates', [])]
+    assert updates_in_trace and any((entry['measurement']['kind'] == 'finite_response_model' for entry in updates_in_trace))
+    assert all((entry['measurement']['qualified_velocity'] is None for entry in updates_in_trace if entry['measurement']['kind'] == 'finite_response_model'))
+    assert all((len(step.get('velocity_updates', [])) <= 8 for step in navigator.trace))
+    assert navigator.commands <= navigator.maximum_commands
+
+
+@pytest.mark.parametrize("maximum,window", [(-.1, 6.), (0., 6.), (.03, 6.), (.101, 6.), (float("nan"), 6.), (True, 6.), (.1, None)])
+def test_initial_following_speed_cannot_expand_or_escape_its_envelope(tmp_path, maximum, window):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={"pan": True}, velocity_supported=True)
+    with pytest.raises(PanoramaCaptureError, match="invalid_visual_feedback"):
+        asyncio.run(scanner._pulse("pan", 1, 1.2, speed=.04, maximum_following_speed=maximum,
+            following_seconds=window, frame_observer=lambda _: None, observation_guard=lambda: None,
+            motion_stop_requested=lambda: None, motion_velocity_update=lambda _: None))
+    assert not camera.events
+
+
+@pytest.mark.parametrize("requested", [{"pan": .04, "tilt": .01}, {"pan": .04}, {"pan": 0., "tilt": 0.},
+    {"pan": .11, "tilt": 0.}, {"pan": float("nan"), "tilt": 0.}])
+def test_direct_following_envelope_rejects_invalid_initial_vector_before_transport(tmp_path, requested):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(velocity_supported=True)
+    with pytest.raises(PanoramaCaptureError, match="invalid_visual_feedback"):
+        asyncio.run(scanner._move(lambda: camera.move_velocity(pan=.04, timeout_s=1.2), duration=1.2,
+            requested_velocity=requested, maximum_following_speed=.1, following_seconds=6.,
+            frame_observer=lambda _: None, observation_guard=lambda: None,
+            motion_stop_requested=lambda: None, motion_velocity_update=lambda _: None))
+    assert not camera.events

@@ -101,8 +101,9 @@ class IdentityExtractor:
             return
         path = verified_model_path(self.manifest)
         if self.manifest.resolved_adapter_family() == "pet_identity_rgb_v1":
-            import onnxruntime as ort
+            from ..processing.runtime_backends.onnxruntime_backend import _import_onnxruntime
 
+            ort = _import_onnxruntime()
             options = ort.SessionOptions()
             options.intra_op_num_threads = 2
             options.inter_op_num_threads = 1

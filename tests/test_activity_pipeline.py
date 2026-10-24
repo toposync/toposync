@@ -1,0 +1,521 @@
+"""Synthetic admitted events reach the durable store through real result leases."""
+
+import asyncio
+from dataclasses import replace
+
+import pytest
+from pydantic import ValidationError
+
+from test_vision_association_runtime import packet
+from toposync.runtime.config_store import Pipeline
+from toposync.runtime.notifications import NotificationsRuntime
+from toposync.runtime.notifications.occurrences import OccurrenceConflict, OccurrenceStore
+from toposync.runtime.pipelines import (
+    OperatorRegistry, PipelineGraphCompiler, PipelineRuntimeDependencies,
+    SourceOperatorRuntime, register_builtin_operators,
+)
+from toposync.runtime.pipelines.demands import DemandRequest, ResourceDemandRegistry
+from toposync.runtime.pipelines.occurrence_sink import RecordOccurrenceRuntime
+from toposync.runtime.pipelines.result_references import ResultContract
+from toposync.runtime.pipelines.runtime import Lifecycle
+from toposync.runtime.pipelines.shared_runtime import PipelineBundleRuntime
+from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
+from toposync.runtime.services import ServiceRegistry
+from toposync_ext_vision.activity_evidence import ActivityEvidenceRuntime
+
+
+def settings(**changes):
+    return {"objective_id": "garage", "title": "Garage activity", "kind": "vision.presence",
+            "scope": {"camera_ids": ["a", "b"], "area_ids": ["garage"]},
+            "retention_days": 1, "notice": "simulated", **changes}
+
+
+def event(camera="a", sequence=1, lifecycle=Lifecycle.OPEN):
+    value = packet(camera, stamp=float(sequence),
+                   association={"scope": "garage", "entity_id": "person-1", "reason": "geometry"},
+                   entity_activity={"entity_id": "person-1", "reason": "observed"})
+    return replace(value, lifecycle=lifecycle,
+                   payload={**value.payload, "subject": {**value.payload["subject"], "id": "visit-1"}})
+
+
+def dependencies(history):
+    services = ServiceRegistry()
+    services.register("occurrences.record", history.record_occurrence)
+    services.register("occurrences.register_recorder", history.register_occurrence_recorder)
+    services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
+    services.register("occurrences.capture", history.capture_occurrence)
+    return PipelineRuntimeDependencies(services=services)
+
+
+def test_optional_capture_records_selected_crops_without_more_notices(tmp_path):
+    from test_activity_media import media_store, image_bytes
+    from toposync.runtime.pipelines.runtime import Artifact
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        history.activity_media = media_store(tmp_path)
+        sink = RecordOccurrenceRuntime(settings(captures_enabled=True, capture_rate=2), dependencies(history))
+        adapter = ActivityEvidenceRuntime()
+        await sink.prepare(None)
+        for index in range(8):
+            raw = event(sequence=index + 1, lifecycle=Lifecycle.OPEN if index == 0 else Lifecycle.UPDATE)
+            raw.payload['media']['ts'] = index / 4 + 1
+            raw = raw.with_artifact(Artifact('activity_capture', image_bytes(), metadata={'kind': 'rectangle'}))
+            [value] = await adapter.process_packet(raw, None)
+            await sink.process_packet(value, None)
+            await sink._capture_queue.join()
+        await sink.shutdown()
+        identifier = OccurrenceStore.identifier('garage', 'visit-1')
+        images = history.activity_media.page(identifier)['images']
+        assert len(images) == 4 and sink.capture_counts['persisted'] == 4
+        assert len(history.occurrences.deliveries(identifier)) == 1
+        assert all(item['width'] == 16 and item['available'] for item in images)
+        assert [item['observed_at'] for item in images] == [1, 1.5, 2, 2.5]
+    asyncio.run(scenario())
+
+
+def test_slow_image_storage_drops_excess_crops_without_blocking_occurrence_evidence(tmp_path):
+    from test_activity_media import media_store, image_bytes
+    from toposync.runtime.pipelines.runtime import Artifact
+    from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
+    from types import SimpleNamespace
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        history.activity_media = media_store(tmp_path)
+        gate = asyncio.Event()
+        services = dependencies(history)
+        original = history.capture_occurrence
+        async def slow_capture(**kwargs):
+            await gate.wait()
+            return await original(**kwargs)
+        services.services.register('occurrences.capture', slow_capture)
+        sink = RecordOccurrenceRuntime(settings(captures_enabled=True), services)
+        scheduler = ExecutionScheduler()
+        context = SimpleNamespace(scheduler=scheduler)
+        adapter = ActivityEvidenceRuntime()
+        for index in range(12):
+            raw = event(sequence=index + 1, lifecycle=Lifecycle.OPEN if index == 0 else Lifecycle.UPDATE)
+            raw = raw.with_artifact(Artifact('activity_capture', image_bytes()))
+            [value] = await adapter.process_packet(raw, None)
+            await sink.process_packet(value, context)
+        identifier = OccurrenceStore.identifier('garage', 'visit-1')
+        assert len(history.occurrences.get(identifier, read_filter=lambda _: True)['evidence']) == 12
+        assert sink.capture_counts['queue_full'] > 0 and sink._capture_queue.qsize() <= 4
+        gate.set()
+        await sink.shutdown()
+        await scheduler.shutdown()
+        assert sink.capture_counts['persisted'] == sink.capture_counts['selected']
+    asyncio.run(scenario())
+
+
+def test_camera_contributions_duplicate_close_and_restart_keep_one_occurrence(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        sink = RecordOccurrenceRuntime(settings(), dependencies(history))
+        adapter = ActivityEvidenceRuntime()
+        await sink.prepare(None)
+        original = event()
+        other = event("b", 2, Lifecycle.UPDATE)
+        closed = replace(other, lifecycle=Lifecycle.CLOSE)
+        for source in (original, original, other, closed, closed):
+            for value in await adapter.process_packet(source, None):
+                await sink.process_packet(value, None)
+        identifier = OccurrenceStore.identifier("garage", "visit-1")
+        result = history.occurrences.get(identifier, read_filter=lambda _: True)
+        assert result["status"] == "CLOSE" and result["revision"] == 3
+        assert result["started_at"] == 1 and result["ended_at"] == 2
+        assert set(result["participants"]) == {"person-1"}
+        assert len(result["evidence"]) == 2 and len(result["members"]) == 1
+        assert {item["camera_id"] for item in result["evidence"].values()} == {"a", "b"}
+        assert len(history.occurrences.deliveries(identifier)) == 1
+        reopened = NotificationsRuntime(data_dir=tmp_path)
+        assert reopened.occurrences.get(identifier, read_filter=lambda _: True) == result
+        await reopened.erase_occurrence(identifier, expected_revision=result["revision"])
+        for source in (original, other, closed):
+            assert await sink.process_packet((await adapter.process_packet(source, None))[0], None) == []
+        tombstone = reopened.occurrences.get(identifier, read_filter=lambda _: True)
+        assert tombstone["status"] == "deleted"
+        assert not reopened.occurrences.deliveries(identifier)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mutation", ["camera", "scope", "timestamp", "capture"])
+def test_evidence_validation_fails_without_persistence(tmp_path, mutation):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        sink = RecordOccurrenceRuntime(settings(), dependencies(history))
+        adapter = ActivityEvidenceRuntime()
+        value = event()
+        if mutation == "capture":
+            value.payload["capture_evidence"].pop("sequence")
+        with pytest.raises((ValueError, ValidationError)):
+            value = (await adapter.process_packet(value, None))[0]
+            evidence = value.payload["activity_observation"]
+            if mutation == "camera":
+                evidence["camera_id"] = "private"
+            elif mutation == "scope":
+                evidence["scope"] = {"camera_ids": ["private"]}
+            elif mutation == "timestamp":
+                evidence["observed_at"] = None
+            await sink.process_packet(value, None)
+        assert history.occurrences.list(read_filter=lambda _: True)[0] == []
+    asyncio.run(scenario())
+
+
+def test_recording_does_not_hide_a_changed_message_as_a_removed_episode(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        sink = RecordOccurrenceRuntime(settings(), dependencies(history))
+        packet = (await ActivityEvidenceRuntime().process_packet(event(), None))[0]
+        await sink.process_packet(packet, None)
+        changed = {**packet.payload["activity_observation"], "reason": "different"}
+        with pytest.raises(OccurrenceConflict, match="occurrence_message_changed"):
+            await sink.process_packet(replace(packet, payload={"activity_observation": changed}), None)
+    asyncio.run(scenario())
+
+
+def test_late_recording_admits_current_evidence_once_without_backdating(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        adapter = ActivityEvidenceRuntime()
+        values = []
+        for sequence, lifecycle in ((1, Lifecycle.OPEN), (5, Lifecycle.UPDATE),
+                                    (6, Lifecycle.UPDATE), (7, Lifecycle.CLOSE)):
+            source = event(sequence=sequence, lifecycle=lifecycle)
+            source.payload["entity_activity"]["started_at"] = 1.0
+            values.append((await adapter.process_packet(source, None))[0])
+        services = dependencies(history)
+        services.services.register("occurrences.enrichment_allowed", history.enrichment_allowed)
+        services.services.register("occurrences.enrich", history.enrich_occurrence)
+        sink = RecordOccurrenceRuntime(settings(enrich=True), services)
+        await sink.prepare(None)
+        identifier = OccurrenceStore.identifier("garage", "visit-1")
+        original = dict(values[1].payload["activity_observation"])
+        [annotation] = await sink.process_packet(values[1], None)
+        reference = annotation.payload["occurrence_reference"]
+        assert reference["evidence_id"] == original["evidence_id"]
+        assert await history.enrichment_allowed(reference, evidence=original)
+        first = history.occurrences.get(identifier, read_filter=lambda _: True)
+        assert first["started_at"] == first["admitted_at"] == 5
+        assert first["coverage"]["gaps"] is True
+        assert history.occurrences.revisions(identifier)[0]["kind"] == "ADMIT"
+        # Reconciliation replaces the consumer while the producer remains active.
+        sink = RecordOccurrenceRuntime(settings(), dependencies(history))
+        await sink.process_packet(values[1], None)
+        assert history.occurrences.get(identifier, read_filter=lambda _: True) == first
+        for value in (values[2], values[0], values[3], values[1]):
+            await sink.process_packet(value, None)
+        result = history.occurrences.get(identifier, read_filter=lambda _: True)
+        assert result["status"] == "CLOSE" and result["started_at"] == 5
+        assert result["ended_at"] == 7 and result["duration_seconds"] == 2
+        assert result["evidence"][original["evidence_id"]]["started_at"] == 1
+        assert values[1].payload["activity_observation"] == original
+        assert len(history.occurrences.deliveries(identifier)) == 1
+        assert NotificationsRuntime(data_dir=tmp_path).occurrences.get(identifier, read_filter=lambda _: True) == result
+        await history.erase_occurrence(identifier, expected_revision=result["revision"])
+        await sink.process_packet(values[1], None)
+        assert history.occurrences.get(identifier, read_filter=lambda _: True)["status"] == "deleted"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_late_recording_never_invents_an_episode_from_replay_or_close(tmp_path, terminal):
+    from types import SimpleNamespace
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        adapter = ActivityEvidenceRuntime()
+        await adapter.process_packet(event(), None)
+        value = (await adapter.process_packet(event(sequence=2,
+            lifecycle=Lifecycle.CLOSE if terminal else Lifecycle.UPDATE), None))[0]
+        if not terminal:
+            value.payload["activity_observation"]["replay"] = True
+        decisions = []
+        context = SimpleNamespace(inspect=lambda *args, **kwargs: decisions.append(kwargs["reason"]))
+        await RecordOccurrenceRuntime(settings(), dependencies(history)).process_packet(value, context)
+        assert history.occurrences.list(read_filter=lambda _: True)[0] == []
+        assert decisions == ["occurrence_not_observed"]
+    asyncio.run(scenario())
+
+
+def test_durable_result_queue_keeps_every_update_under_slow_storage(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        operators = OperatorRegistry()
+        register_builtin_operators(operators)
+        adapter = ActivityEvidenceRuntime()
+        finished = asyncio.Event()
+
+        class Source(SourceOperatorRuntime):
+            async def run(self, context):
+                for sequence in range(1, 162):
+                    lifecycle = Lifecycle.OPEN if sequence == 1 else Lifecycle.CLOSE if sequence == 161 else Lifecycle.UPDATE
+                    value = (await adapter.process_packet(event(sequence=sequence, lifecycle=lifecycle), None))[0]
+                    await context.emit(value)
+                await context.cancel_event.wait()
+
+        operators.register_operator(operator_id="test.admitted", inputs=[], outputs=[{"name": "out"}],
+            produces_payload_keys=["activity_observation"], runtime_factory=lambda *_: Source())
+        contract = ResultContract(version=1, payload_keys=["activity_observation"])
+        producer = Pipeline(name="fixture", enabled=False, graph=build_pipeline_graph_v2(
+            graph_uid="fixture", nodes=[{"id": "events", "operator": "test.admitted"}], edges=[],
+            meta={"outputs": [{"key": "fixture.events", "node_uid": "events", "contract": contract.model_dump(),
+                              "production_scope": "fixture"}]}))
+        compiler = PipelineGraphCompiler(operators)
+        demands = ResourceDemandRegistry(lambda *_: True, compiler=compiler)
+        demands.bind([producer])
+        demand = demands.open("owner", DemandRequest(consumer_id="automatic:garage", purpose="automatic",
+            result_key="fixture.events", contract=contract, payload_keys=contract.payload_keys,
+            production_revision=demands.outputs["fixture.events"][2]))
+        demand.consequence = {"operator": "core.record_occurrence", "config": settings()}
+        received = []
+        async def record(**kwargs):
+            await asyncio.sleep(0.002)
+            result = await history.record_occurrence(**kwargs)
+            received.append(kwargs["contribution"].frame_sequence)
+            if result["status"] == "CLOSE":
+                finished.set()
+        services = ServiceRegistry()
+        services.register("occurrences.record", record)
+        services.register("occurrences.register_recorder", history.register_occurrence_recorder)
+        services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
+        compiled = compiler.compile_many(demands.pipelines(), catalog=[producer])
+        runtime = PipelineBundleRuntime(compiled, operators,
+            PipelineRuntimeDependencies(services=services, demand_registry=demands))
+        await runtime.start()
+        try:
+            await asyncio.wait_for(finished.wait(), 4)
+            assert len(received) == 161
+            assert received == sorted(set(received))
+            result = history.occurrences.get(OccurrenceStore.identifier("garage", "visit-1"), read_filter=lambda _: True)
+            assert result["revision"] == 161 and len(result["evidence"]) == 161
+            assert result["status"] == "CLOSE"
+        finally:
+            demands.release(demand.id)
+            await runtime.stop()
+            await runtime.dependencies.execution_scheduler.shutdown()
+    asyncio.run(asyncio.wait_for(scenario(), 6))
+
+
+def test_recording_joins_a_running_manual_producer_without_restarting_it(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        operators = OperatorRegistry()
+        register_builtin_operators(operators)
+        adapter, pending = ActivityEvidenceRuntime(), asyncio.Queue()
+        recorded, starts = asyncio.Event(), []
+
+        class Source(SourceOperatorRuntime):
+            async def run(self, context):
+                starts.append(True)
+                while not context.cancel_event.is_set():
+                    source = await pending.get()
+                    await context.emit((await adapter.process_packet(source, None))[0])
+
+        operators.register_operator(operator_id="test.admitted", inputs=[], outputs=[{"name": "out"}],
+            produces_payload_keys=["activity_observation"], runtime_factory=lambda *_: Source())
+        contract = ResultContract(version=1, payload_keys=["activity_observation"])
+        producer = Pipeline(name="fixture", enabled=False, graph=build_pipeline_graph_v2(
+            graph_uid="fixture", nodes=[{"id": "events", "operator": "test.admitted"}], edges=[],
+            meta={"outputs": [{"key": "fixture.events", "node_uid": "events", "contract": contract.model_dump(),
+                              "production_scope": "fixture"}]}))
+        compiler = PipelineGraphCompiler(operators)
+        demands = ResourceDemandRegistry(lambda *_: True, compiler=compiler)
+        demands.bind([producer])
+        def demand(purpose):
+            return demands.open("owner", DemandRequest(consumer_id=purpose, purpose=purpose,
+                result_key="fixture.events", contract=contract, payload_keys=contract.payload_keys,
+                production_revision=demands.outputs["fixture.events"][2]))
+        manual = demand("manual")
+        services = ServiceRegistry()
+        async def record(**kwargs):
+            result = await history.record_occurrence(**kwargs)
+            recorded.set()
+            return result
+        services.register("occurrences.record", record)
+        services.register("occurrences.register_recorder", history.register_occurrence_recorder)
+        services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
+        def compile():
+            return compiler.compile_many(demands.pipelines(), catalog=[producer])
+        runtime = PipelineBundleRuntime(compile(), operators,
+            PipelineRuntimeDependencies(services=services, demand_registry=demands))
+        await runtime.start()
+        try:
+            await pending.put(event())
+            for _ in range(100):
+                if manual.received: break
+                await asyncio.sleep(.005)
+            assert manual.received == 1
+            automatic = demand("automatic")
+            automatic.consequence = {"operator": "core.record_occurrence", "config": settings()}
+            await runtime.reconcile(compile())
+            await pending.put(event(sequence=5, lifecycle=Lifecycle.UPDATE))
+            await asyncio.wait_for(recorded.wait(), 1)
+            assert len(starts) == 1 and manual.received == 2
+            # Replacing a recorder for a rename keeps semantic observation available.
+            automatic.consequence["config"]["title"] = "Renamed garage"
+            await runtime.reconcile(compile())
+            identifier = OccurrenceStore.identifier("garage", "visit-1")
+            result = history.occurrences.get(identifier, read_filter=lambda _: True)
+            assert result["observation_state"] == "observing"
+            demands.release(automatic.id)
+            await runtime.reconcile(compile())
+            result = history.occurrences.get(identifier, read_filter=lambda _: True)
+            assert result["observation_state"] == "interrupted" and result["status"] == "OPEN"
+            assert result["duration_seconds"] is None
+            automatic = demand("automatic")
+            automatic.consequence = {"operator": "core.record_occurrence", "config": settings()}
+            await runtime.reconcile(compile())
+            assert history.occurrences.get(identifier, read_filter=lambda _: True)["observation_state"] == "interrupted"
+            recorded.clear()
+            await pending.put(event(sequence=6, lifecycle=Lifecycle.CLOSE))
+            await asyncio.wait_for(recorded.wait(), 1)
+            result = history.occurrences.get(OccurrenceStore.identifier("garage", "visit-1"), read_filter=lambda _: True)
+            assert result["status"] == "CLOSE" and result["started_at"] == 5
+            assert result["ended_at"] == 6 and result["duration_seconds"] is None
+            assert result["coverage"]["gaps"] and len(history.occurrences.deliveries(result["id"])) == 1
+        finally:
+            for identifier in list(demands.demands): demands.release(identifier)
+            await runtime.stop()
+            await runtime.dependencies.execution_scheduler.shutdown()
+    asyncio.run(asyncio.wait_for(scenario(), 4))
+
+
+def test_cancelled_record_is_drained_before_last_recorder_interrupts(tmp_path):
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        services = dependencies(history)
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def record(**kwargs):
+            entered.set()
+            await release.wait()
+            return await history.record_occurrence(**kwargs)
+        services.services.register("occurrences.record", record)
+        sink = RecordOccurrenceRuntime(settings(), services)
+        await sink.prepare(None)
+        await sink.prepare(None)
+        assert len(history._occurrence_recorders) == 1
+        value = (await ActivityEvidenceRuntime().process_packet(event(), None))[0]
+        processing = asyncio.create_task(sink.process_packet(value, None))
+        await entered.wait()
+        processing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await processing
+        stopping = asyncio.create_task(sink.shutdown())
+        await asyncio.sleep(0)
+        assert not stopping.done()
+        assert await sink.process_packet(value, None) == []
+        release.set()
+        await stopping
+        result = history.occurrences.get(OccurrenceStore.identifier("garage", "visit-1"), read_filter=lambda _: True)
+        assert result["observation_state"] == "interrupted"
+        assert result["revision"] == 2 and len(history.occurrences.deliveries(result["id"])) == 1
+        await sink.shutdown()
+        assert not history._occurrence_recorders
+    asyncio.run(asyncio.wait_for(scenario(), 2))
+
+
+def test_admission_retains_observed_start_without_extending_time_at_close(tmp_path):
+    from test_automatic_observations import observed
+    from toposync_ext_cameras.pipelines.frame_occurrence import FrameOccurrenceRuntime
+
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        sink = RecordOccurrenceRuntime(settings(notice="none"), dependencies(history))
+        occurrence = FrameOccurrenceRuntime({"categories": ["car"], "minimum_duration_seconds": 1})
+        adapter = ActivityEvidenceRuntime()
+        admitted = []
+        for sequence in (10, 11, 12):
+            admitted.extend(await occurrence.process_packet(observed(sequence=sequence), None))
+        assert len(admitted) == 2
+        admitted.extend(await occurrence.process_packet(observed(sequence=13, lifecycle=Lifecycle.CLOSE), None))
+        for source in admitted:
+            value = (await adapter.process_packet(source, None))[0]
+            await sink.process_packet(value, None)
+        identifier = OccurrenceStore.identifier("garage", value.payload["activity_observation"]["episode_id"])
+        result = history.occurrences.get(identifier, read_filter=lambda _: True)
+        assert result["status"] == "CLOSE"
+        assert result["started_at"] == 10 and result["ended_at"] == 12 and result["duration_seconds"] == 2
+        assert history.occurrences.deliveries(identifier) == []
+        assert all(item["observed_at"] <= 12 for item in result["evidence"].values())
+    asyncio.run(scenario())
+
+
+def test_automatic_api_records_overlapping_objectives_and_exports_the_same_events(tmp_path, monkeypatch):
+    import time
+    from test_auth_local import _create_client, _setup_owner
+    from test_automatic_api import register_capability
+
+    async def samples():
+        adapter = ActivityEvidenceRuntime()
+        first = event("fixture")
+        second = event("fixture", 2, Lifecycle.UPDATE)
+        return [(await adapter.process_packet(value, None))[0]
+                for value in (first, first, second, replace(second, lifecycle=Lifecycle.CLOSE))]
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        calls = []
+        register_capability(client, calls, packets=asyncio.run(samples()))
+        configuration = {"enabled": True, "intents": [
+            {"id": identifier, "name": title, "capability": "test.presence",
+             "scope": {"camera_ids": ["fixture"]},
+             "consequence": {"capability": "core.record", "parameters": {"notice": "simulated", "retention_days": 2}}}
+            for identifier, title in (("garage", "Garage"), ("pool", "Pool boundary"))
+        ]}
+        saved = client.put("/api/automatic", json={"expected_revision": 0, "configuration": configuration})
+        assert saved.status_code == 200, saved.text
+        deadline = time.monotonic() + 3
+        while True:
+            response = client.get("/api/activity")
+            assert response.status_code == 200
+            results = response.json()["occurrences"]
+            if len(results) == 2 and all(item["status"] == "CLOSE" for item in results):
+                break
+            assert time.monotonic() < deadline, saved.json()
+            time.sleep(0.02)
+        assert calls.count("started") == 1
+        assert {item["title"] for item in results} == {"Garage", "Pool boundary"}
+        for result in results:
+            detail = client.get("/api/activity/" + result["id"]).json()
+            assert detail["occurrence"]["revision"] == 3
+            assert len(detail["deliveries"]) == 1 and detail["deliveries"][0]["status"] == "confirmed"
+            assert detail["deliveries"][0]["simulated"]
+            assert result["expires_at"] - result["created_at"] == 2 * 86400
+            manifest = client.get("/api/activity/" + result["id"] + "/manifest")
+            assert manifest.status_code == 200 and manifest.json()["id"] == result["id"]
+            assert len(manifest.json()["evidence"]) == 2
+
+
+def test_record_preparation_rejects_a_provider_without_evidence_before_starting(tmp_path, monkeypatch):
+    from test_auth_local import _create_client, _setup_owner
+    from test_automatic_api import register_capability
+
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        calls = []
+        register_capability(client, calls)
+        services = client.app.state.services
+        original = services._services["automatic.plan.fixture"]
+        def incomplete(**kwargs):
+            plan = original(**kwargs)
+            plan["graph"]["meta"]["outputs"][0]["contract"]["payload_keys"].remove("activity_observation")
+            return plan
+        services.register("automatic.plan.fixture", incomplete)
+        response = client.post("/api/automatic/preview", json={"expected_revision": 0,
+            "configuration": {"enabled": True, "intents": [{"id": "garage", "name": "Garage",
+                "capability": "test.presence", "scope": {"camera_ids": ["fixture"]}}]}})
+        assert response.status_code == 422 and "observation evidence contract" in response.text
+        assert "started" not in calls and not client.app.state.pipeline_demands.demands
+
+
+def test_activity_adapter_retains_source_labels_without_pixels():
+    async def scenario():
+        source = event()
+        source = replace(source, payload={**source.payload, 'camera_name': ' Frente ',
+            'source': {**source.payload['source'], 'source_name': ' Principal '}})
+        runtime = ActivityEvidenceRuntime()
+        adapted, = await runtime.process_packet(source, None)
+        value = adapted.payload['activity_observation']
+        assert value['camera_name'] == 'Frente' and value['source_name'] == 'Principal'
+        assert value['camera_id'] == 'a' and value['source_id'] == 'a'
+        assert not next(iter(runtime.members.values()))[1].artifacts
+    asyncio.run(scenario())

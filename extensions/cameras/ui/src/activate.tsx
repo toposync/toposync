@@ -1,5 +1,6 @@
 import { StationaryObservationSummary, supportsStationaryObservation, stationaryObservationTranslations } from "./notifications/StationaryObservationSummary";
 import React from "react";
+import { AutomaticNativeObservationPanel, AutomaticObservationStatus } from "./pipelines/AutomaticNativeObservationPanel";
 import { VisualRegionPanel, visualRegionTranslations } from "./pipelines/VisualRegionPanel";
 import {
   LivePanoramaSelectorContent,
@@ -19,6 +20,10 @@ import { humanObservationTranslations } from "./notifications/humanObservationTr
 import { AudioObservationDetails, audioHistoryTranslations, supportsAudioObservation } from "./notifications/AudioObservationDetails";
 
 export function activate(host: ToposyncHost): void {
+  host.registerPipelineOperatorPanel({ id: "com.toposync.cameras.automatic-native", operatorId: "camera.onvif_state_gate", placement: "after",
+    renderStatus: status => <AutomaticObservationStatus status={status} i18n={host.i18n} />,
+    renderSummary: config => <p>{host.i18n.t(config.enabled === true ? "ext.cameras.automatic.native.qualified" : "ext.cameras.automatic.native.continuous")}{config.enabled === true && <><br />{host.i18n.t(config.fallback_to_video === true ? "ext.cameras.automatic.native.fallback" : "ext.cameras.automatic.native.no_fallback")}</>}</p>,
+    render: props => props.purpose === "automatic" ? <AutomaticNativeObservationPanel {...props} /> : null });
   host.i18n.registerTranslations(visualRegionTranslations);
   host.registerPipelineOperatorPanel({ id: "com.toposync.cameras.panorama-region", operatorId: "camera.panorama_region",
     render: props => <VisualRegionPanel host={host} {...props} /> });
@@ -27,11 +32,11 @@ export function activate(host: ToposyncHost): void {
   host.registerPipelineOperatorPanel({ id: "com.toposync.cameras.region-occurrence", operatorId: "camera.region_occurrence",
     render: ({ i18n, config, updateConfig }) => <div className="pipelinesOperatorConfigCard">
       <p>{i18n.t("ext.cameras.visual_region.observation_connection")}</p>
-      <label className="pipelinesLabel"><span>{i18n.t("ext.cameras.visual_region.name")}</span><input value={String(config.region_name || "")} onChange={event => updateConfig({ region_name: event.target.value })} /></label>
-      <label className="pipelinesLabel"><span>{i18n.t("ext.cameras.visual_region.occurrence")}</span><select value={String(config.mode || "presence")} onChange={event => updateConfig({ mode: event.target.value })}>
+      <label className="pipelinesLabel"><span>{i18n.t("ext.cameras.visual_region.name")}</span><input className="pipelinesInput" value={String(config.region_name || "")} onChange={event => updateConfig({ region_name: event.target.value })} /></label>
+      <label className="pipelinesLabel"><span>{i18n.t("ext.cameras.visual_region.occurrence")}</span><select className="pipelinesSelect" value={String(config.mode || "presence")} onChange={event => updateConfig({ mode: event.target.value })}>
         <option value="presence">{i18n.t("ext.cameras.visual_region.presence")}</option><option value="entry">{i18n.t("ext.cameras.visual_region.entry")}</option>
       </select></label>
-      <label className="pipelinesLabel"><span>{i18n.t("ext.cameras.visual_region.duration")}</span><input type="number" min={0} max={3600} step={.1} value={Number(config.minimum_duration_seconds ?? 1)} onChange={event => updateConfig({ minimum_duration_seconds: Number(event.target.value) })} /></label>
+      <label className="pipelinesLabel"><span>{i18n.t("ext.cameras.visual_region.duration")}</span><input className="pipelinesInput" type="number" min={0} max={3600} step={.1} value={Number(config.minimum_duration_seconds ?? 1)} onChange={event => updateConfig({ minimum_duration_seconds: Number(event.target.value) })} /></label>
     </div> });
   host.i18n.registerTranslations(camerasTranslations);
   host.i18n.registerTranslations(stationaryObservationTranslations);

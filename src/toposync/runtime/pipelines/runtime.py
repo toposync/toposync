@@ -81,6 +81,15 @@ class Packet:
         return max(0.0, (float(now_ns) - float(self.created_monotonic_ns)) / 1_000_000.0)
 
 
+def packet_occurrence_id(packet: Packet) -> str | None:
+    identifier = packet.metadata.get("recording_occurrence_id")
+    if isinstance(identifier, str) and identifier:
+        return identifier
+    reference = packet.payload.get("occurrence_reference")
+    identifier = reference.get("occurrence_id") if isinstance(reference, dict) else None
+    return identifier if isinstance(identifier, str) and identifier else None
+
+
 def _normalize_limit_bytes(value: int | None) -> int | None:
     if value is None:
         return None
@@ -408,6 +417,7 @@ class BoundedChannel(Generic[T]):
         self._global_artifact_counter = global_artifact_counter
         self._queue: asyncio.Queue[_Envelope[T]] = asyncio.Queue(maxsize=self.maxsize)
         self._item_available = asyncio.Event()
+        self._revoked = False
         self._metrics = _ChannelMetrics()
 
     @property
@@ -451,21 +461,38 @@ class BoundedChannel(Generic[T]):
             return "pressured"
         return "healthy"
 
+    def revoke(self) -> int:
+        self._revoked = True
+        dropped = self.clear()
+        self._item_available.set()
+        return dropped
+
     def clear(self) -> int:
+        return self.discard(lambda _: True, reason="clear")
+
+    def discard(self, predicate: Callable[[T], bool], *, reason: str = "occurrence_invalidated") -> int:
         dropped = 0
         dropped_bytes = 0
+        kept = []
         while True:
             try:
                 env = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            dropped += 1
-            dropped_bytes += int(getattr(env, "artifact_bytes", 0) or 0)
+            if predicate(env.item):
+                dropped += 1
+                dropped_bytes += env.artifact_bytes
+            else:
+                kept.append(env)
+        for env in kept:
+            self._queue.put_nowait(env)
+        if not kept:
+            self._item_available.clear()
         self._metrics.record_event()
         if dropped:
-            self._metrics.record_drop("clear", count=dropped, artifact_bytes=dropped_bytes)
+            self._metrics.record_drop(reason, count=dropped, artifact_bytes=dropped_bytes)
         if dropped_bytes:
-            self._metrics.in_memory_artifact_bytes = 0
+            self._metrics.in_memory_artifact_bytes -= dropped_bytes
             self._budget_release(dropped_bytes)
         return dropped
 
@@ -549,7 +576,7 @@ class BoundedChannel(Generic[T]):
         self._metrics.record_event()
 
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 self._metrics.canceled += 1
                 self._metrics.record_pressure("put_canceled")
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
@@ -639,7 +666,7 @@ class BoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout if timeout is not None else None
 
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 self._metrics.canceled += 1
                 self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.CANCELED)
@@ -661,7 +688,7 @@ class BoundedChannel(Generic[T]):
             envelope = await self._wait_for_item(timeout_s=remaining, cancel_event=cancel_event)
             self._metrics.record_waiting_get_ms(_elapsed_monotonic_ms(wait_started_ns))
             if envelope is None:
-                if _is_canceled(cancel_event):
+                if self._revoked or _is_canceled(cancel_event):
                     self._metrics.canceled += 1
                     self._metrics.record_event()
                     return ChannelGetResult(status=QueueOperationStatus.CANCELED)
@@ -746,7 +773,7 @@ class BoundedChannel(Generic[T]):
         cancel_event: asyncio.Event | None,
     ) -> QueueOperationStatus:
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 return QueueOperationStatus.CANCELED
             if self.depth < self.maxsize:
                 return QueueOperationStatus.ACCEPTED
@@ -770,11 +797,13 @@ class BoundedChannel(Generic[T]):
         while True:
             # Auxiliary tasks only signal availability. They must never take ownership
             # of an envelope that a canceled consumer can no longer deliver.
+            if self._revoked:
+                return None
             try:
                 return self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 return None
             remaining = _remaining_timeout(deadline)
             if remaining is not None and remaining <= 0:
@@ -829,6 +858,7 @@ class KeyedBoundedChannel(Generic[T]):
         self._ready_set: set[str] = set()
         self._depth = 0
         self._condition = asyncio.Condition()
+        self._revoked = False
 
     @property
     def depth(self) -> int:
@@ -871,6 +901,10 @@ class KeyedBoundedChannel(Generic[T]):
         if self._metrics.pressure_cause != "none" or self.depth >= self.maxsize:
             return "pressured"
         return "healthy"
+
+    def revoke(self) -> int:
+        self._revoked = True
+        return self.clear()
 
     def clear(self) -> int:
         dropped = int(self._depth)
@@ -939,12 +973,15 @@ class KeyedBoundedChannel(Generic[T]):
         self._metrics.record_event()
 
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 self._metrics.canceled += 1
                 self._metrics.record_pressure("put_canceled")
                 return ChannelPutResult(status=QueueOperationStatus.CANCELED)
 
             async with self._condition:
+                if self._revoked or _is_canceled(cancel_event):
+                    self._metrics.canceled += 1
+                    return ChannelPutResult(status=QueueOperationStatus.CANCELED)
                 if self.drop_policy == DropPolicy.KEYED_LATEST_ONLY and not structural:
                     dropped, _dropped_bytes = self._drop_droppable_for_key_locked(key, clear_all=True)
                     if dropped > 0:
@@ -1046,12 +1083,15 @@ class KeyedBoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout if timeout is not None else None
 
         while True:
-            if _is_canceled(cancel_event):
+            if self._revoked or _is_canceled(cancel_event):
                 self._metrics.canceled += 1
                 self._metrics.record_event()
                 return ChannelGetResult(status=QueueOperationStatus.CANCELED)
 
             async with self._condition:
+                if self._revoked or _is_canceled(cancel_event):
+                    self._metrics.canceled += 1
+                    return ChannelGetResult(status=QueueOperationStatus.CANCELED)
                 if self._depth > 0:
                     envelope = self._dequeue_locked()
                     self._condition.notify_all()
@@ -1123,6 +1163,34 @@ class KeyedBoundedChannel(Generic[T]):
             self._queues_by_key.pop(key, None)
             self._artifact_bytes_by_key.pop(key, None)
         return envelope
+
+    def discard(self, predicate: Callable[[T], bool], *, reason: str = "occurrence_invalidated") -> int:
+        dropped = dropped_bytes = 0
+        for key, queue in list(self._queues_by_key.items()):
+            kept = deque()
+            kept_bytes = 0
+            for envelope in queue:
+                if predicate(envelope.item):
+                    dropped += 1
+                    dropped_bytes += envelope.artifact_bytes
+                else:
+                    kept.append(envelope)
+                    kept_bytes += envelope.artifact_bytes
+            if kept:
+                self._queues_by_key[key] = kept
+                self._artifact_bytes_by_key[key] = kept_bytes
+            else:
+                self._queues_by_key.pop(key)
+                self._artifact_bytes_by_key.pop(key, None)
+                self._ready_set.discard(key)
+        self._ready_keys = deque(key for key in self._ready_keys if key in self._ready_set)
+        self._depth -= dropped
+        self._metrics.in_memory_artifact_bytes -= dropped_bytes
+        self._budget_release(dropped_bytes)
+        if dropped:
+            self._metrics.record_event()
+            self._metrics.record_drop(reason, count=dropped, artifact_bytes=dropped_bytes)
+        return dropped
 
     def _drop_droppable_for_key_locked(
         self,
@@ -1222,7 +1290,7 @@ class KeyedBoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout_s if timeout_s is not None else None
         async with self._condition:
             while True:
-                if _is_canceled(cancel_event):
+                if self._revoked or _is_canceled(cancel_event):
                     return QueueOperationStatus.CANCELED
                 if self._depth < self.maxsize:
                     return QueueOperationStatus.ACCEPTED
@@ -1247,7 +1315,7 @@ class KeyedBoundedChannel(Generic[T]):
         deadline = time.monotonic() + timeout_s if timeout_s is not None else None
         async with self._condition:
             while True:
-                if _is_canceled(cancel_event):
+                if self._revoked or _is_canceled(cancel_event):
                     return QueueOperationStatus.CANCELED
                 if self._depth > 0:
                     return QueueOperationStatus.ACCEPTED

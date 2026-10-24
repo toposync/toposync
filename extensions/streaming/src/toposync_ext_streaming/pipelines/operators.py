@@ -15,6 +15,7 @@ from toposync.runtime.pipelines.execution import (
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME, normalize_artifact_name
 from toposync.runtime.pipelines.operator_registry import OperatorDiagnostic, OperatorRegistry
 from toposync.runtime.pipelines.packet_contract import resolve_media_ts
+from toposync.runtime.pipelines.presentation import frame_presentation
 from toposync.runtime.pipelines.runtime import Lifecycle, Packet
 
 from ..api.models import EXTENSION_ID
@@ -150,6 +151,7 @@ class PublishVideoRuntime(SinkRuntime):
             writer_priority=self._config.writer_priority,
             frame=frame,
             frame_ts=frame_ts,
+            presentation=frame_presentation(packet, normalize_artifact_name(self._config.input_artifact_name)),
         )
         return []
 

@@ -22,12 +22,16 @@ from ..parsers import (
 
 
 def _import_onnxruntime():
+    # ORT initializes its POSIX uploader during import, before the Python disable API can run.
+    os.environ["ORT_DISABLE_TELEMETRY"] = "1"
     try:
         import onnxruntime as ort  # type: ignore
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
             "onnxruntime is not installed. Install the first-party vision runtime dependencies."
         ) from exc
+    # Local inference must not start the SDK's background telemetry uploader.
+    ort.disable_telemetry_events()
     return ort
 
 
@@ -237,6 +241,7 @@ class _OnnxRuntimeSessionBackend:
         *,
         task: str,
         supported_postprocess: set[str],
+        model_data: bytes | None = None,
     ) -> None:
         if manifest.runtime != "onnxruntime":
             raise RuntimeError(
@@ -270,7 +275,7 @@ class _OnnxRuntimeSessionBackend:
         options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         options.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self._session = ort.InferenceSession(
-            str(model_path), sess_options=options, providers=self._providers
+            model_data if model_data is not None else str(model_path), sess_options=options, providers=self._providers
         )
         session_inputs = self._session.get_inputs()
         if not session_inputs:

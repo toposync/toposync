@@ -6,10 +6,11 @@ import { fetchCameraOnvifCapabilities, observeCameraOnvifEvents } from "../api/c
 
 type Translate = ReturnType<HostI18n["useI18n"]>["t"];
 
-export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, processingServerId, value, onChange, onPendingChange, t, disabled }: {
-  camera: CameraConfig; sourceId: string; preset: CameraPipelinePreset; processingServerId: string;
+export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, processingServerId, value, onChange, onPendingChange, t, disabled, automaticWindow = false }: {
+  camera: Omit<CameraConfig, "clock_domain">; sourceId: string; preset: CameraPipelinePreset; processingServerId: string;
   onPendingChange?: (pending: boolean) => void;
-  value?: CameraOnvifOptimization; onChange: (value?: CameraOnvifOptimization) => void; t: Translate; disabled: boolean;
+  value?: CameraOnvifOptimization; onChange: (value?: CameraOnvifOptimization, profileToken?: string) => void; t: Translate; disabled: boolean;
+  automaticWindow?: boolean;
 }): React.ReactElement {
   const selectId = useId();
   const [error, setError] = useState(false);
@@ -24,7 +25,13 @@ export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, proces
   const [holdSeconds, setHoldSeconds] = useState("30");
   const holdDuration = Number(holdSeconds.replace(",", "."));
   const validDuration = Boolean(holdSeconds.trim()) && Number.isFinite(holdDuration) && holdDuration >= 0 && holdDuration <= 300;
-  useEffect(() => { setEnabled(false); setGap(false); setObservationError(""); setSelection(""); setSelectedSignal(null); setHoldSeconds("30"); onChange(undefined); onPendingChange?.(false); }, [camera.id, sourceId, preset, processingServerId]);
+  useEffect(() => {
+    setEnabled(automaticWindow); setGap(false); setObservationError(""); setSelectedSignal(null);
+    setSelection(automaticWindow && value ? JSON.stringify([value.qualified_topic, value.item_name, Object.entries(value.source).sort(), Object.entries(value.key).sort()]) : "");
+    setHoldSeconds(String(automaticWindow ? value?.hold_seconds ?? 30 : 30));
+    if (!automaticWindow) onChange(undefined);
+    onPendingChange?.(automaticWindow);
+  }, [camera.id, sourceId, preset, processingServerId, automaticWindow]);
   useEffect(() => {
     if (preset !== "people_simple" || camera.control.type !== "onvif" || processingServerId !== "local") return;
     const controller = new AbortController();
@@ -58,7 +65,7 @@ export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, proces
     return () => { controller.abort(); clearTimeout(timer); };
   }, [enabled, camera.id, sourceId, preset, camera.control.type, processingServerId]);
   const source = camera.sources.find(item => item.id === sourceId);
-  const profile = catalog?.profiles.find(item => item.token === source?.origin.profile_token);
+  const profile = catalog?.profiles.find(item => item.token === (catalog.source_profiles?.[sourceId] || source?.origin.profile_token));
   const candidates = ["onvif_profile", "rtsp"].includes(source?.origin.type || "") && profile ? (catalog?.observed_states ?? []).filter(state => {
     const matching = Object.entries({ VideoSourceToken: profile.video_source_token, VideoSourceConfigurationToken: profile.video_source_configuration_token,
       ...(state.topic === "VideoSource/MotionAlarm" ? { Source: profile.video_source_token } : {}),
@@ -82,14 +89,15 @@ export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, proces
   if (processingServerId !== "local") return <p className="settingsStatusMuted">{t("ext.cameras.onvif.local")}</p>;
   if (camera.control.type !== "onvif") return <p className="settingsStatusMuted">{t("ext.cameras.onvif.manual")}</p>;
   return <div className="field" style={{ overflowWrap: "anywhere" }}>
-    <label className="row"><input type="checkbox" checked={enabled} disabled={disabled || loading || !catalog} onChange={event => {
+    {!automaticWindow && <label className="formChoice"><input type="checkbox" checked={enabled} disabled={disabled || loading || !catalog} onChange={event => {
       setEnabled(event.target.checked); setGap(false); setObservationError(""); setSelection(""); setSelectedSignal(null); onChange(undefined); onPendingChange?.(event.target.checked);
-    }} />{t("ext.cameras.onvif.optimize")}</label>
+    }} />{t("ext.cameras.onvif.optimize")}</label>}
     {loading ? <p role="status">{t("ext.cameras.onvif.loading")}</p> : null}
     {error ? <p role="alert">{t("ext.cameras.onvif.error")}</p> : null}
     <button className="chipButton" type="button" disabled={disabled || loading} onClick={() => { setRefresh(count => count + 1); onPendingChange?.(enabled); }}>{t("ext.cameras.onvif.refresh")}</button>
     {enabled ? <>
-      <p className="settingsDescription">{t("ext.cameras.onvif.optimize_help")}</p>
+      <p className="settingsDescription">{t(automaticWindow ? "ext.cameras.automatic.native.help" : "ext.cameras.onvif.optimize_help")}</p>
+      {automaticWindow && <p>{t("ext.cameras.automatic.native.profile")}: {profile?.token || "—"}</p>}
       <p role="status" className="settingsDescription">{t("ext.cameras.onvif.recipe_observing")}</p>
       {!profile ? <p role="status">{t("ext.cameras.onvif.profile_required")}</p> : null}
       {gap ? <p role="status">{t("ext.cameras.onvif.gap")}{observationError ? ` ${observationError}` : ""}</p> : null}
@@ -100,27 +108,36 @@ export function CameraOnvifRecipeOptimization({ camera, sourceId, preset, proces
           placeholder="—" noOptionsMessage={() => t("ext.cameras.onvif.no_compatible_events")}
           formatOptionLabel={item => <div style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}><div>{item.label || item.item_name}</div><small>{item.topic} · {JSON.stringify(item.source)} · {JSON.stringify(item.key)}</small></div>}
           styles={{
-            control: base => ({ ...base, backgroundColor: "var(--color-surface-solid)", borderColor: "var(--color-border-subtle)" }),
+            control: (base, state) => ({
+              ...base, minHeight: 44, borderRadius: "var(--radius-control)", backgroundColor: "var(--color-surface-solid)",
+              borderColor: state.isFocused ? "var(--color-action-background)" : "var(--color-border-subtle)",
+              boxShadow: state.isFocused ? "0 0 0 2px var(--color-action-background)" : "none",
+              ":hover": { borderColor: state.isFocused ? "var(--color-action-background)" : "var(--color-border-strong)" },
+            }),
             menu: base => ({ ...base, backgroundColor: "var(--color-surface-solid)", zIndex: 50 }),
             singleValue: base => ({ ...base, color: "var(--color-text-primary)" }),
-            input: base => ({ ...base, color: "var(--color-text-primary)" }),
+            input: base => ({ ...base, color: "var(--color-text-primary)", "input:focus-visible": { boxShadow: "none" } }),
+            dropdownIndicator: base => ({ ...base, color: "var(--color-text-muted)", ":hover": { color: "var(--color-text-primary)" } }),
             option: (base, state) => ({ ...base, color: "var(--color-text-primary)", backgroundColor: state.isFocused || state.isSelected ? "var(--color-surface-frost-strong)" : "transparent" }),
           }}
           onChange={item => { setSelection(item ? identity(item) : ""); setSelectedSignal(item); onChange(undefined); onPendingChange?.(true); }} />
       </div>
       <details><summary>{t("ext.cameras.onvif.window_settings")}</summary><label className="field">
         <span>{t("ext.cameras.onvif.hold_seconds")}</span>
-        <input type="text" inputMode="decimal" maxLength={10} value={holdSeconds} aria-invalid={!validDuration} disabled={disabled} onChange={event => {
+        <input className="input" type="text" inputMode="decimal" maxLength={10} value={holdSeconds} aria-invalid={!validDuration}
+          aria-describedby={!validDuration ? `${selectId}-duration-error` : undefined} disabled={disabled} onChange={event => {
           const draft = event.target.value;
           setHoldSeconds(draft);
           const duration = Number(draft.replace(",", "."));
-          if (draft.trim() && Number.isFinite(duration) && duration >= 0 && duration <= 300 && value) onChange({ ...value, hold_seconds: duration });
+          if (draft.trim() && Number.isFinite(duration) && duration >= 0 && duration <= 300 && value) onChange({ ...value, hold_seconds: duration, coverage_confirmed: automaticWindow ? false : value.coverage_confirmed }, profile?.token);
         }} />
-      </label><p className="settingsDescription">{t("ext.cameras.onvif.window_help")}</p></details>
-      {selected && selectionAvailable ? <label className="row" style={{ alignItems: "flex-start" }}><input type="checkbox" checked={Boolean(value?.coverage_confirmed)} disabled={disabled || !validDuration} onChange={event => { onPendingChange?.(!event.target.checked); onChange(event.target.checked ? {
+      </label>
+        {!validDuration ? <p className="errorText" role="alert" id={`${selectId}-duration-error`}>{t("ext.cameras.onvif.hold_seconds_invalid")}</p> : null}
+        <p className="settingsDescription">{t(automaticWindow ? "ext.cameras.automatic.native.window" : "ext.cameras.onvif.window_help")}</p></details>
+      {selected && selectionAvailable ? <label className="formChoice"><input type="checkbox" checked={Boolean(value?.coverage_confirmed)} disabled={disabled || !validDuration} onChange={event => { onPendingChange?.(!event.target.checked); onChange(event.target.checked ? {
         topic: selected.topic, qualified_topic: selected.qualified_topic, item_name: selected.item_name,
         source: selected.source, key: selected.key, coverage_confirmed: true, hold_seconds: holdDuration,
-      } : undefined); }} /><span>{t("ext.cameras.onvif.qualify")}</span></label> : null}
+      } : undefined, profile?.token); }} /><span>{t(automaticWindow ? "ext.cameras.automatic.native.qualify" : "ext.cameras.onvif.qualify")}</span></label> : null}
     </> : null}
   </div>;
 }

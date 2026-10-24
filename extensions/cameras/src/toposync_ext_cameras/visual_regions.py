@@ -6,6 +6,7 @@ import base64
 import uuid
 import time
 from collections import OrderedDict
+from copy import deepcopy
 
 import cv2
 import numpy as np
@@ -18,8 +19,8 @@ from toposync.runtime.pipelines.runtime import Packet
 
 from .panorama import _error
 from .processing.planar_localization import PlanarLocalizer
-from .processing.visual_region import evaluate_detection, project_region, rasterize_region
-from .visual_region_models import VisualRegionConfig, RegionReference
+from .processing.visual_region import canonical_region, evaluate_detection, project_region, rasterize_region
+from .visual_region_models import CanonicalRegionConfig, VisualRegionConfig, RegionReference
 
 
 class AreaPreview(BaseModel):
@@ -32,12 +33,20 @@ class AreaPreview(BaseModel):
 
 async def _compute(function, *args, **kwargs):
     task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        # Cancellation must not release the work slot while native computation is still running.
-        await task
-        raise
+    cancelled = False
+    # Repeated cancellation must not release the slot while native computation is still running.
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    if cancelled:
+        if not task.cancelled():
+            task.exception()
+        raise asyncio.CancelledError
+    return task.result()
 
 
 class VisualRegionService:
@@ -45,6 +54,7 @@ class VisualRegionService:
         self.panorama, self.sources = panorama, sources
         self.planar = OrderedDict()
         self.masks = OrderedDict()
+        self.canonical = OrderedDict()
         self.recent_decisions = OrderedDict()
         self.lock = asyncio.Lock()
         self.work = asyncio.Semaphore(2)
@@ -142,7 +152,7 @@ class VisualRegionService:
             raise _error("source_panorama_changed", "A geometria da referência mudou.")
         return binding, paths
 
-    async def localize(self, camera_id, source_id, binding, paths, image, evidence, geometry):
+    async def localizer(self, camera_id, source_id, binding, paths):
         if binding["geometry"]["projection"] == "image_plane":
             key = (camera_id, source_id, binding["id"], binding["geometry"]["model_digest"])
             async with self.lock:
@@ -164,7 +174,79 @@ class VisualRegionService:
                 self.planar.move_to_end(key)
         else:
             localizer = await self.panorama.reference_localizer(camera_id, source_id, binding)
+        return localizer
+
+    async def localize(self, camera_id, source_id, binding, paths, image, evidence, geometry):
+        localizer = await self.localizer(camera_id, source_id, binding, paths)
         return await _compute(localizer.locate, image, evidence, geometry)
+
+    async def prepare(self, *, config, image, evidence, geometry):
+        parsed = CanonicalRegionConfig.model_validate(config)
+        parsed.require_region()
+        revision = parsed.geometry_key()
+        unavailable = {"status": "unavailable", "preparation_revision": revision}
+        if (not isinstance(image, np.ndarray) or image.dtype != np.uint8 or image.ndim != 3
+                or image.shape[2] != 3 or not 1 <= image.shape[0] * image.shape[1] <= 4_000_000):
+            return {**unavailable, "reason": "visual_region_image_invalid"}
+        if not isinstance(geometry, dict) or geometry.get("capture_evidence") != evidence:
+            return {**unavailable, "reason": "panorama_source_geometry_changed"}
+        image, evidence, geometry = image.copy(), deepcopy(evidence), deepcopy(geometry)
+
+        def fresh():
+            age = resolve_frame_freshness(Packet.create(stream_id="visual-region", payload={"capture_evidence": evidence})).age_seconds
+            return age is not None and age <= parsed.evidence_timeout_seconds
+
+        if not fresh():
+            return {**unavailable, "reason": "visual_region_frame_expired"}
+        if self.work.locked():
+            return {**unavailable, "reason": "visual_region_busy"}
+        async with self.work:
+            try:
+                binding, paths = await self.reference(parsed.camera_id, parsed.source_id, parsed.reference)
+                if revision not in self.canonical:
+                    base = await self.localizer(parsed.camera_id, parsed.source_id, binding, paths)
+
+                    def initialize():
+                        wrap = binding["geometry"]["projection"] == "equirectangular"
+                        mask = rasterize_region(parsed.strokes, binding["width"], binding["height"], wrap=wrap)
+                        coverage = cv2.imread(str(paths["coverage"]), cv2.IMREAD_GRAYSCALE)
+                        if coverage is None or coverage.shape != mask.shape or np.any((mask > 0) & (coverage == 0)):
+                            raise ValueError("visual_region_outside_reference_coverage")
+                        context = (rasterize_region(parsed.alignment_strokes, binding["width"], binding["height"], wrap=wrap)
+                                   if parsed.alignment_strokes else coverage.copy())
+                        radius = parsed.alignment_margin_pixels
+                        padded = np.pad(mask, ((0, 0), (radius, radius)), mode="wrap") if wrap else mask
+                        excluded = cv2.dilate(padded, np.ones((radius * 2 + 1, radius * 2 + 1), np.uint8))
+                        if wrap:
+                            excluded = excluded[:, radius:-radius]
+                        context[(coverage == 0) | (excluded > 0)] = 0
+                        if not context.any():
+                            raise ValueError("visual_region_static_context_missing")
+                        return mask, coverage, base.with_reference_mask(context)
+
+                    self.canonical[revision] = await _compute(initialize)
+                    while len(self.canonical) > 2:
+                        self.canonical.popitem(last=False)
+                self.canonical.move_to_end(revision)
+                mask, coverage, localizer = self.canonical[revision]
+                located = await _compute(localizer.locate, image, evidence, geometry)
+                if located.get("status") != "localized":
+                    return {**unavailable, "reason": located.get("reason", "panorama_visual_localization_failed")}
+                output = await _compute(canonical_region, image, mask, coverage, located, geometry,
+                                        maximum_side=parsed.maximum_side, wrap=binding["geometry"]["projection"] == "equirectangular")
+                await self.reference(parsed.camera_id, parsed.source_id, parsed.reference)
+                if not fresh():
+                    return {**unavailable, "reason": "visual_region_frame_expired"}
+                return {"status": "ready", "reason": "confirmed", "preparation_revision": revision,
+                        "capture_evidence": evidence, "reference": parsed.reference.model_dump(), "_image": output}
+            except ValueError as error:
+                reason = str(error)
+                allowed = {"visual_region_image_invalid", "visual_region_dimensions_invalid", "visual_region_pixel_limit",
+                           "visual_region_outside_reference_coverage", "visual_region_outside", "visual_region_partial",
+                           "visual_region_local_support_missing", "visual_region_localization_unverified", "visual_region_static_context_missing"}
+                return {**unavailable, "reason": reason if reason in allowed else "visual_region_preparation_failed"}
+            except (HTTPException, OSError, cv2.error, np.linalg.LinAlgError):
+                return {**unavailable, "reason": "visual_region_preparation_failed"}
 
     async def evaluate(self, *, config, image, evidence, geometry, detections=()):
         parsed = VisualRegionConfig.model_validate(config)
@@ -342,6 +424,7 @@ class VisualRegionService:
 def register_visual_region_routes(app, panorama, sources, services):
     service = VisualRegionService(panorama, sources)
     services.register("cameras.visual_region.evaluate", service.evaluate)
+    services.register("cameras.visual_region.prepare", service.prepare)
     services.register("cameras.visual_region.framing", service.framing)
     app.state.camera_visual_regions = service
 

@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from toposync.extensions import BaseExtension
+from toposync.extensions import BaseExtension, register_extension_shutdown_callback
 from toposync.runtime.event_bus import EventBus
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync.runtime.services import ServiceRegistry
@@ -68,6 +68,45 @@ class AiExtension(BaseExtension):
         registry = getattr(app.state, "pipeline_operator_registry", None)
         if isinstance(registry, OperatorRegistry):
             register_ai_pipeline_operators(registry)
+        from .pipelines.schemas import AiConditionFilterConfig
+
+        services.register("automatic.catalog.ai", lambda: [{
+            "id": "ai.context", "kind": "observation", "extension_id": EXTENSION_ID,
+            "title": {"en": "Contextual annotation", "pt-BR": "Anotação contextual"},
+            "scopes": ["camera", "image_region", "physical_area"],
+            "operators": ["camera.source", "vision.detect", "vision.track", "vision.crop_objects", "ai.condition_filter"],
+            "planner": "automatic.plan.camera_observation", "advanced": True,
+            "preparation_validator": "automatic.validate.camera_observation",
+            "required_features": ["tracking"], "required_consents": ["external"],
+            "resource_parameters_schema": AiConditionFilterConfig.model_json_schema(),
+            "resource_operator": "ai.condition_filter",
+            "resource_consent_fields": ["profile_id"],
+            "diagnostics_provider": "automatic.diagnostics.camera_observation",
+            "configuration_panels": [
+                {"operator": "camera.onvif_state_gate", "field": "native_observation", "minimum_sources": 1,
+                 "title": {"en": "Observation and camera events", "pt-BR": "Observação e eventos da câmera"}},
+                {"operator": "vision.associate_entities", "field": "association", "minimum_sources": 2},
+            ],
+            "resource_hint": {
+                "en": "Sends only the selected subject's crop to the chosen profile. Unknown evidence does not cancel the activity. No fallback provider is used.",
+                "pt-BR": "Envia somente o recorte do sujeito selecionado ao perfil escolhido. Evidência desconhecida não cancela a atividade. Não usa provedor alternativo.",
+            },
+            "fields": [{"name": "categories", "type": "multiple", "default": ["person"],
+                        "title": {"en": "Observe", "pt-BR": "Observar"}, "choices": [
+                            {"value": value, "title": {"en": en, "pt-BR": pt}}
+                            for value, en, pt in [("person", "People", "Pessoas"), ("car", "Cars", "Carros"),
+                                                 ("dog", "Dogs", "Cães"), ("cat", "Cats", "Gatos")]
+                        ]}],
+            "resource_fields": [
+                {"name": name, "type": kind, "default": default, "title": {"en": en, "pt-BR": pt}}
+                for name, kind, default, en, pt in [
+                    ("condition_description", "text", "", "Visual question", "Pergunta visual"),
+                    ("profile_id", "text", "", "AI profile", "Perfil de IA"),
+                    ("confidence_threshold", "number", .5, "Minimum confidence", "Confiança mínima"),
+                    ("evaluation_interval_seconds", "number", 5, "Evaluation interval (seconds)", "Intervalo de avaliação (segundos)"),
+                ]
+            ],
+        }])
 
         config_store = getattr(app.state, "config_store", None)
         register_filter = getattr(config_store, "register_extension_settings_patch_filter", None)
@@ -75,6 +114,7 @@ class AiExtension(BaseExtension):
             register_filter(EXTENSION_ID, validate_ai_settings_patch)
         data_dir = getattr(getattr(config_store, "paths", None), "data_dir", None)
         router = AiRouter(config_store=config_store, data_dir=data_dir)
+        register_extension_shutdown_callback(app, router.shutdown)
 
         # Processing workers share inference services but do not own the host's
         # application authorization or notification history.
@@ -96,6 +136,8 @@ class AiExtension(BaseExtension):
         services.register("ai.ollama.stream_pull_model", router.stream_ollama_model_pull)
         services.register("ai.infer.locate_region", router.locate_region)
         services.register("ai.infer.evaluate_condition", router.evaluate_condition)
+        services.register("ai.infer.classify_visual_state", router.classify_visual_state)
+        services.register("ai.visual_state.options", router.visual_state_options)
 
         @app.get("/api/ai/catalog")
         async def ai_catalog() -> dict[str, Any]:

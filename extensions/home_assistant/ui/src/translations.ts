@@ -1,5 +1,7 @@
 export const homeAssistantTranslations = {
   en: {
+    "core.ui.pipelines.alerts.home_assistant_visual_state_incompatible.message": "This boolean publisher does not preserve visual sensor uncertainty and observation expiry.",
+    "core.ui.pipelines.alerts.home_assistant_visual_state_incompatible.suggestion": "Configure native Home Assistant publication on the visual sensor. This lifecycle path is not qualified for visual alarms.",
     "core.ui.pipelines.operator_name.home_assistant.speak": "Read event aloud",
     "ext.home_assistant.speech.no_servers": "Add a server in Home Assistant settings before choosing a speaker.",
     "ext.home_assistant.speech.hint": "Read selected pipeline events on a speaker. Choose the events upstream; this does not narrate every frame.",
@@ -91,6 +93,8 @@ export const homeAssistantTranslations = {
     "ext.home_assistant.action.no_items": "No entities/devices selected.",
   },
   "pt-BR": {
+    "core.ui.pipelines.alerts.home_assistant_visual_state_incompatible.message": "Este publicador booleano não preserva os estados desconhecidos e a validade da observação do sensor visual.",
+    "core.ui.pipelines.alerts.home_assistant_visual_state_incompatible.suggestion": "Configure a publicação nativa no próprio sensor visual. Este caminho por ciclo de eventos é incompatível com a qualificação para alarmes visuais.",
     "core.ui.pipelines.operator_name.home_assistant.speak": "Ler ocorrência em voz alta",
     "ext.home_assistant.speech.no_servers": "Adicione um servidor nas configurações de Home Assistant antes de escolher o alto-falante.",
     "ext.home_assistant.speech.hint": "Leia ocorrências selecionadas em um alto-falante. Escolha os eventos nas etapas anteriores; cada frame não será narrado.",

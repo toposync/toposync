@@ -72,7 +72,7 @@ export function VisionModelConsentModal({
             </span>
           </div>
         </div>
-        <label className="chipButton" style={{ justifyContent: "flex-start" }}>
+        <label className="formChoice">
           <input
             type="checkbox"
             checked={checked}

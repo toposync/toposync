@@ -3356,3 +3356,28 @@ def test_measured_direction_with_startup_delay_uses_existing_coarse_limit(limit)
     assert navigator.pulses[0] == limit
     assert all(0 < amount <= limit for amount in navigator.pulses)
     assert navigator.pulses[-1] <= .48
+
+
+@pytest.mark.parametrize('stage', ['target_measurement', 'localization_reference_refresh'])
+def test_cancelled_navigation_observation_preserves_timing(monkeypatch, stage):
+    from toposync_ext_cameras import panorama_navigation as navigation
+
+    async def cancelled(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    scanner = SimpleNamespace(checkpoint={}, _check=lambda: None,
+        last_frame={'image': np.zeros((2, 2)), 'received_monotonic': -100},
+        _reference_window=cancelled)
+    navigator = VisualNavigator(scanner, SimpleNamespace(measure_target=lambda *_: None))
+    if stage == 'target_measurement':
+        monkeypatch.setattr(navigation.asyncio, 'to_thread', cancelled)
+        operation = navigator._target_measurement(np.array([1., 0., 0.]), {})
+    else:
+        operation = navigator._locate_current()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(operation)
+    record, = scanner.checkpoint['navigation_observation_timings']
+    assert record['stage'] == stage
+    assert record['completed'] is False
+    assert record['elapsed_seconds'] >= 0
+    assert record['commands'] == 0

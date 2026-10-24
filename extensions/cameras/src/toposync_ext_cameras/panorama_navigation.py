@@ -931,8 +931,14 @@ class VisualNavigator:
         # fence. The same fence is checked after lookup and before every pulse;
         # slow recognition can still expire this frame and require observation.
         if not 0 <= time.monotonic() - frame.get("received_monotonic", 0) <= 1.0:
-            frame = await self.scanner._reference_window()
-            self.scanner.last_frame = frame
+            started = time.monotonic()
+            completed = False
+            try:
+                frame = await self.scanner._reference_window()
+                self.scanner.last_frame = frame
+                completed = True
+            finally:
+                self._record_timing("localization_reference_refresh", started, completed=completed)
         started = time.monotonic()
         initial_age = started - frame.get("received_monotonic", 0)
         result = await asyncio.to_thread(
@@ -1149,12 +1155,17 @@ class VisualNavigator:
 
     async def _target_measurement(self, target: np.ndarray, located: dict[str, Any]) -> dict[str, Any] | None:
         started = time.monotonic()
-        measured = await asyncio.to_thread(
-            self.localizer.measure_target, self.scanner.last_frame["image"], located, target
-        )
-        result = measured or localized_axis_measurement(target, self.localizer.lens, located)
-        self._record_timing("target_measurement", started,
-                            method=result.get("method") if result else None)
+        result = None
+        completed = False
+        try:
+            measured = await asyncio.to_thread(
+                self.localizer.measure_target, self.scanner.last_frame["image"], located, target
+            )
+            result = measured or localized_axis_measurement(target, self.localizer.lens, located)
+            completed = True
+        finally:
+            self._record_timing("target_measurement", started, completed=completed,
+                                method=result.get("method") if result else None)
         if not 0 <= time.monotonic() - self.scanner.last_frame.get("received_monotonic", 0) <= 1:
             raise _ExpiredQualifiedFrame()
         return result

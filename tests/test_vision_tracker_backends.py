@@ -282,3 +282,54 @@ def test_tracker_backends_preserve_keypoints_hook() -> None:
 
     assert simple[0].keypoints == [(0.12, 0.14, 0.95), (0.18, 0.36, 0.85)]
     assert norfair[0].keypoints == [(0.12, 0.14, 0.95), (0.18, 0.36, 0.85)]
+
+
+def test_byte_world_predicts_recent_motion_without_enlarging_residual_gate():
+    backend = ByteWorldTrackerBackend(close_after_seconds=3, world_match_distance_meters=3)
+    def observe(at, x, confidence=.95):
+        return backend.update('moving', None, _detections([(0.2, .2, .3, .5)], label='car',
+            world_anchors=[{'x': x, 'z': 20., 'confidence': confidence}]), frame_ts=at)[0]
+    first = observe(10., 0.)
+    assert observe(10.2, 2.).tracking_id == first.tracking_id
+    assert observe(10.7, 7.).tracking_id == first.tracking_id
+    assert observe(10.9, 9.).world_anchor['x'] == 9.
+    # The radius applies to prediction error; an unrelated distant object stays separate.
+    assert observe(11.1, 20.).tracking_id != first.tracking_id
+
+
+def test_byte_world_does_not_learn_velocity_from_uncertain_or_stale_positions():
+    for confidence, last_at in ((.6, 10.7), (.95, 12.)):
+        backend = ByteWorldTrackerBackend(close_after_seconds=3)
+        identities = []
+        for at, x in ((10., 0.), (10.2, 2.), (last_at, 10*(last_at-10))):
+            track = backend.update('moving', None, _detections([(.2,.2,.3,.5)], label='car',
+                world_anchors=[{'x':x,'z':20.,'confidence':confidence}]), frame_ts=at)[0]
+            identities.append(track.tracking_id)
+        if confidence < .7:
+            assert not backend._tracks_by_stream['moving'][identities[0]].world_velocity
+        else:
+            assert identities[-1] != identities[0]
+
+
+def test_byte_world_motion_keeps_opposing_tracks_separate():
+    backend = ByteWorldTrackerBackend(close_after_seconds=3)
+    def observe(at, positions):
+        return backend.update('crossing', None, _detections([(.2,.2,.3,.5)]*2, label='car',
+            world_anchors=[{'x':x,'z':20.,'confidence':.95} for x in positions]), frame_ts=at)
+    first = observe(10., [0., 10.])
+    identities = [t.tracking_id for t in first]
+    assert [t.tracking_id for t in observe(10.2, [2., 8.])] == identities
+    crossed = observe(10.7, [7., 3.])
+    assert [t.tracking_id for t in crossed] == identities
+    backend.reset_stream('crossing')
+    assert backend._tracks_by_stream.get('crossing') is None
+
+
+def test_byte_world_recent_stop_and_reverse_update_velocity():
+    backend = ByteWorldTrackerBackend(close_after_seconds=3)
+    identities=[]
+    for at,x in ((10.,0.),(10.2,2.),(10.4,2.),(10.6,1.),(10.8,0.)):
+        tracked=backend.update('stopping',None,_detections([(.2,.2,.3,.5)],label='car',
+            world_anchors=[{'x':x,'z':20.,'confidence':.95}]),frame_ts=at)[0]
+        identities.append(tracked.tracking_id)
+    assert len(set(identities)) == 1

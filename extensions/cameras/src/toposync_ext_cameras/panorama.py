@@ -1677,10 +1677,20 @@ class PanoramaService:
                     await scanner._persist()
                     if not await scanner._save_original_destination() and qualification_home is None:
                         raise PanoramaCaptureError("return_reference_unavailable")
-                located = await self.localize_frame(
-                    camera_id=job["camera_id"], source_id=job["source_id"], job_id=job["id"], revision=job["revision"],
-                    image=scanner.last_frame["image"], capture_evidence=scanner.last_frame.get("capture_evidence", {}),
-                )
+                localization_started = time.monotonic()
+                located = None
+                try:
+                    located = await self.localize_frame(
+                        camera_id=job["camera_id"], source_id=job["source_id"], job_id=job["id"], revision=job["revision"],
+                        image=scanner.last_frame["image"], capture_evidence=scanner.last_frame.get("capture_evidence", {}),
+                    )
+                finally:
+                    scanner.checkpoint.setdefault("navigation_observation_timings", []).append({
+                        "stage": "initial_localization", "commands": 0,
+                        "elapsed_seconds": time.monotonic() - localization_started,
+                        "completed": located is not None,
+                        "status": located.get("status") if located is not None else None,
+                    })
                 prepared("localized")
                 if located.get("status") != "localized":
                     raise PanoramaCaptureError(located.get("reason", "panorama_visual_localization_failed"))

@@ -43,14 +43,16 @@ def install_activity_routes(app: FastAPI) -> None:
             raise HTTPException(409, "Occurrence changed; refresh the selection")
         inspection = request.app.state.pipeline_inspection
         artifacts = private["private_evidence"]["artifacts"]
+        media = request.app.state.notifications.activity_media
+        captures = await asyncio.to_thread(media.has_images, document["id"]) if media else False
         return {**document, "participants": {key: {**value,
             "identification": private["participants"].get(key, {"status": "unavailable"})}
             for key, value in document["participants"].items()}, "artifacts": artifacts,
             "retention": {
                 "event_text": {"state": "retained", "expires_at": document["expires_at"]},
-                "images": {"state": "retained" if any(item["has_image"] for item in artifacts) else
+                "images": {"state": "retained" if captures or any(item["has_image"] for item in artifacts) else
                     "not_retained" if private["private_evidence"]["state"] in ("retained", "not_retained") else private["private_evidence"]["state"],
-                    "storage": "private_gallery_only", "continuous_recording": False},
+                    "storage": "event_sequences_and_private_gallery", "continuous_recording": False},
                 "private_identity": {key: value for key, value in private["private_evidence"].items() if key != "artifacts"},
                 "diagnostics": {"state": "ephemeral", "sample_maximum_age_seconds": inspection.maximum_age,
                     "session_lease_seconds": inspection.lease_seconds, "exported": False},
@@ -103,6 +105,29 @@ def install_activity_routes(app: FastAPI) -> None:
         return {"occurrence": document, "permissions": {"manage": manage},
             "maintenance_error": request.app.state.notifications.retention_error,
             "revisions": await asyncio.to_thread(store.revisions, identifier), "deliveries": await asyncio.to_thread(store.deliveries, identifier)}
+
+    @router.get("/{identifier}/images")
+    async def images(request: Request, response: Response, identifier: str,
+                     after: int = Query(0, ge=0), limit: int = Query(60, ge=1, le=120)):
+        await visible(request, identifier)
+        media = request.app.state.notifications.activity_media
+        page = await asyncio.to_thread(media.page, identifier, after=after, limit=limit) if media else {"images": [], "next_cursor": None}
+        await visible(request, identifier)
+        response.headers["Cache-Control"] = "private, no-store"
+        for item in page["images"]:
+            item["image_href"] = f"images/{item['id']}" if item["available"] else None
+        return page
+
+    @router.get("/{identifier}/images/{image_id}")
+    async def image(request: Request, identifier: str, image_id: str):
+        await visible(request, identifier)
+        media = request.app.state.notifications.activity_media
+        blob = await asyncio.to_thread(media.read, identifier, image_id) if media else None
+        await visible(request, identifier)
+        if blob is None:
+            raise HTTPException(404, "Image unavailable")
+        return Response(blob, media_type="image/webp", headers={"Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff"})
 
     @router.get("/{identifier}/evidence")
     async def evidence(request: Request, response: Response, identifier: str, evidence_id: str = Query(min_length=1, max_length=256)):

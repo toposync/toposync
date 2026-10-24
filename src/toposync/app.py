@@ -1351,6 +1351,7 @@ async def _lifespan(app: FastAPI):
     await asyncio.to_thread(notifications.occurrences.recover)
     services.register("notifications.upsert", notifications.upsert)
     services.register("occurrences.record", notifications.record_occurrence)
+    services.register("occurrences.capture", notifications.capture_occurrence)
     services.register("occurrences.register_recorder", notifications.register_occurrence_recorder)
     services.register("occurrences.unregister_recorder", notifications.unregister_occurrence_recorder)
     services.register("occurrences.enrich", notifications.enrich_occurrence)
@@ -1516,6 +1517,9 @@ async def _lifespan(app: FastAPI):
         settings=storage_settings_from_core_settings(await config_store.get_settings()),
     )
     app.state.pipeline_storage_manager = pipeline_storage_manager
+    from .runtime.notifications.activity_media import ActivityMediaStore
+    notifications.activity_media = ActivityMediaStore(pipeline_storage_manager)
+    await asyncio.to_thread(notifications.activity_media.maintain)
 
     def _env_int(name: str, default: int) -> int:
         raw = str(os.getenv(name) or "").strip()
@@ -5004,6 +5008,10 @@ def create_app() -> FastAPI:
         if not candidate.is_relative_to(base_dir):
             raise HTTPException(status_code=404, detail="File not found")
         if not candidate.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Event images always require the occurrence's current authorization and expiry.
+        if candidate.relative_to(base_dir).parts[:2] == ("pipelines", "activity-media"):
             raise HTTPException(status_code=404, detail="File not found")
 
         principal = _auth_context(request).principal

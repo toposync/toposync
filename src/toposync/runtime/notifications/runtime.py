@@ -56,6 +56,7 @@ class NotificationsRuntime:
         self.invalidate_occurrence_runtime: Callable[[str], Awaitable[None]] | None = None
         self.invalidate_occurrence_derivatives: Callable[[str], Awaitable[None]] | None = None
         self.retention_error: str | None = None
+        self.activity_media = None
         self._occurrence_recorders: dict[str, tuple[str, str, str]] = {}
         self._occurrence_recorder_lock = asyncio.Lock()
 
@@ -135,6 +136,12 @@ class NotificationsRuntime:
     async def erase_occurrence(self, identifier: str, *, expected_revision: int) -> dict:
         change = await asyncio.to_thread(self.occurrences.erase, identifier, expected_revision=expected_revision)
         await self._invalidate_occurrence(change)
+        if self.activity_media is not None:
+            try:
+                await asyncio.to_thread(self.activity_media.remove, identifier)
+            except OSError:
+                self.retention_error = "occurrence_retention_unavailable"
+                logging.getLogger(__name__).exception("Activity image deletion pending")
         return change.document
 
     async def revoke_occurrence_enrichment(self, identifier: str, *, expected_revision: int) -> dict:
@@ -145,11 +152,30 @@ class NotificationsRuntime:
 
     async def expire_occurrences(self, *, now: float | None = None) -> int:
         changes = await asyncio.to_thread(self.occurrences.expire, now=now)
+        if self.activity_media is not None:
+            for change in changes:
+                await asyncio.to_thread(self.activity_media.remove, change.document["id"])
+            await asyncio.to_thread(self.activity_media.maintain, now=now)
         results = await asyncio.gather(*(self._invalidate_occurrence(change) for change in changes), return_exceptions=True)
         for result in results:
             if isinstance(result, BaseException):
                 raise result
         return len(changes)
+
+    async def capture_occurrence(self, *, identifier, evidence, blob, metadata, settings):
+        def save():
+            # Serialize the final privacy check and media publication with deletion.
+            with self.store._lock:
+                document = self.occurrences.get(identifier, read_filter=lambda _: True)
+                if document is None or document["status"] in {"deleted", "expired"}:
+                    return None
+                retained = document["evidence"].get(evidence["evidence_id"])
+                if retained is None or any(retained.get(key) != evidence.get(key) for key in retained):
+                    raise ValueError("Capture must match durable occurrence evidence")
+                return self.activity_media.add(document, evidence, blob, metadata, settings)
+        if self.activity_media is None:
+            raise RuntimeError("Activity image storage is unavailable")
+        return await asyncio.to_thread(save)
 
     async def list(
         self,

@@ -39,6 +39,7 @@ class AutomaticController:
 
     async def catalog(self, config=None):
         config = config or self.config
+        record_parameters = RecordActivityParameters.model_json_schema()
         entries = [
             {
                 "id": "core.record",
@@ -47,12 +48,23 @@ class AutomaticController:
                 "title": {"en": "Record activity locally", "pt-BR": "Registrar atividade local"},
                 "operators": ["core.record_occurrence"],
                 "required_consents": [],
-                "parameters_schema": RecordActivityParameters.model_json_schema(),
+                "parameters_schema": record_parameters,
                 "fields": [
-                    {"name": "retention_days", "type": "number", "default": 1,
-                     "minimum": 1 / 24, "maximum": 366,
+                    {"name": "captures_enabled", "type": "boolean",
+                     "title": {"en": "Retain event images", "pt-BR": "Reter imagens do evento"}},
+                    {"name": "capture_rate", "type": "number", "step": 1,
+                     "title": {"en": "Images per second", "pt-BR": "Imagens por segundo"}},
+                    {"name": "capture_profile", "type": "select",
+                     "title": {"en": "Image profile", "pt-BR": "Perfil das imagens"},
+                     "choices": [{"value": "light", "title": {"en": "Light · up to 320 pixels", "pt-BR": "Leve · até 320 pixels"}},
+                                 {"value": "intermediate", "title": {"en": "Intermediate · up to 640 pixels", "pt-BR": "Intermediário · até 640 pixels"}}]},
+                    {"name": "capture_retention_hours", "type": "number",
+                     "title": {"en": "Image retention (hours)", "pt-BR": "Retenção das imagens (horas)"}},
+                    {"name": "capture_max_bytes_per_event", "type": "number", "step": 1,
+                     "title": {"en": "Image budget per event (bytes)", "pt-BR": "Orçamento de imagens por evento (bytes)"}},
+                    {"name": "retention_days", "type": "number",
                      "title": {"en": "Event and text retention (days)", "pt-BR": "Retenção de eventos e texto (dias)"}},
-                    {"name": "notice", "type": "select", "default": "none",
+                    {"name": "notice", "type": "select",
                      "title": {"en": "Local notice", "pt-BR": "Aviso local"},
                      "choices": [
                          {"value": "none", "title": {"en": "Record only", "pt-BR": "Somente registrar"}},
@@ -61,6 +73,9 @@ class AutomaticController:
                 ],
             }
         ]
+        for field in entries[0]["fields"]:
+            field.update({key: value for key, value in record_parameters["properties"][field["name"]].items()
+                          if key in {"default", "minimum", "maximum"}})
         for identifier in self.services.list_ids("automatic.catalog."):
             entries.extend(await self._provider(identifier, config))
         disabled = (

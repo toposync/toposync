@@ -406,13 +406,14 @@ def test_revocation_scrubs_projection_without_new_notification_time_unread_or_no
         assert current['id'] == original['id'] and current['createdAt'] == original['createdAt']
         assert current['updatedAt'] != original['updatedAt']
         assert current['payload']['event'] == original['payload']['event']
-        assert current['payload']['data']['occurrence']['enrichments'] == []
+        assert 'enrichments' not in current['payload']['data']['occurrence']
+        assert runtime.occurrences.get(first['id'], read_filter=lambda _: True)['enrichments'] == []
         assert runtime.count_summary_sync()['unread_total'] == 0
         assert len(runtime.occurrences.deliveries(first['id'])) == 1
         assert runtime.store._conn.execute('SELECT count(*) FROM ai_notification_embedding').fetchone()[0] == 0
         assert queue.get_nowait() == {'op': 'invalidate', 'notification_id': original['id'], 'occurrence_id': first['id']}
         event = queue.get_nowait()
         assert queue.empty() and event['op'] == 'update' and event['notification']['id'] == original['id']
-        assert event['notification']['payload']['data']['occurrence']['enrichments'] == []
+        assert 'enrichments' not in event['notification']['payload']['data']['occurrence']
         runtime.broadcaster.unsubscribe(queue)
     asyncio.run(scenario())

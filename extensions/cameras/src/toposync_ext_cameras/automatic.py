@@ -520,6 +520,7 @@ def plan_observation(*, intent, configuration):
             },
             tail,
         )
+    retain_captures = intent.consequence.capability == "core.record" and intent.consequence.parameters.get("captures_enabled") is True
     if intent.capability == "vision.recognition" and not scoped_recognition:
         tail = add("identity_context", "vision.identity_context", {"enabled": True, "late_enrichment": late_recognition}, tail)
         if not late_recognition:
@@ -532,7 +533,7 @@ def plan_observation(*, intent, configuration):
             {
                 **condition.resource_parameters,
                 "attach_polygons": True,
-                "attach_mask_artifacts": False,
+                "attach_mask_artifacts": retain_captures,
             },
             tail,
         )
@@ -580,6 +581,11 @@ def plan_observation(*, intent, configuration):
             {"kind": intent.capability.split(".")[1]},
             tail,
         )
+    if retain_captures:
+        tail = add("activity_capture", "vision.crop_objects", {
+            "input_artifact_name": "main", "output_artifact_name": "activity_capture",
+            "fallback_to_detections": False, "missing_policy": "pass_through", "use_segmentation": True,
+        }, tail)
     tail = add("activity_evidence", "vision.activity_evidence", {}, tail)
     evidence_keys = [
         field
@@ -611,7 +617,7 @@ def plan_observation(*, intent, configuration):
             *(["native_observation"] if native else []),
         ],
         "artifacts": [],
-        "optional_artifacts": ["main"] if enrichment else [],
+        "optional_artifacts": (["main"] if enrichment else []) + (["activity_capture"] if retain_captures else []),
     }
     operators = {node["id"]: node["operator"] for node in nodes}
     for edge in edges:

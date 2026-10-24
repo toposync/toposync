@@ -16,6 +16,62 @@ def activity(tmp_path, monkeypatch):
         yield client, result
 
 
+def retain_image(client, document):
+    from toposync.runtime.notifications.activity_media import CaptureSettings
+    from test_activity_media import image_bytes
+    value = contribution()
+    return client.portal.call(partial(client.app.state.notifications.capture_occurrence,
+        identifier=document['id'], evidence=value.model_dump(mode='json'), blob=image_bytes(),
+        metadata={'kind': 'rectangle', 'width': 16, 'height': 24}, settings=CaptureSettings()))
+
+
+def test_event_images_require_scope_and_expire_with_occurrence(activity):
+    client, document = activity
+    identifier = retain_image(client, document)
+    path = '/api/activity/' + document['id']
+    page = client.get(path + '/images').json()
+    assert len(page['images']) == 1 and page['images'][0]['id'] == identifier
+    assert 'rel_path' not in page['images'][0]
+    image_url = path + '/images/' + identifier
+    assert client.get(image_url).headers['content-type'] == 'image/webp'
+    assert client.get(path + '/images', params={'after': -1}).status_code == 422
+    assert client.get(path + '/images', params={'limit': 121}).status_code == 422
+    manager = client.app.state.pipeline_storage_manager
+    rel = manager._conn.execute('SELECT rel_path FROM activity_image').fetchone()[0]
+    assert client.get('/files/' + rel).status_code == 404
+    assert client.request('DELETE', path, json={'expected_revision': document['revision']}).status_code == 200
+    assert client.get(image_url).status_code == 410
+    assert client.get(path + '/images').status_code == 410
+    assert not (manager.files_dir / rel).exists()
+
+
+def test_event_images_recheck_source_permissions(activity):
+    client, document = activity
+    identifier = retain_image(client, document)
+    user = client.post('/api/access/users', json={'username': 'image-viewer', 'display_name': 'Viewer',
+        'role': 'member', 'password': 'password123'}).json()
+    assert client.post('/api/auth/login', json={'username': 'image-viewer', 'password': 'password123', 'device_label': 'test'}).status_code == 200
+    path = '/api/activity/' + document['id']
+    assert client.get(path + '/images').status_code == 404
+    assert client.get(path + '/images/' + identifier).status_code == 404
+
+    client.app.state.auth.store.upsert_grant(user_id=user['id'], action='core:camera:read',
+        resource_type='core:camera', include=['front', 'garage'], exclude=[])
+    assert client.get(path + '/images/' + identifier).status_code == 200
+    client.app.state.auth.store.upsert_grant(user_id=user['id'], action='core:camera:read',
+        resource_type='core:camera', include=['front'], exclude=[])
+    assert client.get(path + '/images/' + identifier).status_code == 404
+
+
+def test_event_image_expiration_is_enforced_before_the_next_maintenance_cycle(activity, monkeypatch):
+    client, document = activity
+    identifier = retain_image(client, document)
+    path = '/api/activity/' + document['id'] + '/images/' + identifier
+    assert client.get(path).status_code == 200
+    monkeypatch.setattr('time.time', lambda: document['expires_at'])
+    assert client.get(path).status_code == 410
+
+
 def test_activity_api_exposes_persisted_history_and_controlled_relative_manifest(activity):
     client, result = activity
     response = client.get('/api/activity', params={'participant_id': 'entity-1', 'camera_id': 'front'})

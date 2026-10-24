@@ -6,6 +6,21 @@ from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.config_store import PipelineValidationError
 
 
+def test_recording_catalog_uses_the_validated_parameter_defaults_and_limits(tmp_path, monkeypatch):
+    with _create_client(tmp_path, monkeypatch) as client:
+        _setup_owner(client)
+        response = client.get('/api/automatic')
+        assert response.status_code == 200
+        record = next(item for item in response.json()['catalog'] if item['id'] == 'core.record')
+        properties = record['parameters_schema']['properties']
+        for field in record['fields']:
+            for key in ('default', 'minimum', 'maximum'):
+                assert (key in field) == (key in properties[field['name']])
+                if key in field:
+                    assert field[key] == properties[field['name']][key]
+        assert properties['captures_enabled']['default'] is False
+
+
 def test_saved_manual_flow_owns_lease_survives_pause_and_rejects_forged_binding(tmp_path, monkeypatch):
     calls = []
     with _create_client(tmp_path, monkeypatch) as client:

@@ -6,14 +6,16 @@ from dataclasses import replace
 import hashlib
 import json
 import asyncio
+import logging
 
 from ..notifications.occurrences import Contribution, Enrichment, Identifier, OccurrenceConflict, OccurrenceReference, Scope
 from .execution import SinkRuntime, TransformOperatorRuntime
 from .runtime import Lifecycle
+from ..notifications.activity_media import CaptureSettings
+from .activity_capture import CaptureSelector, encode_capture, reserve_capture_bytes, release_capture_bytes
 
 
-class RecordActivityParameters(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+class RecordActivityParameters(CaptureSettings):
     retention_days: float = Field(default=1, ge=1 / 24, le=366)
     notice: Literal["none", "simulated"] = "none"
 
@@ -33,6 +35,11 @@ class RecordOccurrenceRuntime(SinkRuntime):
         self._recorder_token = None
         self._pending_record = None
         self._closed = False
+        self.selector = CaptureSelector(self.config.capture_rate)
+        self.capture_counts = {}
+        self._capture_queue = asyncio.Queue(maxsize=4)
+        self._capture_worker = None
+        self._capture_gap = False
 
     async def prepare(self, context):
         if any(getattr(self.config, key) is None for key in ("objective_id", "title", "kind", "scope")):
@@ -40,6 +47,8 @@ class RecordOccurrenceRuntime(SinkRuntime):
         required = {"occurrences.record", "occurrences.register_recorder", "occurrences.unregister_recorder"}
         if self.config.enrich:
             required.update({"occurrences.enrichment_allowed", "occurrences.enrich"})
+        if self.config.captures_enabled:
+            required.add("occurrences.capture")
         if self.services is None or not required <= set(self.services.list_ids()):
             raise RuntimeError("Occurrence history is unavailable")
         if self._recorder_token is None:
@@ -53,6 +62,10 @@ class RecordOccurrenceRuntime(SinkRuntime):
             try:
                 if self._pending_record is not None:
                     await self._pending_record
+                if self._capture_worker is not None:
+                    await self._capture_queue.put(None)
+                    await self._capture_worker
+                    self._capture_worker = None
             finally:
                 self._pending_record = None
                 if self._recorder_token is not None:
@@ -78,7 +91,7 @@ class RecordOccurrenceRuntime(SinkRuntime):
         if not isinstance(evidence, dict):
             raise ValueError("Occurrence evidence is required")
         # The consumer owns the objective and access scope; a producer cannot replace them.
-        fixed = self.config.model_dump(exclude={"retention_days", "notice", "enrich"})
+        fixed = self.config.model_dump(include={"objective_id", "title", "kind", "scope"})
         if fixed.keys() & evidence.keys():
             raise ValueError("Occurrence evidence cannot override its consumer scope")
         value = Contribution.model_validate({**evidence, **fixed})
@@ -104,6 +117,8 @@ class RecordOccurrenceRuntime(SinkRuntime):
         finally:
             if self._pending_record is not None and self._pending_record.done():
                 self._pending_record = None
+        if not self._closed and self.config.captures_enabled and value.lifecycle != "CLOSE":
+            self._enqueue_capture(packet, value, result.document if self.config.enrich else result, context)
         if self._closed or not self.config.enrich or not result.changed or value.replay:
             return []
         document = result.document
@@ -115,6 +130,68 @@ class RecordOccurrenceRuntime(SinkRuntime):
         # The event is already durable; this is a disposable annotation request, not another OPEN.
         return [replace(packet, lifecycle=Lifecycle.UPDATE,
             payload={**packet.payload, "occurrence_reference": reference.model_dump()})]
+
+    def _count_capture(self, reason):
+        self.capture_counts[reason] = self.capture_counts.get(reason, 0) + 1
+
+    def _enqueue_capture(self, packet, value, document, context):
+        artifact = packet.artifacts.get("activity_capture")
+        if artifact is None or artifact.private or artifact.data is None:
+            self._count_capture("missing_image")
+            self._capture_gap = True
+            return
+        evidence = value.model_dump(mode="json")
+        reason = self.selector.select(evidence)
+        if reason:
+            self._count_capture(reason)
+            return
+        if self._capture_queue.full():
+            self._count_capture("queue_full")
+            self._capture_gap = True
+            return
+        # Retain only the selected crop, never the full packet or camera scene.
+        size = len(artifact.data) if isinstance(artifact.data, (bytes, bytearray, memoryview)) else artifact.data.nbytes
+        if size > 16 * 1024 * 1024 or not reserve_capture_bytes(size):
+            self._count_capture("image_budget")
+            self._capture_gap = True
+            return
+        try:
+            data = bytes(artifact.data) if isinstance(artifact.data, (bytes, bytearray, memoryview)) else artifact.data.copy()
+        except Exception:
+            release_capture_bytes(size)
+            raise
+        metadata = {key: artifact.metadata[key] for key in ("kind", "anchor", "members", "bbox01") if key in artifact.metadata}
+        metadata.setdefault("kind", "rectangle")
+        metadata["selection_gap"] = self._capture_gap
+        self._capture_gap = False
+        self._capture_queue.put_nowait((document["id"], evidence, data, metadata, size, context))
+        self._count_capture("selected")
+        if self._capture_worker is None:
+            self._capture_worker = asyncio.create_task(self._write_captures())
+
+    async def _write_captures(self):
+        while True:
+            item = await self._capture_queue.get()
+            try:
+                if item is None:
+                    return
+                identifier, evidence, data, metadata, size, context = item
+                if context is None:
+                    blob, encoded = await asyncio.to_thread(encode_capture, data, self.config.capture_profile)
+                else:
+                    blob, encoded = await context.scheduler.run_sync(encode_capture, data, self.config.capture_profile,
+                        mode="thread_pool", concurrency_key="core.activity_capture.encode", max_concurrency=2)
+                stored = await self.services.call("occurrences.capture", identifier=identifier, evidence=evidence,
+                    blob=blob, metadata={**metadata, **encoded, "rate": self.config.capture_rate}, settings=self.config)
+                self._count_capture("persisted" if stored else "unavailable")
+            except Exception:
+                self._count_capture("write_failed")
+                self._capture_gap = True
+                logging.getLogger(__name__).exception("Selected event image could not be stored")
+            finally:
+                if item is not None:
+                    release_capture_bytes(item[4])
+                self._capture_queue.task_done()
 
 
 class EnrichmentGateConfig(BaseModel):

@@ -27,6 +27,25 @@ from test_vision_pose_tracking_integration import Context, MeasuredTracker, dete
 from test_pipeline_notify_timing import sink
 
 
+@pytest.mark.parametrize('capability', ['vision.pose', 'vision.segmentation'])
+def test_event_captures_are_only_added_to_explicitly_enabled_recording_plans(capability):
+    from toposync.runtime.automatic import AutomaticConsequence
+    value = intent(capability)
+    value.consequence = AutomaticConsequence(capability='core.record', parameters={})
+    baseline = plan_observation(intent=value, configuration=configuration())['graph']
+    assert not any(node['id'] == 'activity_capture' for node in baseline['nodes'])
+    if capability == 'vision.segmentation':
+        assert not next(node for node in baseline['nodes'] if node['id'] == 'detail')['config']['attach_mask_artifacts']
+    value.consequence.parameters['captures_enabled'] = True
+    graph = plan_observation(intent=value, configuration=configuration())['graph']
+    capture = next(node for node in graph['nodes'] if node['id'] == 'activity_capture')
+    assert capture['config']['use_segmentation'] and not capture['config']['fallback_to_detections']
+    assert graph['meta']['outputs'][0]['contract']['optional_artifacts'] == ['activity_capture']
+    if capability == 'vision.segmentation':
+        assert next(node for node in graph['nodes'] if node['id'] == 'detail')['config']['attach_mask_artifacts']
+    PipelineGraphCompiler(registry()).compile_many([Pipeline(name='captures', graph=graph)])
+
+
 @pytest.mark.parametrize("kind", ["pose", "gestures", "segmentation", "recognition"])
 def test_public_contract_contains_details_but_no_image_or_shared_frame_payload(kind):
     value = intent("vision." + kind)

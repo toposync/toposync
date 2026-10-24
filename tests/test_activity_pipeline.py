@@ -43,7 +43,68 @@ def dependencies(history):
     services.register("occurrences.record", history.record_occurrence)
     services.register("occurrences.register_recorder", history.register_occurrence_recorder)
     services.register("occurrences.unregister_recorder", history.unregister_occurrence_recorder)
+    services.register("occurrences.capture", history.capture_occurrence)
     return PipelineRuntimeDependencies(services=services)
+
+
+def test_optional_capture_records_selected_crops_without_more_notices(tmp_path):
+    from test_activity_media import media_store, image_bytes
+    from toposync.runtime.pipelines.runtime import Artifact
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        history.activity_media = media_store(tmp_path)
+        sink = RecordOccurrenceRuntime(settings(captures_enabled=True, capture_rate=2), dependencies(history))
+        adapter = ActivityEvidenceRuntime()
+        await sink.prepare(None)
+        for index in range(8):
+            raw = event(sequence=index + 1, lifecycle=Lifecycle.OPEN if index == 0 else Lifecycle.UPDATE)
+            raw.payload['media']['ts'] = index / 4 + 1
+            raw = raw.with_artifact(Artifact('activity_capture', image_bytes(), metadata={'kind': 'rectangle'}))
+            [value] = await adapter.process_packet(raw, None)
+            await sink.process_packet(value, None)
+            await sink._capture_queue.join()
+        await sink.shutdown()
+        identifier = OccurrenceStore.identifier('garage', 'visit-1')
+        images = history.activity_media.page(identifier)['images']
+        assert len(images) == 4 and sink.capture_counts['persisted'] == 4
+        assert len(history.occurrences.deliveries(identifier)) == 1
+        assert all(item['width'] == 16 and item['available'] for item in images)
+        assert [item['observed_at'] for item in images] == [1, 1.5, 2, 2.5]
+    asyncio.run(scenario())
+
+
+def test_slow_image_storage_drops_excess_crops_without_blocking_occurrence_evidence(tmp_path):
+    from test_activity_media import media_store, image_bytes
+    from toposync.runtime.pipelines.runtime import Artifact
+    from toposync.runtime.pipelines.execution_scheduler import ExecutionScheduler
+    from types import SimpleNamespace
+    async def scenario():
+        history = NotificationsRuntime(data_dir=tmp_path)
+        history.activity_media = media_store(tmp_path)
+        gate = asyncio.Event()
+        services = dependencies(history)
+        original = history.capture_occurrence
+        async def slow_capture(**kwargs):
+            await gate.wait()
+            return await original(**kwargs)
+        services.services.register('occurrences.capture', slow_capture)
+        sink = RecordOccurrenceRuntime(settings(captures_enabled=True), services)
+        scheduler = ExecutionScheduler()
+        context = SimpleNamespace(scheduler=scheduler)
+        adapter = ActivityEvidenceRuntime()
+        for index in range(12):
+            raw = event(sequence=index + 1, lifecycle=Lifecycle.OPEN if index == 0 else Lifecycle.UPDATE)
+            raw = raw.with_artifact(Artifact('activity_capture', image_bytes()))
+            [value] = await adapter.process_packet(raw, None)
+            await sink.process_packet(value, context)
+        identifier = OccurrenceStore.identifier('garage', 'visit-1')
+        assert len(history.occurrences.get(identifier, read_filter=lambda _: True)['evidence']) == 12
+        assert sink.capture_counts['queue_full'] > 0 and sink._capture_queue.qsize() <= 4
+        gate.set()
+        await sink.shutdown()
+        await scheduler.shutdown()
+        assert sink.capture_counts['persisted'] == sink.capture_counts['selected']
+    asyncio.run(scenario())
 
 
 def test_camera_contributions_duplicate_close_and_restart_keep_one_occurrence(tmp_path):

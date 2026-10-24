@@ -349,6 +349,7 @@ class VisionSegmentInstancesRuntime(TransformOperatorRuntime):
                             "score": float(materialized.score),
                             "bbox01": [float(value) for value in materialized.bbox01],
                             "task": "segmentation",
+                            "capture_evidence": dict(packet.payload.get("capture_evidence") or {}),
                             "derived_from": selected_artifact_name or MAIN_ARTIFACT_NAME,
                         },
                     )

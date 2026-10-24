@@ -65,7 +65,7 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup", "external_cancel_cleanup",
     "response_cancelled", "response_expired", "response_empty", "response_stop_failure", "response_control_failure",
     "local_preparation", "local_preparation_rejected", "local_preparation_cancelled", "local_preparation_return_failed", "local_preparation_degraded",
-    "target_history", "target_history_changed", "target_history_expired"])
+    "target_history", "target_history_changed", "target_history_expired", "return_boundary_jitter", "return_outside_limit"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -284,6 +284,13 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
                     navigator.pulse_limits["pan"] = .6
                 return navigator.aim.return_value
             navigator.aim.side_effect = degraded_return
+    if reuse in {"return_boundary_jitter", "return_outside_limit"}:
+        async def aim_with_boundary(ray, *, maximum_error_pixels):
+            initial_error = min(11.935579, maximum_error_pixels - .05)
+            navigator._target_measurement.return_value = {
+                "center_error_pixels": initial_error + (.065053 if reuse == "return_boundary_jitter" else 2)}
+            return {"target_ray": [1, 0, 0], "measurement": {"center_error_pixels": initial_error}}
+        navigator.aim.side_effect = aim_with_boundary
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
         **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}),
@@ -446,8 +453,23 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         camera.close.assert_awaited_once()
         assert not images
         return
+    if reuse == "return_outside_limit":
+        with pytest.raises(HTTPException) as failure:
+            await operation
+        assert failure.value.detail["code"] == "visual_arrival_unconfirmed"
+        final = job["_attention_navigation_trace"]["final_arrival_observation"]
+        assert final["measurement"]["center_error_pixels"] > final["maximum_error_pixels"] == 12
+        assert final["capture_evidence"] == fresh["capture_evidence"]
+        assert final["accepted"] is False and job["stop_confirmed"] is True
+        camera.close.assert_awaited_once()
+        assert not images
+        return
     _, evidence = await operation
+    if reuse == "return_boundary_jitter":
+        assert navigator.aim.call_args.kwargs["maximum_error_pixels"] == 11
+        assert evidence["measurement"]["center_error_pixels"] < 12
     if reuse.startswith("target_history"):
+        assert navigator.aim.call_args.kwargs["maximum_error_pixels"] == tolerance
         motion = navigator.aim.call_args.kwargs["target_motion"]
         assert len(motion.samples) == (1 if reuse.endswith("changed") else 3)
         assert motion.samples[-1][1] == observed_at + .2
@@ -459,7 +481,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     if reuse == "prepared_reference":
         camera.bind_reference_destination.assert_awaited_once_with(reference["destination"])
         navigator.approach_reference.assert_awaited_once_with(reference["destination"], [0, 0, 1])
-        navigator.aim.assert_awaited_once_with([0, 0, 1], maximum_error_pixels=12)
+        navigator.aim.assert_awaited_once_with([0, 0, 1], maximum_error_pixels=11)
     elif reuse == "dynamic_reference_ignored":
         service.native_references.assert_not_called()
         camera.bind_reference_destination.assert_not_awaited()

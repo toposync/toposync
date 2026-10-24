@@ -1828,8 +1828,11 @@ class PanoramaService:
                     # A live target must remain on the continuously refreshed path.
                     if borrowed_control is not None and target_provider is None:
                         await approach_native_reference(target["ray"])
+                    # Leave one analysis pixel for the independent post-Stop measurement of stationary targets.
+                    planning_error_pixels = (maximum_error_pixels if target_provider is not None else
+                        min(maximum_error_pixels, max(3., maximum_error_pixels - 1.)))
                     evidence = await navigator.aim(target["ray"],
-                        **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}),
+                        **({"maximum_error_pixels": planning_error_pixels} if borrowed_control is not None else {}),
                         **({"target_provider": target_provider} if target_provider is not None else {}),
                         **({"target_observation_provider": target_observation_provider} if target_observation_provider is not None else {}),
                         **({"target_motion": target_motion} if target_motion is not None else {}),
@@ -1841,7 +1844,7 @@ class PanoramaService:
                         probe = await navigator.qualify_velocity(**response_preparation)
                         response_observed = None
                         await approach_native_reference(target["ray"])
-                        evidence = await navigator.aim(target["ray"], maximum_error_pixels=maximum_error_pixels)
+                        evidence = await navigator.aim(target["ray"], maximum_error_pixels=planning_error_pixels)
                         evidence["response_preparation"] = probe
                         if (probe.get("response_qualified") is not True
                                 or not 1 <= probe.get("following_pulse_limit_seconds", 0) <= 1.2
@@ -1923,7 +1926,13 @@ class PanoramaService:
                                 if not np.allclose(updated_ray, arrival_ray, atol=1e-7, rtol=0):
                                     measured = localized_axis_measurement(updated_ray, localizer.lens, located)
                                     arrival_ray = updated_ray
-                            if not measured or measured["center_error_pixels"] > maximum_error_pixels:
+                            scanner.checkpoint["final_arrival_observation"] = {
+                                "measurement": copy.deepcopy(measured), "maximum_error_pixels": maximum_error_pixels,
+                                "capture_evidence": copy.deepcopy(scanner.last_frame.get("capture_evidence", {})),
+                                "target_ray": arrival_ray.tolist(),
+                                "accepted": bool(measured and measured["center_error_pixels"] <= maximum_error_pixels),
+                            }
+                            if not scanner.checkpoint["final_arrival_observation"]["accepted"]:
                                 raise PanoramaCaptureError("visual_arrival_unconfirmed")
                             evidence = {**evidence, "measurement": measured, "target_ray": arrival_ray.tolist(),
                                 "frame_geometry": arrival_frame_geometry(scanner.last_frame, located, localizer.lens, arrival_ray),
@@ -1976,6 +1985,7 @@ class PanoramaService:
                             for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations", "navigation_motion_observations")}
                         job["_attention_navigation_trace"].update(preparation=preparation,
                             diagnostics=copy.deepcopy(scanner.checkpoint.get("diagnostics", {})),
+                            final_arrival_observation=copy.deepcopy(scanner.checkpoint.get("final_arrival_observation")),
                             target_replans=scanner.checkpoint.get("navigation_target_replans", 0),
                             target_rebases=scanner.checkpoint.get("navigation_target_rebases", 0),
                             target_predictions=scanner.checkpoint.get("navigation_target_predictions", 0),

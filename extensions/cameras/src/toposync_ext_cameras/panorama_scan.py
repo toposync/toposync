@@ -3358,6 +3358,7 @@ class _Scan:
         motion_velocity_update: Callable[[dict], dict | None] | None = None,
         requested_velocity: dict[str, float] | None = None,
         following_seconds: float | None = None,
+        maximum_following_speed: float | None = None,
         expected_frame: dict | None = None,
         movement_intent: dict[str, Any] | None = None,
         persist_recovery_return_intent: bool = False,
@@ -3381,6 +3382,16 @@ class _Scan:
             or frame_observer is None or observation_guard is None
         ):
             raise PanoramaCaptureError("visual_feedback_unavailable")
+        if maximum_following_speed is not None and (
+            _finite(maximum_following_speed) is None or not 0 < maximum_following_speed <= DEFAULT_CONTINUOUS_PULSE_SPEED
+            or following_seconds is None or not isinstance(requested_velocity, dict)
+            or set(requested_velocity) != {"pan", "tilt"}
+            or any(_finite(value) is None or abs(value) > maximum_following_speed for value in requested_velocity.values())
+            or sum(value != 0 for value in requested_velocity.values()) != 1
+        ):
+            raise PanoramaCaptureError("invalid_visual_feedback")
+        feedback_velocity_limits = {axis: maximum_following_speed if maximum_following_speed is not None and value else abs(value)
+            for axis, value in (requested_velocity or {}).items()}
         if not self.returning:
             await self._materialize_normal_return_epoch()
         command_start_pose = copy.deepcopy(self.last_pose)
@@ -3469,6 +3480,8 @@ class _Scan:
         precondition: dict[str, Any] | None = None
         if requested_velocity is not None:
             diagnostic.value["requested_velocity"] = dict(requested_velocity)
+            if maximum_following_speed is not None:
+                diagnostic.value["maximum_following_speed"] = maximum_following_speed
         if expected_frame is not None:
             precondition = await asyncio.to_thread(
                 _match, expected_frame["image"], baseline["image"]
@@ -3964,7 +3977,7 @@ class _Scan:
                         if (set(velocity) != {"pan", "tilt"}
                                 or any(_finite(v) is None or (v * requested_velocity.get(axis, 0) < 0
                                     and not (window_deadline is not None and plan.get("reversal_qualified") is True))
-                                    or abs(v) > abs(requested_velocity.get(axis, 0)) for axis, v in velocity.items())
+                                    or abs(v) > feedback_velocity_limits.get(axis, 0) for axis, v in velocity.items())
                                 or not any(velocity.values()) or not callable(plan.get("dispatch_guard"))
                                 or not callable(plan.get("reserve"))):
                             raise PanoramaCaptureError("invalid_visual_feedback")
@@ -5589,6 +5602,7 @@ class _Scan:
         motion_stop_requested: Callable[[], str | None] | None = None,
         motion_velocity_update: Callable[[dict], dict | None] | None = None,
         following_seconds: float | None = None,
+        maximum_following_speed: float | None = None,
     ) -> dict:
         # Start slowly enough to retain inter-frame correspondence on cameras
         # with fast motors. Duration adapts to measured overlap in _seek; speed
@@ -5603,6 +5617,11 @@ class _Scan:
         speed = _finite(speed)
         if speed is None or not 0 < speed <= 0.2:
             raise PanoramaCaptureError("invalid_velocity")
+        if maximum_following_speed is not None and (
+            _finite(maximum_following_speed) is None or not speed <= maximum_following_speed <= DEFAULT_CONTINUOUS_PULSE_SPEED
+            or following_seconds is None
+        ):
+            raise PanoramaCaptureError("invalid_visual_feedback")
         if speed > DEFAULT_CONTINUOUS_PULSE_SPEED and (
             duration > 0.24 or expected_frame is None or self.physical_state != "stopped"
             or self.returning or intent_type != "seek_pulse"
@@ -5703,6 +5722,7 @@ class _Scan:
             duration=duration,
             allow_stationary=True,
             requested_velocity=velocity,
+            **({"maximum_following_speed": maximum_following_speed} if maximum_following_speed is not None else {}),
             **({"motion_velocity_update": motion_velocity_update} if motion_velocity_update else {}),
             **({"following_seconds": following_seconds} if following_seconds is not None else {}),
             **({"frame_observer": frame_observer} if frame_observer else {}),

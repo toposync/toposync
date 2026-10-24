@@ -3703,6 +3703,14 @@ def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeyp
             extended = case in {"prepared", "expired_at_dispatch", "long_static_plan", "uncertain_once"}
             assert scanner.checkpoint["navigation_step"]["following_acquisition"] is extended
             assert (amount == pytest.approx(1.2)) if extended else amount < 1
+            if extended:
+                step = scanner.checkpoint["navigation_step"]
+                _, planned = self._correction_plan([axis], np.asarray(step["planning_error_radians"]), False)
+                initial_speed = options.get("speed", .1)
+                assert 0 < initial_speed <= .1
+                assert abs(amount) * initial_speed == pytest.approx(min(abs(planned), 1.2) * .1)
+                if initial_speed < .1:
+                    assert options["maximum_following_speed"] == .1
             assert self.following_seconds == (6. if extended else None)
             if case == "expired_at_dispatch":
                 self.pulse_capacity["pan"]["observed_monotonic"] = -300.

@@ -329,7 +329,7 @@ def test_following_control_aligns_target_and_camera_observation_times(monkeypatc
 
 
 @pytest.mark.parametrize("case", ["prepared", "missing_reverse", "expired_capacity", "zero_response",
-    "wrong_observed_direction", "missing_prediction", "expired_before_dispatch", "reverse_removed_before_dispatch", "asymmetric_reverse"])
+    "wrong_observed_direction", "missing_prediction", "expired_before_dispatch", "reverse_removed_before_dispatch", "asymmetric_reverse", "slower_initial"])
 def test_finite_response_bootstraps_proposals_without_certifying_cruise_rate(monkeypatch, case):
     clock = [10.1]
     monkeypatch.setattr(navigation.time, "monotonic", lambda: clock[0])
@@ -359,7 +359,7 @@ def test_finite_response_bootstraps_proposals_without_certifying_cruise_rate(mon
          "observed_displacement_pixels": 10.}, {})
     observer = SimpleNamespace(closed=False, latest=None, command=1)
     feedback = navigator._velocity_feedback(observer, "pan", 1, .1)
-    context = {"velocity": {"pan": .1, "tilt": 0.}, "accepted_monotonic": 10.,
+    context = {"velocity": {"pan": .04 if case == "slower_initial" else .1, "tilt": 0.}, "accepted_monotonic": 10.,
         "deadline_monotonic": 11.2, "window_deadline_monotonic": 16.,
         "maximum_duration_seconds": 1.2, "observed_response_seconds": .4}
     for index in range(2):
@@ -383,6 +383,10 @@ def test_finite_response_bootstraps_proposals_without_certifying_cruise_rate(mon
     assert plan["measurement"]["estimated_from_finite_response"] is True
     assert getattr(observer, "qualified_rate", None) is None
     assert len(plan["measurement"]["capture_evidence"]) == 2
+    if case == "slower_initial":
+        assert plan["measurement"]["rate_radians_per_second"] == pytest.approx([-.08, 0.])
+        assert plan["measurement"]["model_velocity"]["pan"] == .04
+        assert .04 < plan["velocity"]["pan"] <= .1
     if case == "asymmetric_reverse":
         assert plan["velocity"]["pan"] == pytest.approx(-.06)
         assert plan["measurement"]["reversal_model"]["delta_radians"] == [.06, 0.]

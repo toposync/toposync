@@ -1410,7 +1410,7 @@ class VisualNavigator:
                     and self._bidirectional_response_qualified(axis)
                     and self._retained_pulse_limit(axis, geometry) >= 1
                     and self.motion_prediction is not None and self.motion_prediction(geometry, None) is not None):
-                response = direction * self.response[axis]
+                response = self.response[axis] * context["velocity"][axis] / DEFAULT_CONTINUOUS_PULSE_SPEED
                 if sample["rate"] @ response >= .9 * np.linalg.norm(sample["rate"]) * np.linalg.norm(response):
                     # A finite-pulse gain proposes commands; it never proves cruise speed.
                     model = {**sample, "rate": response.copy(), "axis": axis,
@@ -1538,7 +1538,8 @@ class VisualNavigator:
         return plan
 
 
-    async def _pulse(self, axis: str, amount: float, *, speed: float = DEFAULT_CONTINUOUS_PULSE_SPEED) -> None:
+    async def _pulse(self, axis: str, amount: float, *, speed: float = DEFAULT_CONTINUOUS_PULSE_SPEED,
+                     maximum_following_speed: float | None = None) -> None:
         started = time.monotonic()
         if self.commands >= self.maximum_commands:
             raise PanoramaCaptureError("visual_navigation_budget_exhausted")
@@ -1577,6 +1578,8 @@ class VisualNavigator:
             capabilities = self.scanner.capabilities
             if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
                 options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
+                if maximum_following_speed is not None:
+                    options["maximum_following_speed"] = maximum_following_speed
                 if self.observation_guard is not None:
                     options["observation_guard"] = self.observation_guard
                 if motion_observations is not None:
@@ -1586,7 +1589,7 @@ class VisualNavigator:
                             motion_observations, axis, 1 if amount > 0 else -1)
                         if capabilities.get("velocity_supported"):
                             options["motion_velocity_update"] = self._velocity_feedback(
-                                motion_observations, axis, 1 if amount > 0 else -1, speed)
+                                motion_observations, axis, 1 if amount > 0 else -1, maximum_following_speed or speed)
                             if self.following_seconds is not None:
                                 options["following_seconds"] = self.following_seconds
                 transition_estimator = getattr(self.localizer, "calibrated_transition", None)
@@ -2142,9 +2145,11 @@ class VisualNavigator:
                 and following_prediction.get("observed_displacement_pixels", 0) >= max(4.,
                     2 * located["validation_p95_pixels"] * ANALYSIS_WIDTH / located["analysis_width"]))
             if following_acquisition:
-                # Use an already-qualified window for live control, not the
-                # duration of a static arrival that would end before feedback.
-                pulse_amount = amount = float(np.copysign(min(2., self._retained_pulse_limit(axis, located)), amount))
+                # Preserve planned travel while leaving the qualified window open for feedback.
+                window = min(2., self._retained_pulse_limit(axis, located))
+                pulse_speed *= min(1., abs(amount) / window)
+                pulse_amount = float(np.copysign(window, amount))
+                amount = pulse_amount * pulse_speed / DEFAULT_CONTINUOUS_PULSE_SPEED
             if not target_is_current():
                 continue
             if near:
@@ -2222,7 +2227,7 @@ class VisualNavigator:
             self.observation_guard = (lambda: read_target()) if target_provider is not None else None
             self.motion_feedback_target = (lambda: (read_target(), maximum_error_pixels)) if (
                 target_provider is not None and final and not missing and not direction_probe
-                and pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED) else None
+                and (pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED or following_acquisition)) else None
             # Start only from a full, overlap-qualified correction that already
             # leaves time to measure rate. Probes and fine positioning stay finite.
             self.following_seconds = MAXIMUM_FOLLOWING_WINDOW_SECONDS if (
@@ -2237,7 +2242,8 @@ class VisualNavigator:
                 if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
                     await self._pulse(axis, pulse_amount)
                 else:
-                    await self._pulse(axis, pulse_amount, speed=pulse_speed)
+                    await self._pulse(axis, pulse_amount, speed=pulse_speed,
+                        **({"maximum_following_speed": DEFAULT_CONTINUOUS_PULSE_SPEED} if self.following_seconds is not None else {}))
             except _ExpiredQualifiedFrame as error:
                 if near:
                     fine -= 1

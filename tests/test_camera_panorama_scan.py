@@ -11014,7 +11014,7 @@ def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypa
         assert not updates
 
 
-@pytest.mark.parametrize("case", ["following", "expired", "cancelled", "no_observations", "late_dispatch", "oversized", "renewal_without_window", "qualified_reverse", "unqualified_reverse"])
+@pytest.mark.parametrize("case", ["following", "expired", "cancelled", "no_observations", "late_dispatch", "oversized", "renewal_without_window", "qualified_reverse", "unqualified_reverse", "slower_start", "slower_reverse", "envelope_overspeed", "envelope_other_axis"])
 def test_following_window_renews_short_commands_without_stopping_between_them(tmp_path, monkeypatch, case):
     updates, offered, contexts = [], [], []
     class Camera(SimulatedCamera):
@@ -11042,18 +11042,20 @@ def test_following_window_renews_short_commands_without_stopping_between_them(tm
         if camera.now + .3 >= context.get("window_deadline_monotonic", float("inf")):
             return None
         contexts.append(context)
-        return {"velocity": {"pan": -.05 if case in {"qualified_reverse", "unqualified_reverse"} else .05, "tilt": 0.},
-            "reversal_qualified": case == "qualified_reverse",
+        return {"velocity": {"pan": -.08 if case == "slower_reverse" else -.05 if case in {"qualified_reverse", "unqualified_reverse"} else .11 if case == "envelope_overspeed" else .08 if case == "slower_start" else .05, "tilt": .01 if case == "envelope_other_axis" else 0.},
+            "reversal_qualified": case in {"qualified_reverse", "slower_reverse"},
             "duration_seconds": 1.3 if case == "oversized" else 1.2,
             "frame_received_monotonic": camera.now,
             "capture_evidence": {"capture_instance": camera.capture_instance, "generation": 1, "sequence": camera.sequence},
             "dispatch_guard": target_guard, "reserve": lambda entry: None}
     async def scenario():
         return await scanner._pulse("pan", 1, 1.2,
+            **({"speed": .04, "maximum_following_speed": .1} if case in {"slower_start", "slower_reverse", "envelope_overspeed", "envelope_other_axis"} else {}),
             frame_observer=offered.append, observation_guard=target_guard,
             motion_stop_requested=lambda: None, motion_velocity_update=feedback,
             **({"following_seconds": 3.2} if case != "renewal_without_window" else {}))
     errors = {"expired": "following_observation_expired", "late_dispatch": "visual_feedback_expired", "unqualified_reverse": "invalid_visual_feedback",
+        "envelope_overspeed": "invalid_visual_feedback", "envelope_other_axis": "invalid_visual_feedback",
         "oversized": "invalid_visual_feedback", "renewal_without_window": "invalid_visual_feedback"}
     if case == "cancelled":
         with pytest.raises(asyncio.CancelledError): asyncio.run(scenario())
@@ -11063,7 +11065,10 @@ def test_following_window_renews_short_commands_without_stopping_between_them(tm
         result = asyncio.run(scenario())
         assert result["stable"] is True and scanner.physical_state == "stopped"
     assert _event_names(camera).count("stop") == 1
-    if case in {"following", "expired", "cancelled", "qualified_reverse"}:
+    if case in {"following", "expired", "cancelled", "qualified_reverse", "slower_start", "slower_reverse"}:
+        if case in {"slower_start", "slower_reverse"}:
+            assert contexts[0]["velocity"]["pan"] == .04
+            assert all(abs(command["pan"]) <= .1 and command["tilt"] == 0 for _, command in updates)
         assert len(updates) >= 2
         assert updates[-1][0] > contexts[0]["deadline_monotonic"]
         hard_deadline = contexts[0]["window_deadline_monotonic"]
@@ -11434,3 +11439,29 @@ def test_prepared_moving_acquisition_crosses_center_with_delayed_images(tmp_path
     assert all((entry['measurement']['qualified_velocity'] is None for entry in updates_in_trace if entry['measurement']['kind'] == 'finite_response_model'))
     assert all((len(step.get('velocity_updates', [])) <= 8 for step in navigator.trace))
     assert navigator.commands <= navigator.maximum_commands
+
+
+@pytest.mark.parametrize("maximum,window", [(-.1, 6.), (0., 6.), (.03, 6.), (.101, 6.), (float("nan"), 6.), (True, 6.), (.1, None)])
+def test_initial_following_speed_cannot_expand_or_escape_its_envelope(tmp_path, maximum, window):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={"pan": True}, velocity_supported=True)
+    with pytest.raises(PanoramaCaptureError, match="invalid_visual_feedback"):
+        asyncio.run(scanner._pulse("pan", 1, 1.2, speed=.04, maximum_following_speed=maximum,
+            following_seconds=window, frame_observer=lambda _: None, observation_guard=lambda: None,
+            motion_stop_requested=lambda: None, motion_velocity_update=lambda _: None))
+    assert not camera.events
+
+
+@pytest.mark.parametrize("requested", [{"pan": .04, "tilt": .01}, {"pan": .04}, {"pan": 0., "tilt": 0.},
+    {"pan": .11, "tilt": 0.}, {"pan": float("nan"), "tilt": 0.}])
+def test_direct_following_envelope_rejects_invalid_initial_vector_before_transport(tmp_path, requested):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(velocity_supported=True)
+    with pytest.raises(PanoramaCaptureError, match="invalid_visual_feedback"):
+        asyncio.run(scanner._move(lambda: camera.move_velocity(pan=.04, timeout_s=1.2), duration=1.2,
+            requested_velocity=requested, maximum_following_speed=.1, following_seconds=6.,
+            frame_observer=lambda _: None, observation_guard=lambda: None,
+            motion_stop_requested=lambda: None, motion_velocity_update=lambda _: None))
+    assert not camera.events

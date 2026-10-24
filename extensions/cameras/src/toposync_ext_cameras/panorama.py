@@ -1566,7 +1566,7 @@ class PanoramaService:
     ) -> tuple[str, dict[str, Any]]:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
-        from .panorama_navigation import VisualNavigator, _arrival_stop_is_current
+        from .panorama_navigation import VisualNavigator, _arrival_stop_is_current, select_direct_native_reference
 
         if self.camera_factory is None:
             raise _error("visual_control_unavailable", "Visual camera control is unavailable")
@@ -1689,6 +1689,22 @@ class PanoramaService:
                 binding = job["source_panorama"]
                 localizer = self._localizers[(binding["id"], binding["geometry"]["model_digest"])]
                 navigator = VisualNavigator(scanner, localizer)
+
+                async def approach_native_reference(ray: list[float]) -> None:
+                    references = self.native_references(job["camera_id"], job["source_id"], binding)
+                    if not references:
+                        return
+                    reference = select_direct_native_reference(localizer, ray, references, await navigator.locate())
+                    if reference is None:
+                        return
+                    await camera.bind_reference_destination(reference["destination"])
+                    try:
+                        await navigator.approach_reference(reference["destination"], ray)
+                    except PanoramaCaptureError as error:
+                        if error.code == "visual_native_reference_unconfirmed":
+                            self.invalidate_native_reference(reference, error.code)
+                        raise
+
                 if borrowed_control is not None or qualification_home is not None:
                     response_binding = _digest({
                         "job_id": job["id"], "revision": job["revision"],
@@ -1710,6 +1726,7 @@ class PanoramaService:
                         ("return", qualification_home, 3),
                     ):
                         started = time.monotonic()
+                        await approach_native_reference(destination["ray"])
                         observed = await navigator.aim(destination["ray"], maximum_error_pixels=tolerance)
                         stage_filename = f"check-{uuid.uuid4().hex}.jpg"
                         okay, encoded = await asyncio.to_thread(cv2.imencode, ".jpg", scanner.last_frame["image"])
@@ -1742,6 +1759,9 @@ class PanoramaService:
                     scanner.checkpoint.pop("initial_path", None)
                     await scanner._persist()
                 else:
+                    # A live target must remain on the continuously refreshed path.
+                    if borrowed_control is not None and target_provider is None:
+                        await approach_native_reference(target["ray"])
                     evidence = await navigator.aim(target["ray"],
                         **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}),
                         **({"target_provider": target_provider} if target_provider is not None else {}),

@@ -60,7 +60,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence",
     "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup",
     "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
-    "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive", "metadata_combined"])
+    "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive", "metadata_combined",
+    "prepared_reference", "dynamic_reference_ignored"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -119,6 +120,12 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     service.localize_frame = AsyncMock(return_value={"status": "localized"})
     service._localizers = {("artifact", "geometry"): SimpleNamespace(lens=arrival_lens)}
     service._attention_stopped_control = AsyncMock(return_value=True)
+    if reuse in {"prepared_reference", "dynamic_reference_ignored"}:
+        reference = {"destination": {"kind": "preset", "token": "prepared"}}
+        service.native_references = Mock(return_value=[reference])
+        monkeypatch.setattr(panorama_navigation, "select_direct_native_reference", Mock(return_value=reference))
+        camera.bind_reference_destination = AsyncMock()
+        navigator.approach_reference = AsyncMock()
     if reuse == "cancel_status":
         service._attention_stopped_control.side_effect = [module.asyncio.CancelledError(), True]
     if reuse == "frame_aged_during_status":
@@ -194,7 +201,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         navigator._target_measurement.side_effect = measured_after_update
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
-        **({"target_provider": current_target} if reuse.endswith("during_cleanup") else {}))
+        **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}))
     if reuse == "parallel_reference_failure":
         with pytest.raises(HTTPException) as failure:
             await operation
@@ -246,6 +253,14 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         assert not images
         return
     _, evidence = await operation
+    if reuse == "prepared_reference":
+        camera.bind_reference_destination.assert_awaited_once_with(reference["destination"])
+        navigator.approach_reference.assert_awaited_once_with(reference["destination"], [0, 0, 1])
+        navigator.aim.assert_awaited_once_with([0, 0, 1], maximum_error_pixels=12)
+    elif reuse == "dynamic_reference_ignored":
+        service.native_references.assert_not_called()
+        camera.bind_reference_destination.assert_not_awaited()
+        navigator.approach_reference.assert_not_awaited()
     if reuse == "moving_during_cleanup":
         assert evidence["target_ray"] == current_direction[0]
         assert evidence["measurement"]["center_error_pixels"] == pytest.approx(600 * np.tan(.005))
@@ -835,7 +850,8 @@ async def test_following_subject_is_rechecked_before_commands_and_arrival(monkey
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize('outcome', ['native', 'visual', 'arrival_failure', 'restore_failure', 'cleanup_failure', 'visual_mismatch', 'cancel'])
+@pytest.mark.parametrize('outcome', ['native', 'visual', 'arrival_failure', 'restore_failure', 'cleanup_failure', 'visual_mismatch', 'cancel',
+    'prepared_reference', 'reference_binding_failed', 'reference_arrival_failed', 'reference_not_selected'])
 async def test_qualification_preserves_starting_view_until_verified_recovery(monkeypatch, tmp_path, outcome):
     import asyncio
     import copy
@@ -892,6 +908,17 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
             'measurement': {'center_error_pixels': 1}}
 
     navigator.aim = AsyncMock(side_effect=aim)
+    reference = {'destination': {'kind': 'preset', 'token': 'panorama-reference'}}
+    reference_outcomes = {'prepared_reference', 'reference_binding_failed', 'reference_arrival_failed', 'reference_not_selected'}
+    navigator.locate = AsyncMock(return_value={'rotation_matrix': np.eye(3).tolist()})
+    navigator.approach_reference = AsyncMock()
+    camera.bind_reference_destination = AsyncMock()
+    if outcome == 'reference_binding_failed':
+        camera.bind_reference_destination.side_effect = PanoramaCaptureError('return_binding_changed')
+    if outcome == 'reference_arrival_failed':
+        navigator.approach_reference.side_effect = PanoramaCaptureError('visual_native_reference_unconfirmed')
+    selector = Mock(return_value=None if outcome == 'reference_not_selected' else reference)
+    monkeypatch.setattr(panorama_navigation, 'select_direct_native_reference', selector)
     if outcome == 'cleanup_failure':
         camera.remove_return.side_effect = PanoramaCaptureError('return_cleanup_unconfirmed')
     monkeypatch.setattr(panorama_scan, '_Scan', lambda *args: scanner)
@@ -909,11 +936,13 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
     service._current = AsyncMock()
     service.localize_frame = AsyncMock(return_value={'status': 'localized', 'rotation_matrix': np.eye(3).tolist()})
     service._localizers = {('artifact', 'geometry'): SimpleNamespace(lens={})}
+    service.native_references = Mock(return_value=[reference] if outcome in reference_outcomes else [])
+    service.invalidate_native_reference = Mock()
     service._image_write = lambda *args: None
     service._image_url = lambda job, name: name
     operation = service._visual_operation_with_pinned_reference(None, job,
         {'ray': [0, 0, 1]}, qualification_home={'ray': [0, 1, 0]})
-    if outcome in {'native', 'visual'}:
+    if outcome in {'native', 'visual', 'prepared_reference', 'reference_not_selected'}:
         _, evidence = await operation
         assert [stage['stage'] for stage in evidence['stages']] == ['home', 'arrival', 'return']
         assert job['navigation']['physical_state'] == 'restored'
@@ -934,3 +963,18 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
             assert scanner.checkpoint['return'] == {'kind': 'preset', 'token': 'owned'}
     assert job['stop_confirmed'] is True
     camera.close.assert_awaited_once()
+    if outcome == 'prepared_reference':
+        assert navigator.approach_reference.await_count == 3
+        assert camera.bind_reference_destination.await_count == 3
+        assert [call.kwargs['maximum_error_pixels'] for call in navigator.aim.await_args_list] == [3, 12, 3]
+        service.native_references.assert_called_with('camera', 'wide', job['source_panorama'])
+    elif outcome in {'reference_binding_failed', 'reference_arrival_failed'}:
+        navigator.aim.assert_not_awaited()
+        camera.remove_return.assert_not_awaited()
+        assert navigator.approach_reference.await_count == (outcome == 'reference_arrival_failed')
+    else:
+        navigator.approach_reference.assert_not_awaited()
+    if outcome == 'reference_arrival_failed':
+        service.invalidate_native_reference.assert_called_once_with(reference, 'visual_native_reference_unconfirmed')
+    else:
+        service.invalidate_native_reference.assert_not_called()

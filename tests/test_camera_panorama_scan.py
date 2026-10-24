@@ -10700,3 +10700,22 @@ def test_return_can_accept_current_stopped_view_without_resetting_exhausted_budg
     assert scanner.checkpoint['return_correction_commands'] == commands
     scanner._move.assert_not_awaited()
     scanner._confirm_stop.assert_awaited_once()
+
+
+def test_stop_reference_diagnostics_preserve_bounded_motion_samples_without_images():
+    diagnostic = scan._AttemptDiagnostic("return_reference")
+    for sequence in range(scan.MAX_TELEMETRY_SAMPLES * 3):
+        diagnostic.frame(
+            {"sequence": sequence, "generation": 1, "received_monotonic": sequence / 25},
+            {"code": "moving" if sequence % 2 else "settling", "state": "observing",
+             "timing_basis": "local_observation", "motion_pixels": .2 if sequence % 2 else .05,
+             "speed_px_s": 99, "private": "must not escape"})
+    samples = diagnostic.value["samples"]
+    assert len(samples) <= scan.MAX_TELEMETRY_SAMPLES
+    assert samples[0]["sequence"] == 0
+    assert samples[-1]["sequence"] == scan.MAX_TELEMETRY_SAMPLES * 3 - 1
+    assert samples[-1]["code"] == "moving"
+    assert samples[-1]["motion_pixels"] == .2
+    assert all(item["speed_px_s"] is None and "private" not in item for item in samples)
+    assert diagnostic.replay == []
+    assert diagnostic.telemetry() is None

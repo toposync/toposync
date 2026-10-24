@@ -883,7 +883,7 @@ class _AttemptDiagnostic:
             "comparison_count": 0,
             "outcome": "in_progress",
         }
-        if kind == "movement":
+        if kind in {"movement", "return_reference"}:
             self.value["samples"] = []
 
     @staticmethod
@@ -981,6 +981,8 @@ class _AttemptDiagnostic:
                     else None
                 ),
             }
+            if self.value["kind"] == "return_reference":
+                sample.update(code=code, sequence=frame.get("sequence"), generation=generation)
             samples = self.value["samples"]
             samples.append(sample)
             if len(samples) > MAX_TELEMETRY_SAMPLES:

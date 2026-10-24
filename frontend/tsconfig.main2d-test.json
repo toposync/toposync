@@ -10,6 +10,7 @@
     "types": []
   },
   "include": [
+    "src/ui/notifications/activityPlayback.test.ts",
     "src/ui/notifications/notificationFraming.test.ts",
     "src/ui/notifications/pipelinesNotifications.test.ts",
     "src/ui/main2d/shared.ts",

@@ -1,6 +1,7 @@
 declare const __webpack_init_sharing__: (scope: string) => Promise<void>;
 
 import { installRuntimeNetworkShims } from "./util/runtimeBasePath";
+import "./ui/notifications/activitySequence.css";
 
 async function start(): Promise<void> {
   installRuntimeNetworkShims();

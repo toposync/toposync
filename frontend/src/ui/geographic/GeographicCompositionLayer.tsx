@@ -165,7 +165,7 @@ export function GeographicCompositionLayer({ map, composition, reference, elemen
     {pins.filter(pin => pin.notification.id === activeNotificationId).map(pin => <React.Fragment key={pin.notification.id}>
       {pin.segments.map((trail, index) => <svg className="notification2dTrail" key={index} aria-hidden="true"><polyline fill="none" stroke={pin.priority === "high" ? "#ef4444" : pin.priority === "low" ? "#9aa4b2" : "#f59e0b"} opacity={1} strokeWidth={3} points={trail.map(point => `${point.x},${point.y}`).join(" ")} /></svg>)}
         <div className={`geographicPinPosition${activeNotificationId === pin.notification.id && !pin.closed ? " isActive" : ""}`} style={{ left: pin.screenX, top: pin.screenY }}>
-          <GeographicNotificationPin screenX={0} screenY={0} priority={pin.priority} closed={pin.closed} />
+          <GeographicNotificationPin screenX={0} screenY={0} priority={pin.priority} closed={pin.closed} image={pin.image} companions={pin.companions?.map(item => { const point = projectLocation(map, localToGeographic(item, reference)); return { screenX: point.x - pin.screenX, screenY: point.y - pin.screenY, image: item.image }; })} />
         </div>
         {onNotification && <button className={`geographicNotificationTarget${activeNotificationId === pin.notification.id ? " isSelected" : ""}`} type="button"
           style={{ left: pin.screenX, top: pin.screenY }} aria-label={eventLabel(pin.notification)} title={eventLabel(pin.notification)}

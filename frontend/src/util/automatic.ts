@@ -19,7 +19,7 @@ export type AutomaticConfiguration = {
   defaults: Record<string, Record<string, any>>; blocked_camera_ids: string[];
   denied_features: Record<string, string[]>;
 };
-export type AutomaticField = { name: string; type: "text" | "number" | "multiple" | "select";
+export type AutomaticField = { name: string; type: "text" | "number" | "multiple" | "select" | "boolean";
   title: Record<string, string>; default?: any; minimum?: number; maximum?: number; step?: number; required?: boolean;
   choices?: Array<{ value: string; title: Record<string, string> }> };
 export type AutomaticCapability = {

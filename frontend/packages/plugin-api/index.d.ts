@@ -129,6 +129,9 @@ export type Notification3DOverlay = {
 };
 
 export type Notification2DPin = {
+  /** Selected event image, using the same observation as the spatial anchor. */
+  image?: { url: string; anchor: [number, number] };
+  companions?: ReadonlyArray<{ x: number; z: number; image: { url: string; anchor: [number, number] } }>;
   /** World-space anchor coordinates. The pin tip lands here. */
   x: number;
   z: number;

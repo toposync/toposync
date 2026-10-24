@@ -11,6 +11,17 @@ export type ActivityParticipant = {
   id: string; category: string;
   identification: { status: "recognized" | "unknown" | "restricted" | "unavailable"; name?: string; provenance?: string };
 };
+export type ActivityImage = ActivityEvidence & {
+  id: string; sequence: number; evidence_id: string; expires_at: number; size_bytes: number;
+  available: boolean; image_href: string | null; width: number; height: number;
+  kind: "rectangle" | "segmentation"; anchor?: [number, number]; members?: string[]; rate?: number;
+  capture_instance: string; capture_generation: number; frame_sequence: number;
+  selection_gap?: boolean;
+};
+export type ActivityImagePage = { images: ActivityImage[]; next_cursor: number | null };
+export function getActivityImages(identifier: string, after: number, signal: AbortSignal): Promise<ActivityImagePage> {
+  return requestJson(activityUrl(identifier, `/images?after=${after}&limit=60`), { signal, cache: "no-store" }, "Images unavailable");
+}
 export type ActivityDetail = {
   occurrence: {
     id: string; title: string; revision: number; status: "OPEN" | "UPDATE" | "CLOSE";

@@ -3,6 +3,7 @@ import { resolveToposyncUrl } from "@toposync/plugin-api";
 
 import { i18n } from "../../util/i18n";
 import { ActivitySummary, ActivityView } from "./ActivityView";
+import { createActivity2DOverlay, createActivity3DOverlay } from "./activityOverlay";
 
 import type {
   Notification,
@@ -785,6 +786,8 @@ export const builtinNotificationRenderers: NotificationRenderer[] = [
   {
     id: "core.activity",
     type: "occurrences.activity",
+    create2DOverlay: createActivity2DOverlay,
+    create3DOverlay: createActivity3DOverlay,
     render: notification => <ActivitySummary notification={notification} />,
     renderDetails: notification => <ActivityView key={notification.id} notification={notification} />,
   },

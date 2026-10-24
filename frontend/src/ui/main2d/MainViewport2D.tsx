@@ -735,7 +735,7 @@ export function MainViewport2D({
 
     const head = project({ x: pinData.x, z: pinData.z });
     const trails = (pinData.trails ?? (pinData.trail ? [pinData.trail] : [])).map(segment => segment.map(project));
-    return { screenX: head.x, screenY: head.y, trails, priority: pinData.priority, closed: pinData.closed };
+    return { screenX: head.x, screenY: head.y, trails, priority: pinData.priority, closed: pinData.closed, image: pinData.image, companions: pinData.companions?.map(item => { const point = project(item); return { screenX: point.x, screenY: point.y, image: item.image }; }) };
   }, [manifest, notificationOverlay, transform, stateVersion]);
 
   const frameNotification = useCallback((force = false) => {
@@ -832,6 +832,8 @@ export function MainViewport2D({
                 priority={notificationPin.priority}
                 closed={notificationPin.closed}
                 trails={notificationPin.trails}
+                image={notificationPin.image}
+                companions={notificationPin.companions}
               />
             ) : null}
             {markerEntries.map((entry) => {

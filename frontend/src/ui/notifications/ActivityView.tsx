@@ -3,6 +3,7 @@ import type { Notification } from "@toposync/plugin-api";
 import { i18n } from "../../util/i18n";
 import { isAbortError } from "../../util/api";
 import { activityError, activityIdentifier, activityUrl, changeActivity, getActivity, participantEvidence, type ActivityDetail } from "../../util/activity";
+import { ActivitySequence } from "./ActivitySequence";
 
 type View = { key: string; data: ActivityDetail | null; error: string | null };
 const pageSize = 30;
@@ -99,10 +100,10 @@ export function ActivityView({ notification }: { notification: Notification }) {
   if (!data) return <p role="status">{t("activity.loading")}</p>;
   const occurrence = data.occurrence;
   const participants = Object.values(occurrence.participants);
-  const participant = participants.find(item => item.id === selected) || participants[0];
+  const participant = selected === "__group__" ? undefined : participants.find(item => item.id === selected) || participants[0];
   const samples = participant ? participantEvidence(occurrence, participant.id) : [];
   const start = Math.min(page, Math.max(0, Math.ceil(samples.length / pageSize) - 1)) * pageSize;
-  const name = (item: typeof participant, index: number) => item.identification.status === "recognized" && item.identification.name
+  const name = (item: (typeof participants)[number], index: number) => item.identification.status === "recognized" && item.identification.name
     ? item.identification.name : t("activity.anonymous", { number: index + 1 });
   return <section className="activityView" aria-label={t("activity.title")}>
     <h3>{t("activity.title")} · {t(`activity.${activityStatus(occurrence)}`)}</h3>
@@ -117,9 +118,10 @@ export function ActivityView({ notification }: { notification: Notification }) {
     {!occurrence.enrichment_allowed && <p>{t("activity.revoked")}</p>}
     <h4>{t("activity.participants")}</h4>
     {!participants.length && <p>{t("activity.empty")}</p>}
-    <div className="activityParticipants">{participants.map((item, index) => <button key={item.id} type="button" className="notificationDetailField" aria-pressed={participant?.id === item.id} onClick={() => setSelected(item.id)}>
+    <div className="activityParticipants">{participants.length > 1 && <button type="button" className="notificationDetailField" aria-pressed={selected === "__group__"} onClick={() => setSelected("__group__")}>{t("activity.group")}</button>}{participants.map((item, index) => <button key={item.id} type="button" className="notificationDetailField" aria-pressed={participant?.id === item.id} onClick={() => setSelected(item.id)}>
       <strong>{name(item, index)}</strong><span>{t(`activity.${item.identification.status === "recognized" ? item.identification.provenance === "human" ? "human" : "automatic" : item.identification.status === "unavailable" ? "identity_unavailable" : item.identification.status}`)}</span>
     </button>)}</div>
+    {identifier && <ActivitySequence key={`${identifier}:${participant?.id || "group"}`} identifier={identifier} participant={participant?.id || ""} observedEnd={occurrence.last_observed_at} clockDomain={occurrence.clock_domain} />}
     <h4>{t("activity.trajectory")}{participant ? ` · ${name(participant, participants.indexOf(participant))}` : ""}</h4>
     {!samples.length ? <p>{t("activity.no_evidence")}</p> : <>
       <ol className="activityObservations" start={start + 1}>{samples.slice(start, start + pageSize).map(([identifier, sample]) => <li key={identifier}>

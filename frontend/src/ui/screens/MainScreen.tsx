@@ -466,6 +466,11 @@ export function MainScreen({
   const [historyAssistantId, setHistoryAssistantId] = useState<string | null>(null);
   const previousHistorySelection = useRef<string | null>(null);
   const [isNotificationDetailsOpen, setIsNotificationDetailsOpen] = useState(false);
+  const closeNotificationDetails = () => {
+    setIsNotificationDetailsOpen(false);
+    if (historyAssistantId && previousHistorySelection.current) onSelectNotification(previousHistorySelection.current);
+    previousHistorySelection.current = null;
+  };
   useLayoutEffect(() => {
     onNotificationDetailsOpenChange(isNotificationDetailsOpen);
     return () => onNotificationDetailsOpenChange(false);
@@ -1312,6 +1317,7 @@ export function MainScreen({
                     if (!activeNotification) return;
                     setNotificationImageIndex(0);
                     setIsNotificationDetailsOpen(true);
+                    if (activeNotification.type === "occurrences.activity") setNotificationsOpen(false);
                   }}
                   disabled={!activeNotification}
                 >
@@ -1765,14 +1771,14 @@ export function MainScreen({
         }) ?? <p role="status">{t("core.ui.notifications.assistant_unavailable")}</p>}
       </Modal> : null}
 
+      {isNotificationDetailsOpen && activeNotification?.type === "occurrences.activity" && <aside className="activityPlaybackDock" aria-label={t("core.ui.notifications.details.title", {}, "Notification details")} onKeyDown={event => { if (event.key === "Escape") closeNotificationDetails(); }}>
+        <div className="modalHeader"><strong>{activeNotification.title}</strong><button className="iconButton" type="button" autoFocus onClick={closeNotificationDetails} aria-label={t("core.modal.aria.close")}><Icon name="xmark" /></button></div>
+        <div className="modalBody">{activeNotificationRenderer?.renderDetails?.(activeNotification)}</div>
+      </aside>}
       <Modal
-        open={isNotificationDetailsOpen}
+        open={isNotificationDetailsOpen && activeNotification?.type !== "occurrences.activity"}
         title={t("core.ui.notifications.details.title", {}, "Notification details")}
-        onClose={() => {
-          setIsNotificationDetailsOpen(false);
-          if (historyAssistantId && previousHistorySelection.current) onSelectNotification(previousHistorySelection.current);
-          previousHistorySelection.current = null;
-        }}
+        onClose={closeNotificationDetails}
         panelClassName="notificationDetailsModalPanel"
         bodyClassName="notificationDetailsModalBody"
       >

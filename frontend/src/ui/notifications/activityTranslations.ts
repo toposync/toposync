@@ -1,5 +1,10 @@
 export const activityTranslations = {
   en: {
+    "activity.group": "Group · synchronized images",
+    "activity.image_rate": "{{count}} observed frames · {{rate}} images per second in this window",
+    "activity.sequence": "Event images", "activity.play": "Play", "activity.pause": "Pause",
+    "activity.sequence_time": "Image timeline", "activity.source_select": "Source and capture session",
+    "activity.segmented": "Segmented subject", "activity.cropped": "Rectangular crop",
     "activity.retained_image": "Retained photo: {{name}}", "activity.retention": "Retention by evidence class",
     "activity.class_event_text": "Events and text", "activity.class_images": "Images", "activity.class_private_identity": "Private identity evidence", "activity.class_diagnostics": "Diagnostics", "activity.class_video": "Video",
     "activity.retention_retained": "Retained", "activity.retention_not_retained": "Not retained", "activity.retention_unavailable": "Availability unknown: service unavailable", "activity.retention_restricted": "Access restricted", "activity.retention_ephemeral": "Temporary memory only", "activity.retention_not_recorded": "Not recorded by this activity",
@@ -43,6 +48,11 @@ export const activityTranslations = {
     "activity.card": "{{count}} participants · {{status}}", "activity.read_only": "Read-only access",
   },
   "pt-BR": {
+    "activity.group": "Grupo · imagens sincronizadas",
+    "activity.image_rate": "{{count}} quadros observados · {{rate}} imagens por segundo nesta janela",
+    "activity.sequence": "Imagens do evento", "activity.play": "Reproduzir", "activity.pause": "Pausar",
+    "activity.sequence_time": "Tempo da sequência", "activity.source_select": "Fonte e sessão da captura",
+    "activity.segmented": "Sujeito segmentado", "activity.cropped": "Recorte retangular",
     "activity.retained_image": "Foto retida: {{name}}", "activity.retention": "Retenção por classe de evidência",
     "activity.class_event_text": "Eventos e texto", "activity.class_images": "Imagens", "activity.class_private_identity": "Evidência privada de identidade", "activity.class_diagnostics": "Diagnóstico", "activity.class_video": "Vídeo",
     "activity.retention_retained": "Retido", "activity.retention_not_retained": "Não retido", "activity.retention_unavailable": "Disponibilidade desconhecida: serviço indisponível", "activity.retention_restricted": "Acesso restrito", "activity.retention_ephemeral": "Somente memória temporária", "activity.retention_not_recorded": "Não gravado por esta atividade",

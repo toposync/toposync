@@ -3313,3 +3313,46 @@ def test_small_return_probe_rejects_unqualified_or_non_improving_evidence(change
         'modality': 'visual_continuous', 'return_epoch': 'final'}
     assert _small_return_probe(entry, 'final')
     assert not _small_return_probe({**entry, **change}, 'final')
+
+@pytest.mark.parametrize('limit', [.6, .9])
+def test_measured_direction_with_startup_delay_uses_existing_coarse_limit(limit):
+    from types import SimpleNamespace
+    lens = {'width': 960, 'height': 540, 'fx': 560, 'fy': 560, 'cx': 479.5, 'cy': 269.5}
+    reference = {'id': 'reference', 'rotation_matrix': np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={'velocity_supported': True, 'axes': {'tilt': True}},
+        checkpoint={}, last_frame={'capture_evidence': {}}, physical_state='stopped')
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={'overlap_links': []}, target_reference=lambda _: reference)
+
+    class Navigator(VisualNavigator):
+        def __init__(self):
+            super().__init__(scanner, localizer)
+            self.error = np.array([0., -.4])
+            self.response['tilt'] = np.array([0., .225])
+            self.direction_responses[('tilt', 1)] = (.48, np.array([0., .108]))
+            self.stationary_durations[('tilt', 1)] = .12
+            self.pulse_limits['tilt'] = limit
+            self.pulses = []
+
+        async def locate(self):
+            return {'rotation_matrix': np.eye(3).tolist(), 'reference_id': 'reference'}
+
+        def _error(self, *_):
+            return self.error.copy()
+
+        async def _target_measurement(self, *_):
+            error = np.tan(self.error) * 560
+            return {'error_pixels': error.tolist(), 'center_error_pixels': float(np.linalg.norm(error)), 'analysis_width': 960}
+
+        async def _pulse(self, axis, amount):
+            self.commands += 1
+            self.trace.append({'axis': axis, 'amount': amount})
+            self.pulses.append(amount)
+            self.error[1] += .3 * max(0, amount - .12)
+            self.last_pulse_stationary = False
+
+    navigator = Navigator()
+    result = asyncio.run(navigator.aim([1, 0, 0]))
+    assert result['measurement']['center_error_pixels'] <= 12
+    assert navigator.pulses[0] == limit
+    assert all(0 < amount <= limit for amount in navigator.pulses)
+    assert navigator.pulses[-1] <= .48

@@ -1450,8 +1450,10 @@ class VisualNavigator:
                 if fraction <= 0:
                     raise PanoramaCaptureError("visual_control_resolution_unverified")
                 duration = stationary_duration + fraction * (observed_duration - stationary_duration)
+                # Identification stays capped at .48 s; measured travel uses the existing overlap-qualified limit.
+                limit = self.pulse_limits.get(axis, MAXIMUM_NAVIGATION_PULSE_SECONDS)
                 duration = float(np.clip(duration, MINIMUM_CONTINUOUS_PULSE_SECONDS,
-                    min(.48, self.pulse_limits.get(axis, MAXIMUM_NAVIGATION_PULSE_SECONDS))))
+                    min(.48, limit) if fine_control else limit))
                 pulse_amount = amount = float(np.copysign(duration, amount))
             elif (fine_control and axis in self.response
                     and not fine_response_qualified):

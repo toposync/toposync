@@ -159,6 +159,7 @@ class PtzAttentionController:
         self._operator_bindings: dict[tuple[str, str, str], _OperatorBinding] = {}
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+        self._navigation_finished = asyncio.Event()
         self._preparations: dict[str, tuple[asyncio.Task, float]] = {}
         self._clock_scope = uuid.uuid4().hex
 
@@ -271,7 +272,11 @@ class PtzAttentionController:
 
     async def _run(self) -> None:
         while True:
-            await asyncio.sleep(self._tick_interval_seconds)
+            try:
+                await asyncio.wait_for(self._navigation_finished.wait(), self._tick_interval_seconds)
+            except asyncio.TimeoutError:
+                pass
+            self._navigation_finished.clear()
             await self.tick_once()
 
     async def tick_once(self) -> None:
@@ -1611,6 +1616,7 @@ class PtzAttentionController:
                 runtime.navigation_task = asyncio.create_task(self.services.call(
                     "cameras.panorama.navigate_attention", destination=tracked.resolved.panorama.model_dump(mode="json"),
                     lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, **options))
+                runtime.navigation_task.add_done_callback(lambda _: self._navigation_finished.set())
                 runtime.settle_deadline = now + profile.settle_timeout_seconds
                 self._set_state(runtime, "ACQUIRING", now)
                 self._record(profile, runtime, action="move_submitted", reason=reason, intent=tracked.intent,
@@ -1748,6 +1754,7 @@ class PtzAttentionController:
                 runtime.navigation_task = asyncio.create_task(self.services.call(
                     "cameras.panorama.navigate_attention", destination=resolved.panorama.model_dump(mode="json"),
                     lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, returning=True))
+                runtime.navigation_task.add_done_callback(lambda _: self._navigation_finished.set())
                 runtime.settle_deadline = now + profile.settle_timeout_seconds
                 self._set_state(runtime, "RETURNING", now)
                 self._record(profile, runtime, action="return_home_submitted", reason=reason,

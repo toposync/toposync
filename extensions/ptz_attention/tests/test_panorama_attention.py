@@ -901,6 +901,36 @@ async def test_qualified_synthetic_dispatch_arrival_and_shared_precision_return(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stale", [False, True])
+async def test_navigation_completion_wakes_controller_without_waiting_for_periodic_tick(stale):
+    clock, _, _, _, _, _, store, controller = environment(
+        mode="live_panorama", qualified=True, failure="stale_capture" if stale else None)
+    controller._tick_interval_seconds = 60
+    runner = asyncio.create_task(controller._run())
+
+    async def wait_for_decision(action):
+        async def observe():
+            while not any(item.action == action for item in store.list_decisions()[0]):
+                await asyncio.sleep(0)
+        await asyncio.wait_for(observe(), 1)
+
+    try:
+        await asyncio.sleep(0)
+        await controller.submit_intent(event(clock))
+        await wait_for_decision("arrival_rejected" if stale else "focus_acquired")
+        if stale:
+            assert controller.status()[0].state == "FAULT"
+        else:
+            await controller.submit_intent(event(clock, lifecycle="close"))
+            await wait_for_decision("returned_home")
+    finally:
+        runner.cancel()
+        await asyncio.gather(runner, return_exceptions=True)
+        await controller.shutdown()
+        store.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["arrival", "stop", "epoch", "binding", "lease", "return", "capture", "stale_capture"])
 async def test_physical_prediction_or_receipt_never_confirms_arrival(failure):
     clock, camera, _, _, calls, _, store, controller = environment(mode="live_panorama", qualified=True, failure=failure)

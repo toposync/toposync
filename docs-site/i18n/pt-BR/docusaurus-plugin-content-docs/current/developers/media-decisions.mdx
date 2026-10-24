@@ -37,6 +37,26 @@ Páginas relacionadas:
 | Home Assistant Cloud | Playback amigável ao Cloud passa por entidades nativas `camera` do Home Assistant. |
 | Vídeo espacial | Projeção espacial é responsabilidade de extensão separada que consome câmeras mapeadas e live views. |
 | Fronteira do core | O core permanece genérico; streaming, publicação de câmera e política de vídeo espacial ficam em extensões. |
+| Sequências de imagens de eventos | A consequência de registro, quando explicitamente habilitada, retém recortes WebP individuais com instantes observados e vínculos autorizados à ocorrência. Não grava áudio ou vídeo contínuo. |
+
+## Sequências de imagens de eventos {/* #event-image-sequences */}
+
+A consequência **Registrar atividade local** pode reter imagens selecionadas do evento. O recurso começa desligado e não altera pipelines existentes. Habilite **Reter imagens do evento** explicitamente ao preparar uma intenção de registro. Desabilitar interrompe novas imagens; as evidências retidas mantêm a expiração original.
+
+- `capture_rate`: 1, 2 ou 3 imagens por segundo; padrão 2. A seleção usa identificadores originais de captura e tempo observado. Uma fonte mais lenta não fornece a frequência solicitada, e quadros repetidos não são novas observações.
+- `capture_profile`: `light` limita o lado maior a 320 pixels e usa qualidade WebP 65; `intermediate` limita a 640 pixels e usa qualidade 85. Imagens pequenas não são ampliadas. Apenas um perfil é persistido.
+- `capture_retention_hours`: padrão 24, limitado pela expiração da ocorrência.
+- `capture_max_bytes_per_event`: padrão 67.108.864 bytes, equivalentes a 64 mebibytes. O orçamento existente de armazenamento também limita o conjunto das sequências. Cada ocorrência mantém até 3.600 referências de imagem; os limites existentes de observações da ocorrência continuam aplicáveis.
+
+A extensão de câmeras prepara o recorte do sujeito. Intenções de segmentação anexam máscaras atuais somente quando a retenção de imagens está habilitada. Uma máscara compatível produz recorte transparente; caso contrário, o resultado continua identificado como recorte retangular. A persistência não executa outro modelo de segmentação nem duplica a cena inteira a cada imagem. Artefatos privados são excluídos.
+
+O gravador limita cada fila a quatro recortes e o conjunto dos buffers a 32 mebibytes. A codificação usa o escalonador compartilhado com até dois trabalhos simultâneos. Imagens grandes demais, recortes indisponíveis, buffers cheios e falhas de escrita possuem contadores distintos; as lacunas permanecem visíveis. Notificações e inferência mantêm suas próprias cadências.
+
+Abra os detalhes da atividade para usar o reprodutor no painel lateral. Selecione um participante ou grupo sincronizado, reproduza/pause, busque um instante na página atual e avance entre páginas. Imagens, membros do grupo e sobreposições espaciais usam a mesma captura observada. Sessões de fonte e revisões de mapeamento diferentes ficam em seleções separadas; os rastros não conectam lacunas. O tamanho da imagem na visualização tridimensional é simbólico, não uma estimativa da altura do corpo. A ausência de posição não impede a reprodução temporal.
+
+As páginas e imagens usam `/api/activity/{identifier}/images` e `/api/activity/{identifier}/images/{image_id}`. Ambas verificam permissões e expiração atuais da ocorrência. URLs genéricas em `/files/` não servem imagens do evento. O navegador busca páginas limitadas, cancela pedidos obsoletos, libera URLs temporárias, pausa quando oculto e reconfere acesso enquanto o painel permanece visível. Excluir uma câmera do acesso ou apagar a ocorrência bloqueia novas leituras imediatamente no servidor; pixels já baixados não podem ser recolhidos.
+
+Imagens individuais são a evidência principal. AVIF e arquivos animados continuam em comparação offline até demonstrar qualidade visual equivalente e custo aceitável no equipamento de destino. Replay local não qualifica vazão das câmeras, qualidade da segmentação ou calibração física.
 
 ## Decisão 1: playback de câmera começa por fontes publicadas {/* #decision-1-camera-playback-starts-from-published-sources */}
 

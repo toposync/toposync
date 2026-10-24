@@ -37,6 +37,26 @@ Related user-facing pages in the canonical English documentation:
 | Home Assistant Cloud | Cloud-friendly playback goes through native Home Assistant `camera` entities. |
 | Spatial video | Spatial projection is a separate extension concern that consumes mapped cameras and live-view playback. |
 | Core boundary | Core stays generic; streaming, camera publication, and spatial video policy live in extensions. |
+| Event image sequences | Explicitly enabled recording consequences retain individual WebP crops, with observed timestamps and authorized occurrence links. Audio and continuous video are not recorded. |
+
+## Event image sequences {/* #event-image-sequences */}
+
+The **Record activity locally** consequence can retain selected event images. This is disabled by default and does not change existing pipelines. Enable **Retain event images** explicitly when preparing a recording intention. Disabling it stops new images; retained evidence keeps its original expiration.
+
+- `capture_rate`: 1, 2 or 3 images per second; default 2. Selection uses original capture identifiers and observed time. A slower source cannot provide the requested rate, and repeated frames are not new observations.
+- `capture_profile`: `light` limits the longest edge to 320 pixels and uses WebP quality 65; `intermediate` limits it to 640 pixels and uses quality 85. Small images are not enlarged. Only one profile is persisted.
+- `capture_retention_hours`: default 24, bounded by the occurrence's expiration.
+- `capture_max_bytes_per_event`: default 67,108,864 bytes (64 mebibytes). The existing pipeline storage budget also limits all event sequences together. Each occurrence keeps at most 3,600 image references; existing occurrence observation limits still apply.
+
+The camera extension prepares a subject crop. Segmentation intentions attach current masks only when event images are enabled. A matching mask produces a transparent cutout; otherwise the result remains explicitly labelled as a rectangular crop. Capture persistence does not run a new segmentation model or duplicate a full scene for each image. Private artifacts are excluded.
+
+The recorder limits each queue to four crops and all recorder buffers together to 32 mebibytes. Encoding uses the shared scheduler with at most two concurrent jobs. Oversized images, unavailable crops, full buffers and failed writes are counted separately; gaps remain visible. Notification delivery and inference retain their own cadence.
+
+Open an activity's details to use the side panel player. Select a participant or synchronized group, play/pause, seek within the current image page and move between pages. Images, group membership and spatial overlays use the same observed capture. Different source sessions and mapping revisions are separate selections; trails never connect evidence gaps. The three-dimensional image size is symbolic, not an estimated body height. Missing spatial evidence leaves the temporal player available.
+
+Image pages and bytes use `/api/activity/{identifier}/images` and `/api/activity/{identifier}/images/{image_id}`. Both enforce current occurrence permissions and expiration. Generic `/files/` URLs cannot serve event images. The browser fetches bounded pages, cancels obsolete image requests, releases object URLs, pauses when hidden and rechecks access while the panel is visible. Excluding a camera or deleting the occurrence blocks further reads immediately at the server; previously downloaded pixels cannot be retracted.
+
+Individual images are canonical. AVIF and single-file animation remain offline comparisons until equivalent visual quality and encoding cost are established on the intended equipment. Local replay does not qualify camera throughput, segmentation quality or physical calibration.
 
 ## Decision 1: camera playback starts from published sources {/* #decision-1-camera-playback-starts-from-published-sources */}
 

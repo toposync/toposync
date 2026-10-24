@@ -29,6 +29,8 @@ The goal is not only to ship a working build. The goal is to make the build unde
 
 ## Release trains {/* #release-trains */}
 
+For coordinated releases from 0.11.0, all first-party Python packages and both Home Assistant add-ons share one version. Validate production PyPI and both add-on images before pushing commits and lightweight `toposync-vX.Y.Z`, `toposync-addon-vX.Y.Z` and `toposync-remote-instance-vX.Y.Z` tags. Keep logs, reports and distribution artifacts outside repositories under `~/.codex/task-artifacts/toposync/release-X.Y.Z/`. This coordinated flow takes precedence over the independent-train examples below.
+
 Toposync currently has three related release trains.
 
 | Train | Repository | Packages or artifacts | Version policy |

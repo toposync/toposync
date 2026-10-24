@@ -1,6 +1,6 @@
 services:
   toposync:
-    image: ${TOPOSYNC_CUDA_IMAGE:-ghcr.io/toposync/toposync:0.10.0-cuda}
+    image: ${TOPOSYNC_CUDA_IMAGE:-ghcr.io/toposync/toposync:0.11.0-cuda}
     deploy:
       resources:
         reservations:

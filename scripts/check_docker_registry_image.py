@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 HOST = "127.0.0.1"
-DEFAULT_IMAGE = "ghcr.io/toposync/toposync:0.10.0"
+DEFAULT_IMAGE = "ghcr.io/toposync/toposync:0.11.0"
 
 
 def _run(

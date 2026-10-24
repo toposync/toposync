@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0 - 2026-10-24
+
+### Added
+
+- Passive pipeline inspection with paired video frames, overlays and independent consumer demands.
+- Reviewed automatic activities, bounded activity image sequences and spatial playback.
+- Visual sensors with retained references, local and AI inference, validation records, backup and Home Assistant publication.
+- Observed PTZ tracking preparation, bounded moving-target control and reproducible motion diagnostics.
+
+### Changed
+
+- Align all 16 Python packages, the Full Application add-on and Remote Instance add-on at 0.11.0.
+- Preserve authenticated remote ingress and improve streaming fallback, privacy revocation and accessible configuration controls.
+
+### Upgrade Notes
+
+- Back up the data directory before upgrading. Existing schema version 2 requirements remain in effect; reverse data migrations are not certified.
+- Update separately installed processing servers and remote instances to 0.11.0. Updating the Remote Instance add-on does not update its external server.
+- Visual sensor qualification and physical PTZ operation require installation-specific validation; a successful package build does not certify either.
+
 ## 0.10.0 - 2026-10-17
 
 - Add authenticated Home Assistant remote-instance access with a dedicated proxy

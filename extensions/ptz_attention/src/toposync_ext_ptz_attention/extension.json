@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "com.toposync.ptz_attention",
   "name": "PTZ Attention",
-  "version": "0.1.0",
+  "version": "0.11.0",
   "description": "Lifecycle-aware arbitration of mapped events for panoramic PTZ attention.",
   "requires_extensions": ["com.toposync.cameras"],
   "api_prefixes": ["/api/ptz-attention"],

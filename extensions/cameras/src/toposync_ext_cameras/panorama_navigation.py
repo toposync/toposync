@@ -1562,7 +1562,9 @@ class VisualNavigator:
         self.scanner.checkpoint["navigation_commands"] = self.trace
         await self.scanner._persist()
         motion_observations = None
-        if self.dispatch_guard is not None and self.localizer is not None:
+        # Preparation needs the same timed poses to distinguish video delay from motor response.
+        if self.localizer is not None and (self.dispatch_guard is not None
+                or self.scanner.checkpoint.get("navigation_step", {}).get("kind") == "velocity_qualification"):
             motion_observations = MotionFrameObservations(self.localizer,
                 self.scanner.checkpoint.setdefault("navigation_motion_observations", []), self.commands)
         previous_guard = None

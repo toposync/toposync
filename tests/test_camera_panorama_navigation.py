@@ -487,6 +487,7 @@ def test_velocity_qualification_updates_default_gain_only_after_observed_success
         assert result["duration_seconds"] == duration
         assert result["capture_evidence"] == {"sequence": 2}
         assert result["speed"] == speed and result["direction"] == -1
+    assert callable(calls[0][3].pop("frame_observer"))
     assert calls == [("pan", -1, duration, {"speed": speed, "expected_frame": baseline} if speed > .1 else {})]
     assert navigator.response["pan"] == pytest.approx([-.008 / duration, 0.] if speed == .1 and not failure else [.1, .2])
 
@@ -512,6 +513,7 @@ def test_default_velocity_preparation_reuses_measured_response_and_overlap_budge
     navigator.locate = AsyncMock(return_value={"rotation_matrix": np.eye(3)})
     navigator._error = lambda *_: np.array([-direction * .1, 0.]) if calls else np.zeros(2)
     result = asyncio.run(navigator.qualify_velocity("pan", direction, .1, .6))
+    assert callable(calls[0][3].pop("frame_observer"))
     assert calls == [("pan", direction, .6, {})]
     assert result["response_qualified"] is True
     assert navigator.response["pan"] == pytest.approx([-.1 / .6, 0.])

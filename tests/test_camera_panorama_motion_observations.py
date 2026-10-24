@@ -641,3 +641,34 @@ def test_slow_velocity_requalification_accumulates_displacement_without_lowering
     assert qualified["displacement_pixels"] >= 4.
     assert .08 <= qualified["interval_seconds"] <= .5
     assert len(qualified["capture_evidence"]) == 3
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_velocity_preparation_observes_frames_without_feedback_or_extra_commands(monkeypatch, failed):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
+    observed = []
+    async def pulse(axis, direction, duration, **options):
+        assert (axis, direction, duration) == ("pan", 1, .6)
+        assert set(options) == {"frame_observer"}
+        observer = options["frame_observer"].__self__
+        observed.append(observer)
+        options["frame_observer"](frame())
+        await observer.worker
+        if failed:
+            raise asyncio.CancelledError()
+        return {"frame": frame(2), "stable": True}
+    scanner = SimpleNamespace(last_frame=frame(), checkpoint={"navigation_step": {"kind": "velocity_qualification"}},
+        _check=lambda: None, _persist=AsyncMock(), _pulse=pulse,
+        capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = navigation.VisualNavigator(scanner, localizer())
+    if failed:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(navigator._pulse("pan", .6))
+    else:
+        asyncio.run(navigator._pulse("pan", .6))
+    assert len(observed) == 1 and observed[0].closed and observed[0].worker.done()
+    record, = scanner.checkpoint["navigation_motion_observations"]
+    assert record["command"] == 1 and record["status"] == "localized"
+    assert record["arrival_verified"] is False and "stop_confirmed" not in record
+    assert navigator.commands == 1 and navigator.following_seconds is None

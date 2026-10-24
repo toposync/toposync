@@ -1,5 +1,19 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Aquisição de alvo móvel perto do centro — 24/10/2026
+
+O navegador compartilhado também admite a janela de seguimento quando o alvo
+móvel já está na região de correção fina. Preserva o deslocamento equivalente
+planejado ao distribuir a correção pela janela qualificada; não aplica duas vezes
+a redução de velocidade. Movimento do alvo precisa de histórico válido, resposta
+nos dois sentidos e capacidade atual. Alvos parados e sondagens conservam o
+controle finito. Autoridade, geometria, frescor, parada e orçamentos não mudam.
+
+As regressões incluem travessias próximas do centro nos dois sentidos, vídeo e
+publicação atrasados, resposta vencida, sentido inverso ausente e previsão incerta.
+O resultado é de software; enquadramento e seguimento real de pessoas e veículos,
+Zoom e generalização física continuam sem aceite.
+
 ## Aquisição móvel e reversão na janela compartilhada — 23/10/2026
 
 Um alvo com movimento comprovado pelo histórico pode entrar na janela contínua

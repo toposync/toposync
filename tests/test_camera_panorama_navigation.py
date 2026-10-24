@@ -3663,7 +3663,8 @@ def test_feedback_shortened_pulse_remeasures_latest_target_without_learning_full
 
 @pytest.mark.parametrize("case", ["prepared", "missing_reverse", "expired_capacity", "stationary_target", "no_velocity", "expired_at_dispatch",
     "long_static_plan", "uncertain_once", "uncertain_persistent"])
-def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeypatch, case):
+@pytest.mark.parametrize("near", [False, True])
+def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeypatch, case, near):
     import toposync_ext_cameras.panorama_navigation as navigation
     monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
     lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
@@ -3682,6 +3683,7 @@ def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeyp
     for index in range(3):
         timestamp, angle = 9.2 + index * .4, .18 if case == "stationary_target" else .14 + index * .02
         if case == "long_static_plan": angle += .14
+        if near: angle -= .12
         observation = {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
             "capture_instance": "capture", "generation": 1, "sequence": index + 1, "observed_monotonic": timestamp}
         target = np.array([np.cos(angle), np.sin(angle), 0.])
@@ -3708,7 +3710,10 @@ def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeyp
                 _, planned = self._correction_plan([axis], np.asarray(step["planning_error_radians"]), False)
                 initial_speed = options.get("speed", .1)
                 assert 0 < initial_speed <= .1
-                assert abs(amount) * initial_speed == pytest.approx(min(abs(planned), 1.2) * .1)
+                if step["fine_control"]:
+                    assert near and abs(amount) * initial_speed <= min(abs(planned), 1.2) * .1
+                else:
+                    assert abs(amount) * initial_speed == pytest.approx(min(abs(planned), 1.2) * .1)
                 if initial_speed < .1:
                     assert options["maximum_following_speed"] == .1
             assert self.following_seconds == (6. if extended else None)

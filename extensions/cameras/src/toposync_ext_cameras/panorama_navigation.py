@@ -2130,9 +2130,8 @@ class VisualNavigator:
                 pulse_amount = float(np.copysign(duration, amount))
                 amount = equivalent_amount
             can_follow = bool(final and target_provider is not None
-                and not missing and not direction_probe and not fine_control
+                and not missing and not direction_probe
                 and self.scanner.capabilities.get("velocity_supported")
-                and pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED
                 and self._bidirectional_response_qualified(axis)
                 and self._retained_pulse_limit(axis, located) >= 1)
             following_prediction = prediction
@@ -2152,7 +2151,7 @@ class VisualNavigator:
             if following_acquisition:
                 # Preserve planned travel while leaving the qualified window open for feedback.
                 window = min(2., self._retained_pulse_limit(axis, located))
-                pulse_speed *= min(1., abs(amount) / window)
+                pulse_speed = DEFAULT_CONTINUOUS_PULSE_SPEED * min(1., abs(amount) / window)
                 pulse_amount = float(np.copysign(window, amount))
                 amount = pulse_amount * pulse_speed / DEFAULT_CONTINUOUS_PULSE_SPEED
             if not target_is_current():
@@ -2233,10 +2232,10 @@ class VisualNavigator:
             self.motion_feedback_target = (lambda: (read_target(), maximum_error_pixels)) if (
                 target_provider is not None and final and not missing and not direction_probe
                 and (pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED or following_acquisition)) else None
-            # Start only from a full, overlap-qualified correction that already
-            # leaves time to measure rate. Probes and fine positioning stay finite.
+            # Moving targets keep the qualified feedback window even near centre.
+            # Static fine positioning and unqualified probes remain finite.
             self.following_seconds = MAXIMUM_FOLLOWING_WINDOW_SECONDS if (
-                self.motion_feedback_target is not None and not fine_control
+                self.motion_feedback_target is not None and (not fine_control or following_acquisition)
                 and self.scanner.capabilities.get("velocity_supported")
                 and directional is not None and 1 <= abs(pulse_amount) <= self.pulse_limits.get(axis, 0)
             ) else None

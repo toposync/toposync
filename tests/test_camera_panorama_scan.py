@@ -11301,12 +11301,12 @@ def test_optional_replay_storage_failure_preserves_motion_outcome_and_existing_e
 
 
 @pytest.mark.parametrize('source_delay', [0.0, 0.3])
-@pytest.mark.parametrize('target_start', [-0.3, -0.22], ids=['long_acquisition', 'short_acquisition'])
+@pytest.mark.parametrize('target_start', [-0.3, -0.22, -0.14], ids=['long_acquisition', 'short_acquisition', 'near_center'])
 @pytest.mark.parametrize('target_direction', [-1, 1], ids=['right_to_left', 'left_to_right'])
 def test_prepared_moving_acquisition_crosses_center_with_delayed_images(tmp_path, monkeypatch, source_delay, target_start, target_direction, record_property):
     """Synthetic full acquisition with prepared response, delayed video, and source observations."""
     from toposync_ext_cameras import panorama_navigation as nav
-    target_rate, pulse_limit = (0.05, 1.2)
+    target_rate, pulse_limit = (0.06 if target_start == -0.14 else 0.05, 1.2)
     motion = nav.TargetMotion()
     target_queue = []
     history, errors, updates, entries = ([], [], [], [])

@@ -321,6 +321,7 @@ def observed(camera="a", sequence=1, *, lifecycle=Lifecycle.OPEN, entity="vehicl
         payload={
             **original.payload,
             "association": {"scope": "garage", "entity_id": entity},
+            "frame_tracks": [original.payload["tracklet_id"]],
             "subject": {
                 **original.payload["subject"],
                 "category": "car",

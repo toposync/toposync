@@ -201,7 +201,7 @@ def test_following_pulse_uses_shared_observer_and_closes_it_on_failure(monkeypat
 def test_motion_feedback_stops_only_from_current_operation_evidence(monkeypatch, case, expected):
     monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
     model = localizer()
-    navigator = navigation.VisualNavigator(SimpleNamespace(), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}), model)
     navigator.commands = 1
     navigator.response["pan"] = np.array([-.2, 0.])
     angle = .5 if case != "passed" else -.5
@@ -242,7 +242,7 @@ def test_velocity_feedback_uses_measured_in_motion_rate_and_fresh_dispatch(monke
     capabilities = {"defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
         {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
     if case == "unsupported_space": capabilities["spaces"] = {}
-    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}, capabilities=capabilities), model)
     navigator.commands = 1
     navigator.trace = [{}]
     navigator.response["pan"] = np.array([-999., 0.])  # A pulse gain must not drive this rate calculation.
@@ -301,7 +301,7 @@ def test_following_control_aligns_target_and_camera_observation_times(monkeypatc
     model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
     model.coverage_mask = np.ones((20, 40), bool)
     model.target_reference = lambda _: {"id": "reference"}
-    navigator = navigation.VisualNavigator(SimpleNamespace(), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}), model)
     motion = navigation.TargetMotion()
     for index in range(3):
         timestamp = now - target_age - .8 + index * .4
@@ -337,7 +337,7 @@ def test_finite_response_bootstraps_proposals_without_certifying_cruise_rate(mon
     model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
     capabilities = {"defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
         {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
-    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}, capabilities=capabilities), model)
     navigator.following_seconds, navigator.trace = 6., [{}]
     navigator.response["pan"] = np.array([-.2, 0.])
     navigator.response_rotations["pan"] = np.eye(3)
@@ -402,7 +402,7 @@ def test_finite_response_bootstraps_proposals_without_certifying_cruise_rate(mon
 def test_following_progress_emits_once_per_frame_without_arrival_or_visibility_claim(monkeypatch):
     monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
     model = localizer()
-    navigator = navigation.VisualNavigator(SimpleNamespace(), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}), model)
     navigator.commands = 1
     navigator.motion_feedback_target = lambda: ([1., 0., 0.], 12.)
     events = []
@@ -429,7 +429,7 @@ def test_following_matches_world_target_rate_instead_of_stopping_at_instantaneou
     model.target_reference = lambda _: {"id": "reference"}
     capabilities = {"defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
         {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
-    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}, capabilities=capabilities), model)
     navigator.response["pan"] = np.array([-999., 0.])  # Never convert this pulse gain into a motor rate.
     navigator.following_seconds = 6.
     navigator.trace = [{}]
@@ -498,7 +498,7 @@ def test_following_can_continue_original_velocity_before_acceleration_settles(mo
     model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
     capabilities = {"velocity_supported": True, "defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
         {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
-    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}, capabilities=capabilities), model)
     navigator.following_seconds, navigator.trace = 6., [{}]
     navigator.response["pan"] = np.array([-.2, 0.])
     navigator.response_rotations["pan"] = np.eye(3)
@@ -557,7 +557,7 @@ def test_following_rate_uses_target_history_independently_of_pose_cadence(monkey
     model.target_reference = lambda _: {"id": "reference"}
     capabilities = {"defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
         {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
-    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}, capabilities=capabilities), model)
     navigator.following_seconds, navigator.trace = 6., [{}]
     navigator.response["pan"] = np.array([-.2, 0.])
     motion = navigation.TargetMotion()
@@ -596,7 +596,7 @@ def test_following_rate_uses_target_history_independently_of_pose_cadence(monkey
 @pytest.mark.parametrize("change", [None, "capture", "generation", "expired", "future", "view", "static"])
 def test_following_rate_reference_stays_bound_to_capture_time_and_local_view(monkeypatch, change):
     monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
-    navigator = navigation.VisualNavigator(SimpleNamespace(), localizer())
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}), localizer())
     navigator.following_seconds = None if change == "static" else 6.
     capture = {"capture_instance": "capture", "generation": 1, "sequence": 1}
     origin = {"frame_received_monotonic": 3. if change == "expired" else 11. if change == "future" else 9.5,
@@ -618,7 +618,7 @@ def test_slow_velocity_requalification_accumulates_displacement_without_lowering
     model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
     capabilities = {"defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
         {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
-    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}, capabilities=capabilities), model)
     navigator.following_seconds, navigator.trace = 6., [{}]
     navigator.response["pan"] = np.array([-.2, 0.])
     navigator.motion_feedback_target = lambda: ([np.cos(.5), np.sin(.5), 0.], 12.)

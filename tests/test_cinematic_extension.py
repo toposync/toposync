@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from importlib.metadata import version
+
 from toposync.runtime.pipelines.images import MAIN_ARTIFACT_NAME
 from toposync.runtime.pipelines.operator_registry import OperatorRegistry
 from toposync_ext_cinematic.constants import EXTENSION_ID, OPERATOR_ID_DIRECTOR_SOURCE
@@ -12,7 +14,7 @@ def test_cinematic_extension_manifest_is_packaged() -> None:
 
     assert manifest.id == EXTENSION_ID
     assert manifest.name == "Cinematic"
-    assert manifest.version == "0.1.0"
+    assert manifest.version == version("toposync-ext-cinematic")
 
 
 def test_cinematic_extension_registers_director_source_operator() -> None:

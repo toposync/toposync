@@ -216,9 +216,11 @@ def test_presence_and_vehicle_presets_share_detection_but_keep_tracking_and_clas
             compiled.append(PipelineGraphCompiler(client.app.state.pipeline_operator_registry)
                             .compile_pipeline(Pipeline.model_validate(pipeline)))
         nodes = [{node.node_id: node for node in pipeline.nodes} for pipeline in compiled]
-        for node_id in ("source", "motion", "cadence", "motion_region", "detect", "map"):
+        for node_id in ("source", "motion", "cadence", "motion_region", "detect"):
             assert nodes[0][node_id].shareable
             assert nodes[0][node_id].signature == nodes[1][node_id].signature
+        assert not nodes[0]["map"].shareable
+        assert nodes[0]["map"].signature != nodes[1]["map"].signature
         assert nodes[0]["track"].signature != nodes[1]["track"].signature
         assert nodes[0]["classes"].signature != nodes[1]["classes"].signature
 

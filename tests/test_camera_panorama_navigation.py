@@ -3265,6 +3265,7 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
             return {"center_error_pixels": abs(error), "error_pixels": [error, 0], "analysis_width": 960}
 
         async def _pulse(self, axis, amount, **kwargs):
+            cycle_started = elapsed[0]
             if trajectory.startswith("dispatch_") and not self.dispatch_delayed:
                 self.dispatch_delayed = True
                 elapsed[0] += {"dispatch_delay": .2, "dispatch_expired": 1.01, "dispatch_small_change": .02}[trajectory]
@@ -3293,7 +3294,7 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
                     assert self.dispatch_rejections and prediction["motion_cycle_seconds"] == 0
                     assert 0 < prediction["cycle_seconds"] <= .1
                     assert prediction["horizon_seconds"] <= 1
-            self.command_samples.append({"time": elapsed[0], "observed_angle": target_angle(),
+            self.command_samples.append({"time": cycle_started, "observed_angle": target_angle(),
                 "camera_angle_before": camera_angle[0], "amount": amount,
                 "measurement_seconds": self.measurement_seconds, "prediction": prediction})
             camera_angle[0] += .5 * amount
@@ -3660,7 +3661,8 @@ def test_feedback_shortened_pulse_remeasures_latest_target_without_learning_full
     assert navigator.motion_feedback_target is None and navigator.dispatch_guard is None
 
 
-@pytest.mark.parametrize("case", ["prepared", "missing_reverse", "expired_capacity", "stationary_target", "no_velocity", "expired_at_dispatch"])
+@pytest.mark.parametrize("case", ["prepared", "missing_reverse", "expired_capacity", "stationary_target", "no_velocity", "expired_at_dispatch",
+    "long_static_plan", "uncertain_once", "uncertain_persistent"])
 def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeypatch, case):
     import toposync_ext_cameras.panorama_navigation as navigation
     monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
@@ -3668,11 +3670,18 @@ def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeyp
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
     scanner = SimpleNamespace(capabilities={"axes": {"pan": True}, "velocity_supported": case != "no_velocity"},
         checkpoint={}, physical_state="stopped", last_frame={"received_monotonic": 10., "capture_evidence": {}})
+    refreshes = []
+    async def refresh_stopped_frame():
+        assert scanner.physical_state == "stopped" and not refreshes
+        refreshes.append(True)
+        return scanner.last_frame
+    scanner.refresh_stopped_frame = refresh_stopped_frame
     localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
         target_reference=lambda _: reference, coverage_mask=np.ones((20, 40)))
     motion = navigation.TargetMotion()
     for index in range(3):
         timestamp, angle = 9.2 + index * .4, .18 if case == "stationary_target" else .14 + index * .02
+        if case == "long_static_plan": angle += .14
         observation = {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
             "capture_instance": "capture", "generation": 1, "sequence": index + 1, "observed_monotonic": timestamp}
         target = np.array([np.cos(angle), np.sin(angle), 0.])
@@ -3680,13 +3689,18 @@ def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeyp
     class Planned(Exception):
         pass
     class Navigator(VisualNavigator):
+        def _predict_target(self, *args):
+            if case in {"uncertain_once", "uncertain_persistent"} and (not refreshes or case == "uncertain_persistent"):
+                self.target_prediction_uncertain = True
+                return None
+            return super()._predict_target(*args)
         async def locate(self):
             return {**reference, "reference_id": "reference", "analysis_width": 960,
                 "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .9}
         async def _target_measurement(self, ray, located):
             return localized_axis_measurement(ray, lens, located)
         async def _pulse(self, axis, amount, **options):
-            extended = case in {"prepared", "expired_at_dispatch"}
+            extended = case in {"prepared", "expired_at_dispatch", "long_static_plan", "uncertain_once"}
             assert scanner.checkpoint["navigation_step"]["following_acquisition"] is extended
             assert (amount == pytest.approx(1.2)) if extended else amount < 1
             assert self.following_seconds == (6. if extended else None)
@@ -3709,6 +3723,8 @@ def test_short_moving_acquisition_uses_only_qualified_following_capacity(monkeyp
     with pytest.raises(Planned):
         asyncio.run(navigator.aim(target, target_provider=lambda: target,
             target_observation_provider=lambda: observation, target_motion=motion))
+
+    assert len(refreshes) == (1 if case in {"uncertain_once", "uncertain_persistent"} else 0)
 
 
 @pytest.mark.parametrize("support", ["qualified", "expired", "no_coverage", "insufficient_history"])
@@ -3906,3 +3922,25 @@ def test_coarse_capacity_keeps_its_original_time_view_and_displacement(monkeypat
         assert navigator.pulse_limits["pan"] == .6
         assert "pan" not in navigator.pulse_capacity
         assert navigator.trace[-1]["pulse_capacity"] is None
+
+
+@pytest.mark.parametrize("accelerated", [False, True])
+def test_extended_history_forecast_requires_agreement_with_recent_velocity(monkeypatch, accelerated):
+    import toposync_ext_cameras.panorama_navigation as navigation
+    from test_camera_panorama_target_motion import observation, direction
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 101.5)
+    motion = navigation.TargetMotion()
+    angles = [0., .002, .004, .006, .046, .086] if accelerated else [index * .013 for index in range(6)]
+    for index, angle in enumerate(angles):
+        motion.observe(observation(index + 1, 100 + index * .2), direction(angle), 100 + index * .2)
+    lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={}, checkpoint={})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        coverage_mask=np.ones((20, 40)), target_reference=lambda _: reference)
+    navigator = navigation.VisualNavigator(scanner, localizer)
+    assert motion.predict_rate(101.5) is not None, "Recent derivatives agree even after earlier acceleration"
+    located = {**reference, "analysis_width": 960, "validation_p95_pixels": 1.,
+        "validation_matches": 24, "inlier_fraction": .9}
+    result = navigator._predict_target(motion, located, 12., None)
+    assert (result is None) is accelerated

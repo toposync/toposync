@@ -8,7 +8,8 @@ import numpy as np
 
 class TargetMotion:
     def __init__(self):
-        self.samples = deque(maxlen=3)
+        # Keep the one-second horizon across sparse publications, with bounded memory.
+        self.samples = deque(maxlen=64)
         self.identity = None
 
     def observe(self, observation, ray, now):
@@ -43,6 +44,8 @@ class TargetMotion:
             if timestamp - previous[1] > 1:
                 self.samples.clear()
         self.samples.append((sequence, timestamp, direction.copy()))
+        while len(self.samples) > 3 and self.samples[1][1] <= timestamp - 1:
+            self.samples.popleft()
 
     def predict_rate(self, now):
         """Project over observed target cadence solely to estimate its rate.
@@ -50,30 +53,37 @@ class TargetMotion:
         This is not a prediction for a requested motor/pose cycle. Keep that
         arrival contract in predict(), including refusal beyond the history.
         """
-        if len(self.samples) != 3:
+        if len(self.samples) < 3:
             return None
-        first, middle, last = self.samples
-        available = min(1., last[1] - first[1]) - (now - last[1])
+        first, middle, last = list(self.samples)[-3:]
+        available = min(1., last[1] - self.samples[0][1]) - (now - last[1])
         return self.predict(now, min(.1, last[1] - middle[1], available))
 
     def predict(self, now, cycle_seconds):
-        if len(self.samples) != 3 or not math.isfinite(cycle_seconds) or cycle_seconds <= 0:
+        if len(self.samples) < 3 or not math.isfinite(cycle_seconds) or cycle_seconds <= 0:
             return None
-        first, middle, last = self.samples
+        first, middle, last = list(self.samples)[-3:]
         age = now - last[1]
         # shortcut: last-cycle timing omits latency variance; qualify a timing envelope before physical acceptance.
         horizon = age + cycle_seconds
-        if not 0 <= age <= 1 or not 0 < horizon <= min(1., last[1] - first[1]):
+        if not 0 <= age <= 1 or not 0 < horizon <= min(1., last[1] - self.samples[0][1]):
             return None
         previous = (middle[2] - first[2]) / (middle[1] - first[1])
         current = (last[2] - middle[2]) / (last[1] - middle[1])
         if current @ previous <= 0 or np.linalg.norm(current) < 1e-8:
             return None
-        projected = [last[2] + horizon * velocity for velocity in (current, previous)]
+        oldest = self.samples[0]
+        recent_span = last[1] - first[1]
+        extends_history = horizon > recent_span and not math.isclose(horizon, recent_span, rel_tol=0., abs_tol=1e-9)
+        historical = (last[2] - oldest[2]) / (last[1] - oldest[1]) if extends_history else previous
+        if current @ historical <= 0:
+            return None
+        projected = [last[2] + horizon * velocity for velocity in (current, previous, historical)]
         if any(not np.isfinite(value).all() or np.linalg.norm(value) < 1e-8 for value in projected):
             return None
         return {"ray": (projected[0] / np.linalg.norm(projected[0])).tolist(),
             "comparison_ray": (projected[1] / np.linalg.norm(projected[1])).tolist(),
+            "history_ray": (projected[2] / np.linalg.norm(projected[2])).tolist(),
             "observed_start_ray": first[2].tolist(), "observed_end_ray": last[2].tolist(),
             "horizon_seconds": horizon, "observation_age_seconds": age,
             "cycle_seconds": cycle_seconds, "sequence": last[0],

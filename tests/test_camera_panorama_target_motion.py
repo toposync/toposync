@@ -91,3 +91,62 @@ def test_rate_projection_uses_target_cadence_without_extending_arrival_horizon(i
     assert motion.predict(now, 2 * interval + .01) is None
     assert motion.predict_rate(now + 2 * interval + .01) is None
     assert motion.predict_rate(now - .01) is None
+
+
+@pytest.mark.parametrize("interval", [1 / 30, .1, .3])
+def test_temporal_history_survives_delayed_publications_without_extending_freshness(interval):
+    motion = TargetMotion()
+    for index in range(math.ceil(1 / interval) + 1):
+        timestamp = 100 + index * interval
+        sample = observation(index + 1, timestamp)
+        ray = direction(index * interval * .065)
+        motion.observe(sample, ray, timestamp)
+    now = timestamp + .6
+    estimate = motion.predict_rate(now)
+    assert estimate is not None and .6 < estimate["horizon_seconds"] <= 1
+    angle = math.atan2(estimate["ray"][1], estimate["ray"][0])
+    assert angle == pytest.approx((now - 100 + estimate["cycle_seconds"]) * .065, abs=.001)
+    retained = list(motion.samples)
+    for _ in range(20):
+        motion.observe(sample, ray, now)
+    assert len(motion.samples) == len(retained)
+    assert motion.predict(timestamp + 1.01, .01) is None
+    assert motion.predict(now, .5) is None
+    assert motion.predict_rate(timestamp - .01) is None
+
+
+def test_history_storage_and_time_horizon_remain_bounded():
+    motion = TargetMotion()
+    for index in range(1000):
+        timestamp = 100 + index * .001
+        motion.observe(observation(index + 1, timestamp), direction(index * .00001), timestamp)
+    assert len(motion.samples) == 64
+    assert motion.predict(timestamp, .1) is None
+    for index in range(1000, 1100):
+        timestamp += .3
+        motion.observe(observation(index + 1, timestamp), direction(index * .00001), timestamp)
+    assert len(motion.samples) <= 5
+    assert motion.samples[-1][1] - motion.samples[1][1] < 1
+    motion.observe(observation(1101, timestamp + 1.1), direction(.2), timestamp + 1.1)
+    assert len(motion.samples) == 1 and motion.predict_rate(timestamp + 1.1) is None
+
+
+@pytest.mark.parametrize("ending", [[.06, .06], [.08, .04]])
+def test_long_history_does_not_hide_a_recent_stop_or_reversal(ending):
+    motion = TargetMotion()
+    for index, angle in enumerate([0., .02, .04, .06, *ending]):
+        timestamp = 100 + .2 * index
+        motion.observe(observation(index + 1, timestamp), direction(angle), timestamp)
+    assert motion.predict_rate(timestamp + .1) is None
+
+
+@pytest.mark.parametrize("age,extended", [(.5, False), (.51, True)])
+def test_recent_horizon_boundary_does_not_require_old_acceleration_due_to_roundoff(age, extended):
+    motion = TargetMotion()
+    for index, angle in enumerate([0., .008, .032, .056]):
+        timestamp = 100.29999999999998 + index * .3
+        motion.observe(observation(index + 1, timestamp), direction(angle), timestamp)
+    prediction = motion.predict_rate(timestamp + age)
+    assert prediction is not None
+    disagreement = math.dist(prediction["history_ray"], prediction["comparison_ray"])
+    assert (disagreement > .001) is extended

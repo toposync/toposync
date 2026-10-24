@@ -1847,12 +1847,13 @@ class VisualNavigator:
     def _predict_target(self, motion, located, maximum_error_pixels, seconds):
         # None requests a rate on the target's own measured cadence. A motor
         # arrival still requests its full horizon and may be refused.
+        self.target_prediction_uncertain = False
         candidate = motion.predict_rate(time.monotonic()) if seconds is None else motion.predict(time.monotonic(), seconds)
         coverage = getattr(self.localizer, "coverage_mask", None)
         if candidate is None or getattr(coverage, "ndim", None) != 2 or not coverage.size:
             return None
         estimates = []
-        for key in ("ray", "comparison_ray"):
+        for key in ("ray", "comparison_ray", "history_ray"):
             u, v = ray_to_panorama_pixel(candidate[key])
             if (not coverage[min(coverage.shape[0] - 1, int(v * coverage.shape[0])),
                     min(coverage.shape[1] - 1, int(u * coverage.shape[1]))]
@@ -1862,8 +1863,10 @@ class VisualNavigator:
             if estimate is None:
                 return None
             estimates.append(estimate)
-        uncertainty = float(np.linalg.norm(np.asarray(estimates[0]["error_pixels"]) - estimates[1]["error_pixels"]))
+        uncertainty = max(float(np.linalg.norm(np.asarray(estimates[0]["error_pixels"]) - estimate["error_pixels"]))
+            for estimate in estimates[1:])
         if uncertainty > maximum_error_pixels / 2:
+            self.target_prediction_uncertain = True
             return None
         observed = [localized_axis_measurement(candidate[key], self.localizer.lens, located)
             for key in ("observed_start_ray", "observed_end_ray")]
@@ -1921,6 +1924,7 @@ class VisualNavigator:
         overshoot_recovered = False
         self.scanner.checkpoint["navigation_target_observations"] = observations
         cycle_seconds = 0.
+        initial_target_refreshed = False
 
         def target_is_current() -> bool:
             if target_provider is None or np.allclose(read_target(), ray, atol=1e-7, rtol=0):
@@ -2117,14 +2121,26 @@ class VisualNavigator:
                 duration, pulse_speed, equivalent_amount = plan
                 pulse_amount = float(np.copysign(duration, amount))
                 amount = equivalent_amount
-            following_acquisition = bool(final and target_provider is not None and prediction is not None
+            can_follow = bool(final and target_provider is not None
                 and not missing and not direction_probe and not fine_control
                 and self.scanner.capabilities.get("velocity_supported")
-                and pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED and abs(pulse_amount) < 1
-                and prediction.get("observed_displacement_pixels", 0) >= max(4.,
-                    2 * located["validation_p95_pixels"] * ANALYSIS_WIDTH / located["analysis_width"])
+                and pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED
                 and self._bidirectional_response_qualified(axis)
                 and self._retained_pulse_limit(axis, located) >= 1)
+            following_prediction = prediction
+            if can_follow and following_prediction is None:
+                following_forecast = self._predict_target(motion, located, maximum_error_pixels, None)
+                following_prediction = following_forecast[0] if following_forecast is not None else None
+            if (can_follow and target_observation_provider is not None and following_prediction is None
+                    and self.target_prediction_uncertain and cycle_seconds == 0 and not initial_target_refreshed):
+                # Reuse the stopped-frame barrier once when the initial target derivatives disagree.
+                initial_target_refreshed = True
+                self.scanner.last_frame = await self.scanner.refresh_stopped_frame()
+                self.scanner.checkpoint["navigation_target_refreshes"] = 1
+                continue
+            following_acquisition = bool(can_follow and following_prediction is not None
+                and following_prediction.get("observed_displacement_pixels", 0) >= max(4.,
+                    2 * located["validation_p95_pixels"] * ANALYSIS_WIDTH / located["analysis_width"]))
             if following_acquisition:
                 # Use an already-qualified window for live control, not the
                 # duration of a static arrival that would end before feedback.

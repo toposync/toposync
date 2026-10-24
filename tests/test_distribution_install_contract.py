@@ -66,6 +66,11 @@ def test_distribution_workflow_validates_extension_wheels() -> None:
     assert workflow.index(wheel_check) < workflow.index(distribution_smoke)
 
 
+def test_distribution_workflow_uses_supported_playwright_runner() -> None:
+    workflow = (ROOT / ".github/workflows/distribution-smoke.yml").read_text(encoding="utf-8")
+    assert "runs-on: ubuntu-24.04" in workflow
+
+
 @pytest.mark.parametrize("missing_vision_frontend", [False, True])
 def test_distribution_smoke_requires_declared_vision_frontend(missing_vision_frontend) -> None:
     smoke = _load_distribution_smoke_script()

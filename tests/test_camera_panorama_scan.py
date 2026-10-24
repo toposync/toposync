@@ -717,7 +717,8 @@ def test_control_verification_uses_one_coarse_recall_per_return_epoch(
     async def confirm_stop():
         scanner.physical_state = "stopped"
 
-    async def leave_unconfirmed(owner, _reference, result):
+    async def leave_unconfirmed(owner, _reference, result, *, maximum_error_pixels):
+        assert maximum_error_pixels == 3
         owner.physical_state = "stopped"
         return result
 
@@ -2198,7 +2199,8 @@ def test_large_overlapping_absolute_return_uses_coarse_recall_before_visual_fini
     camera.return_offset = 0.06
     scanner.last_frame = asyncio.run(camera.frame())
     corrected = []
-    async def exhausted_return(owner, reference, result):
+    async def exhausted_return(owner, reference, result, *, maximum_error_pixels):
+        assert maximum_error_pixels == 3
         corrected.append(owner)
         return result
 
@@ -2272,7 +2274,8 @@ def test_unclosed_pilot_uses_one_coarse_recall_then_safe_visual_finish(
 
     visual_calls = []
 
-    async def visual_finish(owner, reference, result):
+    async def visual_finish(owner, reference, result, *, maximum_error_pixels):
+        assert maximum_error_pixels == 3
         visual_calls.append((owner, result))
         return result
 
@@ -10659,3 +10662,41 @@ def test_return_failure_keeps_one_reserved_replay_after_regular_quota(tmp_path, 
     assert json.loads(records[0].read_text())["attempt"]["return_correction_failure"] == "visual_error_increased"
     assert records[0].with_suffix(".npz").exists()
     assert attempt.value["return_failure_replay_id"] == records[0].stem
+
+@pytest.mark.parametrize('limit, displacement, accepted', [(3, 5.46, False), (12, 5.46, True), (12, 12.01, False)])
+def test_return_precision_is_requested_without_changing_capture_default(tmp_path, monkeypatch, limit, displacement, accepted):
+    camera = SimulatedCamera()
+    frame = asyncio.run(camera.frame())
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
+    scanner.physical_state = 'stopped'
+    monkeypatch.setattr(scan, '_match', lambda *args: {'verified': True, 'overlap': .99, 'displacement': displacement})
+    result = asyncio.run(scanner._validate_return(frame['image'], frame, maximum_error_pixels=limit))
+    assert (scanner.physical_state == 'restored') is accepted
+    assert result['maximum_error_pixels'] == limit
+
+
+def test_return_can_accept_current_stopped_view_without_resetting_exhausted_budget(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    camera = SimulatedCamera()
+    frame = asyncio.run(camera.frame())
+    path = tmp_path / 'initial.png'
+    cv2.imwrite(str(path), frame['image'])
+    commands = [{'command': index} for index in range(4)]
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {
+        'initial_path': str(path), 'return': {'kind': 'preset', 'token': 'owned'},
+        'return_epoch': 'final', 'return_correction_state': 'budget_exhausted',
+        'return_correction_commands': commands})
+    scanner.last_frame = frame
+    scanner.physical_state = 'stopped'
+    scanner._recover_pilot_response = AsyncMock()
+    async def stop():
+        scanner.physical_state = 'stopped'
+    scanner._confirm_stop = AsyncMock(side_effect=stop)
+    scanner._move = AsyncMock(side_effect=AssertionError('No new movement allowed'))
+    monkeypatch.setattr(scan, '_match', lambda *args: {'verified': True, 'overlap': .99, 'displacement': 5.46})
+    asyncio.run(scanner._restore(maximum_error_pixels=12))
+    assert scanner.physical_state == 'restored'
+    assert scanner.checkpoint['return_epoch'] == 'final'
+    assert scanner.checkpoint['return_correction_commands'] == commands
+    scanner._move.assert_not_awaited()
+    scanner._confirm_stop.assert_awaited_once()

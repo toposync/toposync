@@ -42,6 +42,7 @@ from .processing.panorama_mapping import (
     ray_to_panorama_pixel,
     render_panorama,
 )
+from .panorama_navigation import MAXIMUM_LIVE_CENTER_ERROR_PIXELS
 from .panorama_reference import PanoramaReferenceCoordinator
 from .settings import camera_source_has_ptz, get_camera_device, get_camera_source, iter_camera_sources
 from .source_panorama import (
@@ -1643,7 +1644,7 @@ class PanoramaService:
             scanner.physical_state = "stopped"
             if target is None:
                 if scanner.saved_return:
-                    await scanner._restore()
+                    await scanner._restore(maximum_error_pixels=MAXIMUM_LIVE_CENTER_ERROR_PIXELS)
                 elif scanner.checkpoint.get("visual_original_ray"):
                     binding = job["source_panorama"]
                     await self.localize_frame(camera_id=job["camera_id"], source_id=job["source_id"], job_id=job["id"], revision=job["revision"], image=scanner.last_frame["image"], capture_evidence=scanner.last_frame.get("capture_evidence", {}))
@@ -1651,7 +1652,7 @@ class PanoramaService:
                     await VisualNavigator(scanner, localizer).aim(scanner.checkpoint["visual_original_ray"])
                     original = scanner._private_image(scanner.checkpoint["initial_path"])
                     comparison = await asyncio.to_thread(_match, original, scanner.last_frame["image"])
-                    if comparison.get("verified") and comparison.get("overlap", 0) >= .85 and comparison["displacement"] <= 3:
+                    if comparison.get("verified") and comparison.get("overlap", 0) >= .85 and comparison["displacement"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
                         scanner.physical_state = "restored"
                 if scanner.physical_state != "restored":
                     raise PanoramaCaptureError("return_framing_unconfirmed")
@@ -1721,9 +1722,9 @@ class PanoramaService:
                 if qualification_home is not None:
                     stages = []
                     for label, destination, tolerance in (
-                        ("home", qualification_home, 3),
-                        ("arrival", target, 12),
-                        ("return", qualification_home, 3),
+                        ("home", qualification_home, MAXIMUM_LIVE_CENTER_ERROR_PIXELS),
+                        ("arrival", target, MAXIMUM_LIVE_CENTER_ERROR_PIXELS),
+                        ("return", qualification_home, MAXIMUM_LIVE_CENTER_ERROR_PIXELS),
                     ):
                         started = time.monotonic()
                         await approach_native_reference(destination["ray"])
@@ -1741,13 +1742,13 @@ class PanoramaService:
                     evidence = {"verified": True, "kind": "attention_round_trip_verified", "stages": stages}
                     # Qualification must also restore its starting view; its home may differ.
                     if scanner.saved_return:
-                        await scanner._restore()
+                        await scanner._restore(maximum_error_pixels=MAXIMUM_LIVE_CENTER_ERROR_PIXELS)
                     else:
-                        await navigator.aim(scanner.checkpoint["visual_original_ray"], maximum_error_pixels=3)
+                        await navigator.aim(scanner.checkpoint["visual_original_ray"], maximum_error_pixels=MAXIMUM_LIVE_CENTER_ERROR_PIXELS)
                         comparison = await asyncio.to_thread(_match,
                             scanner._private_image(scanner.checkpoint["initial_path"]), scanner.last_frame["image"])
                         if (comparison.get("verified") and comparison.get("overlap", 0) >= .85
-                                and comparison.get("displacement", math.inf) <= 3):
+                                and comparison.get("displacement", math.inf) <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS):
                             scanner.physical_state = "restored"
                     if scanner.physical_state != "restored":
                         raise PanoramaCaptureError("return_framing_unconfirmed")
@@ -2424,7 +2425,7 @@ class PanoramaService:
                 if (evidence.get("verified") is not True or job.get("stop_confirmed") is not True
                         or [stage.get("stage") for stage in stages] != ["home", "arrival", "return"]):
                     raise _error("attention_arrival_unconfirmed", "The physical round trip was not verified")
-                for stage, limit in zip(stages, (3, 12, 3)):
+                for stage, limit in zip(stages, (MAXIMUM_LIVE_CENTER_ERROR_PIXELS,) * 3):
                     observed = stage.get("evidence", {})
                     error = observed.get("measurement", {}).get("center_error_pixels")
                     if (observed.get("verified") is not True or observed.get("kind") != "visual_aim_verified"
@@ -2588,7 +2589,7 @@ class PanoramaService:
             ray = current_ray()
             entry_stage("target_refreshed")
             _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray},
-                borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=3 if returning else 12,
+                borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
                 **({"target_provider": current_ray, "target_observation_provider": current_observation} if follows_observation else {}))
             final = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)

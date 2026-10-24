@@ -1663,8 +1663,10 @@ class VisualNavigator:
         }
 
 
-async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict) -> dict:
+async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict, *, maximum_error_pixels: float = 3) -> dict:
     """Use the remaining shared return budget for visually observed pulses."""
+    if type(maximum_error_pixels) not in (int, float) or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
+        raise PanoramaCaptureError("invalid_target")
     responses: dict[str, np.ndarray] = {}
     response_directions: dict[str, int] = {}
     response_speeds: dict[str, float] = {}
@@ -1702,7 +1704,7 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
             terminal_state = "rejected"
             break
         _, comparison_displacement, shift_x, shift_y = measurement
-        if comparison_displacement <= 3:
+        if comparison_displacement <= maximum_error_pixels:
             terminal_state = "complete"
             break
         if not model_loaded:
@@ -2027,7 +2029,7 @@ async def correct_reference(scanner: _Scan, reference: np.ndarray, result: dict)
         )
         if callable(persist):
             await persist()
-        if observed_displacement <= 3:
+        if observed_displacement <= maximum_error_pixels:
             terminal_state = "complete"
             break
     else:

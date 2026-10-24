@@ -8881,13 +8881,14 @@ class _Scan:
                 axis, matching, self.saved_return, capture.get("pose", {}), kind="persisted_pilot"
             )
 
-    async def _validate_return(self, reference: np.ndarray, frame: dict) -> dict:
+    async def _validate_return(self, reference: np.ndarray, frame: dict, *, maximum_error_pixels: float = 3) -> dict:
         comparison = dict(await asyncio.to_thread(_match, reference, frame["image"]))
         for key in ("overlap", "displacement", "shift_x", "shift_y"):
             if key in comparison and _finite(comparison[key]) is None:
                 comparison[key] = None
                 comparison["verified"] = False
                 comparison.setdefault("code", "visual_response_unavailable")
+        comparison["maximum_error_pixels"] = maximum_error_pixels
         _write_json(self.directory / "return-validation.json", comparison)
         overlap = _finite(comparison.get("overlap"))
         displacement = _finite(comparison.get("displacement"))
@@ -8896,7 +8897,7 @@ class _Scan:
             and overlap is not None
             and overlap >= 0.85
             and displacement is not None
-            and displacement <= 3
+            and displacement <= maximum_error_pixels
         ):
             await asyncio.to_thread(
                 _write_image, self.directory / "return-final.jpg", frame["image"]
@@ -8907,7 +8908,10 @@ class _Scan:
                 self.checkpoint["restored_return_epoch"] = epoch_value
         return comparison
 
-    async def _restore(self) -> None:
+    async def _restore(self, *, maximum_error_pixels: float = 3) -> None:
+        from .panorama_navigation import MAXIMUM_LIVE_CENTER_ERROR_PIXELS
+        if type(maximum_error_pixels) not in (int, float) or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
+            raise PanoramaCaptureError("invalid_target")
         cursor = self.checkpoint.get("continuous_cursor")
         if cursor is not None:
             cursor["resume_anchor_verified"] = False
@@ -8938,11 +8942,11 @@ class _Scan:
                     and initial_overlap is not None
                     and initial_overlap >= 0.85
                     and initial_displacement is not None
-                    and initial_displacement <= 3
+                    and initial_displacement <= maximum_error_pixels
                 ):
                     await self._confirm_stop()
                     if self.physical_state == "stopped":
-                        await self._validate_return(reference, self.last_frame)
+                        await self._validate_return(reference, self.last_frame, maximum_error_pixels=maximum_error_pixels)
                     if self.physical_state == "restored":
                         return
             target = (
@@ -8950,7 +8954,7 @@ class _Scan:
                 if self.saved_return.get("kind") == "absolute"
                 else None
             )
-            # Once the strict 3 px gate above has failed, recall the saved
+            # Once the requested visual gate above has failed, recall the saved
             # destination at most once for this deliberate return epoch. A
             # persisted planned intent is deliberately ambiguous after an
             # interruption: it may have reached the device, so a retry observes
@@ -9057,7 +9061,7 @@ class _Scan:
                     await self._confirm_stop()
                     if self.physical_state != "stopped" or self.last_frame is None:
                         raise
-                    finish_comparison = await self._validate_return(reference, self.last_frame)
+                    finish_comparison = await self._validate_return(reference, self.last_frame, maximum_error_pixels=maximum_error_pixels)
                     if self.physical_state == "restored":
                         return
                     finish_overlap = _finite(finish_comparison.get("overlap"))
@@ -9096,7 +9100,7 @@ class _Scan:
                 await self._confirm_stop()
                 if self.physical_state != "stopped" or self.last_frame is None:
                     raise PanoramaCaptureError("stop_unconfirmed")
-                finish_comparison = await self._validate_return(reference, self.last_frame)
+                finish_comparison = await self._validate_return(reference, self.last_frame, maximum_error_pixels=maximum_error_pixels)
                 if self.physical_state == "restored":
                     return
                 finish_overlap = _finite(finish_comparison.get("overlap"))
@@ -9160,7 +9164,7 @@ class _Scan:
             if visual_return:
                 from .panorama_navigation import correct_reference
 
-                result = await correct_reference(self, reference, result)
+                result = await correct_reference(self, reference, result, maximum_error_pixels=maximum_error_pixels)
             absolute_trace_value = self.checkpoint.get("absolute_return_corrections", [])
             absolute_trace = absolute_trace_value if isinstance(absolute_trace_value, list) else []
             self.checkpoint["absolute_return_corrections"] = absolute_trace
@@ -9190,7 +9194,7 @@ class _Scan:
                 else "stopped"
             )
             for correction in range(remaining_absolute_corrections + 1):
-                comparison = await self._validate_return(reference, result["frame"])
+                comparison = await self._validate_return(reference, result["frame"], maximum_error_pixels=maximum_error_pixels)
                 if self.physical_state == "restored":
                     self.checkpoint["absolute_return_correction_state"] = "complete"
                     await self._persist()
@@ -9414,7 +9418,7 @@ class _Scan:
                     # The travel may be untrackable even when the preset arrives.
                     # Only a fresh stopped window matching the saved reference
                     # can establish restoration; command acceptance cannot.
-                    await self._validate_return(reference, self.last_frame)
+                    await self._validate_return(reference, self.last_frame, maximum_error_pixels=maximum_error_pixels)
             if return_issue is not None and self.physical_state != "restored":
                 self.issues.append(return_issue)
 

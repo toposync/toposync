@@ -403,7 +403,7 @@ def test_physical_gate_requires_exact_current_qualification(change):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("change", [None, "qualification", "revision", "owner", "fence", "ready", "final_owner", "stopped", "invalid_binding"])
-async def test_attention_service_uses_borrowed_lease_and_strict_home_limit_without_presets(monkeypatch, change):
+async def test_attention_service_uses_borrowed_lease_and_live_precision_without_presets(monkeypatch, change):
     job = bound_job()
     qualify(job)
     service = object.__new__(PanoramaService)
@@ -447,7 +447,7 @@ async def test_attention_service_uses_borrowed_lease_and_strict_home_limit_witho
         assert result["destination"] == destination and result["motion_epoch"] == 4
         assert job["_attention_navigation_result"]["command_id"] == "command"
         options = service._visual_operation_with_pinned_reference.await_args.kwargs
-        assert options == {"borrowed_control": {"lease_id": "attention", "fence": 7}, "maximum_error_pixels": 3}
+        assert options == {"borrowed_control": {"lease_id": "attention", "fence": 7}, "maximum_error_pixels": 12}
         assert all(call.args[0] == "cameras.control.snapshot" and call.kwargs["refresh_physical"] is False for call in service.services.call.await_args_list)
 
 
@@ -879,7 +879,7 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
         await persist()
         return True
 
-    async def restore():
+    async def restore(**kwargs):
         if outcome == 'restore_failure':
             raise PanoramaCaptureError('return_framing_unconfirmed')
         scanner.physical_state = 'restored'
@@ -924,7 +924,7 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
     monkeypatch.setattr(panorama_scan, '_Scan', lambda *args: scanner)
     monkeypatch.setattr(panorama_scan, '_write_image', lambda *args: None)
     monkeypatch.setattr(panorama_scan, '_match', lambda *args: {
-        'verified': True, 'overlap': .99, 'displacement': 4 if outcome == 'visual_mismatch' else 1})
+        'verified': True, 'overlap': .99, 'displacement': 13 if outcome == 'visual_mismatch' else 1})
     monkeypatch.setattr(panorama_navigation, 'VisualNavigator', lambda *args: navigator)
     service = object.__new__(PanoramaService)
     service.root, service.services = tmp_path, SimpleNamespace()
@@ -966,7 +966,7 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
     if outcome == 'prepared_reference':
         assert navigator.approach_reference.await_count == 3
         assert camera.bind_reference_destination.await_count == 3
-        assert [call.kwargs['maximum_error_pixels'] for call in navigator.aim.await_args_list] == [3, 12, 3]
+        assert [call.kwargs['maximum_error_pixels'] for call in navigator.aim.await_args_list] == [12, 12, 12]
         service.native_references.assert_called_with('camera', 'wide', job['source_panorama'])
     elif outcome in {'reference_binding_failed', 'reference_arrival_failed'}:
         navigator.aim.assert_not_awaited()

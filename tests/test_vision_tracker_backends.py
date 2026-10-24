@@ -298,31 +298,31 @@ def test_byte_world_predicts_recent_motion_without_enlarging_residual_gate():
 
 
 def test_byte_world_does_not_learn_velocity_from_uncertain_or_stale_positions():
-    for confidence, last_at in ((.6, 10.7), (.95, 12.)):
+    for confidence, last_at in ((.44, 10.7), (.95, 12.)):
         backend = ByteWorldTrackerBackend(close_after_seconds=3)
         identities = []
         for at, x in ((10., 0.), (10.2, 2.), (last_at, 10*(last_at-10))):
             track = backend.update('moving', None, _detections([(.2,.2,.3,.5)], label='car',
                 world_anchors=[{'x':x,'z':20.,'confidence':confidence}]), frame_ts=at)[0]
             identities.append(track.tracking_id)
-        if confidence < .7:
+        if confidence < .45:
             assert not backend._tracks_by_stream['moving'][identities[0]].world_velocity
         else:
             assert identities[-1] != identities[0]
 
 
 def test_byte_world_motion_keeps_opposing_tracks_separate():
-    backend = ByteWorldTrackerBackend(close_after_seconds=3)
-    def observe(at, positions):
-        return backend.update('crossing', None, _detections([(.2,.2,.3,.5)]*2, label='car',
-            world_anchors=[{'x':x,'z':20.,'confidence':.95} for x in positions]), frame_ts=at)
-    first = observe(10., [0., 10.])
-    identities = [t.tracking_id for t in first]
-    assert [t.tracking_id for t in observe(10.2, [2., 8.])] == identities
-    crossed = observe(10.7, [7., 3.])
-    assert [t.tracking_id for t in crossed] == identities
-    backend.reset_stream('crossing')
-    assert backend._tracks_by_stream.get('crossing') is None
+    for confidence in (.6, .95):
+        backend = ByteWorldTrackerBackend(close_after_seconds=3)
+        def observe(at, positions):
+            tracks = backend.update('crossing', None, _detections([(.2,.2,.3,.5)]*2, label='car',
+                world_anchors=[{'x':x,'z':20.,'confidence':confidence} for x in positions]), frame_ts=at)
+            return {t.world_anchor['x']: t.tracking_id for t in tracks}
+        first = observe(10., [0., 10.])
+        assert observe(10.2, [2., 8.]) == {2.: first[0.], 8.: first[10.]}
+        assert observe(10.7, [7., 3.]) == {7.: first[0.], 3.: first[10.]}
+        backend.reset_stream('crossing')
+        assert backend._tracks_by_stream.get('crossing') is None
 
 
 def test_byte_world_recent_stop_and_reverse_update_velocity():
@@ -333,3 +333,53 @@ def test_byte_world_recent_stop_and_reverse_update_velocity():
             world_anchors=[{'x':x,'z':20.,'confidence':.95}]),frame_ts=at)[0]
         identities.append(tracked.tracking_id)
     assert len(set(identities)) == 1
+
+
+def test_byte_world_geometric_motion_survives_lower_detector_score():
+    backend = ByteWorldTrackerBackend(close_after_seconds=3)
+    observations = [
+        (.373, .786, (.1296, .3855, .1585, .4679), 9.908, 23.536),
+        (.649, .708, (.1993, .3762, .2306, .4640), 8.070, 23.417),
+        (.923, .622, (.2599, .3665, .2921, .4588), 6.734, 23.385),
+        (1.177, .606, (.2936, .3635, .3263, .4442), 6.071, 23.620),
+        (1.477, .405, (.4161, .3616, .4484, .4405), 3.776, 23.459),
+        (1.770, .708, (.5235, .3485, .5578, .4435), 1.865, 23.227),
+        (1.990, .295, (.5858, .3493, .6168, .4434), .792, 23.146),
+    ]
+    identities = []
+    for at, score, box, x, z in observations:
+        anchor = {"x": x, "z": z}
+        tracks = backend.update("moving", None, _detections([box], score=score,
+            world_anchors=[anchor]), frame_ts=10 + at)
+        assert len(tracks) == 1
+        assert tracks[0].world_anchor == anchor
+        identities.append(tracks[0].tracking_id)
+    assert len(set(identities)) == 1
+
+
+def test_byte_world_geometry_changes_start_distinct_trails():
+    initial = {"composition_id": "ground", "calibrated_view_id": "view",
+        "panorama_revision": 1, "geometry_digest": "a"}
+    for changed in ({**initial, "panorama_revision": 2},
+                    {**initial, "composition_id": "other"},
+                    {**initial, "calibrated_view_id": "other"},
+                    {**initial, "geometry_digest": "b"}, {}):
+        backend = ByteWorldTrackerBackend()
+        detections = _detections([(.2, .2, .3, .5)], world_anchors=[{"x": 1., "z": 2.}])
+        first = backend.update("stream", None, detections, frame_ts=10., metadata=initial)[0]
+        stable = backend.update("stream", None, detections, frame_ts=10.2, metadata=initial)[0]
+        assert stable.tracking_id == first.tracking_id
+        changed_track = backend.update("stream", None, detections, frame_ts=10.4, metadata=changed)[0]
+        assert changed_track.tracking_id != first.tracking_id
+        assert not backend._tracks_by_stream['stream'][changed_track.tracking_id].world_velocity
+        backend.reset_stream("stream")
+        assert "stream" not in backend._geometry_by_stream
+
+
+def test_byte_world_intermediate_world_conflict_requires_image_support():
+    backend = ByteWorldTrackerBackend()
+    first = backend.update("stream", None, _detections([(.1, .1, .2, .3)],
+        world_anchors=[{"x": 0., "z": 10.}]), frame_ts=10.)[0]
+    second = backend.update("stream", None, _detections([(.8, .7, .9, .9)],
+        world_anchors=[{"x": 20., "z": 10.}]), frame_ts=10.2)[0]
+    assert second.tracking_id != first.tracking_id

@@ -1816,13 +1816,28 @@ class PanoramaService:
                             failure_code = "capture_cancelled"
                         if not arrival_reused:
                             control_stopped = False
-                            if await scanner._stop():
+                            async def confirm_borrowed_stop() -> bool:
+                                if not await scanner._stop():
+                                    return False
                                 status_task = asyncio.create_task(self._attention_stopped_control(
                                     job, borrowed_control))
                                 try:
                                     await scanner._confirm_stop(reuse_accepted=True)
                                 finally:
-                                    control_stopped = await asyncio.shield(status_task)
+                                    stopped = await asyncio.shield(status_task)
+                                return stopped
+
+                            stop_task = asyncio.create_task(confirm_borrowed_stop())
+                            while True:
+                                try:
+                                    control_stopped = await asyncio.shield(stop_task)
+                                    break
+                                except asyncio.CancelledError as error:
+                                    if stop_task.cancelled():
+                                        raise
+                                    # Target expiry must not close capture before Stop is observed.
+                                    cleanup_cancellation = error
+                                    failure_code = "capture_cancelled"
                     else:
                         await scanner._confirm_stop()
                     job["stop_confirmed"] = scanner.physical_state == "stopped" and control_stopped
@@ -1875,10 +1890,6 @@ class PanoramaService:
                     elif (not job.get("stop_confirmed")
                             or failure_code not in {None, "capture_cancelled", "following_observation_expired"}):
                         getattr(self, "_attention_responses", {}).pop(job["camera_id"], None)
-                return_checkpoint = job.get("_navigation_checkpoint") or {}
-                job["navigation"] = {"phase": "failed" if failure_code else "complete", "error_code": failure_code, "physical_state": "restored" if restored and job.get("stop_confirmed") else "stopped" if job.get("stop_confirmed") else scanner.physical_state,
-                                     "can_return": bool((return_checkpoint.get("return") or return_checkpoint.get("visual_original_ray")) and return_checkpoint.get("initial_path"))}
-                self._save(job)
             except asyncio.CancelledError:
                 failure_code = "capture_cancelled"
                 raise
@@ -1887,6 +1898,10 @@ class PanoramaService:
                 raise
             finally:
                 try:
+                    return_checkpoint = job.get("_navigation_checkpoint") or {}
+                    job["navigation"] = {"phase": "failed" if failure_code else "complete", "error_code": failure_code,
+                        "physical_state": "restored" if restored and job.get("stop_confirmed") else "stopped" if job.get("stop_confirmed") else scanner.physical_state,
+                        "can_return": bool((return_checkpoint.get("return") or return_checkpoint.get("visual_original_ray")) and return_checkpoint.get("initial_path"))}
                     if borrowed_control is not None:
                         job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
                             for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations")}

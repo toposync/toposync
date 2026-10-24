@@ -62,7 +62,7 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
     "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive", "metadata_combined",
     "prepared_reference", "dynamic_reference_ignored", "cancel_initial_localization",
-    "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup"])
+    "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup", "external_cancel_cleanup"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -139,6 +139,13 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
                 raise PanoramaCaptureError("capture_timeout")
             return frame
         scanner._reference_window.side_effect = observe_with_preparation
+    if reuse == "external_cancel_cleanup":
+        cleanup_started, cleanup_finish = module.asyncio.Event(), module.asyncio.Event()
+        async def confirm_pending_stop(**kwargs):
+            cleanup_started.set()
+            await cleanup_finish.wait()
+            scanner.physical_state = "stopped"
+        scanner._confirm_stop.side_effect = confirm_pending_stop
     if reuse in {"cancel_cleanup", "failed_cleanup"}:
         scanner._confirm_stop.side_effect = (module.asyncio.CancelledError() if reuse == "cancel_cleanup"
             else PanoramaCaptureError("stop_unconfirmed"))
@@ -229,6 +236,27 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
         **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}))
+    if reuse == "external_cancel_cleanup":
+        task = module.asyncio.create_task(operation)
+        await module.asyncio.wait_for(cleanup_started.wait(), 1)
+        try:
+            for _ in range(2):
+                task.cancel()
+                await module.asyncio.sleep(0)
+                await module.asyncio.sleep(0)
+                camera.close.assert_not_awaited()
+                assert not task.done()
+        finally:
+            cleanup_finish.set()
+            result = await module.asyncio.gather(task, return_exceptions=True)
+        assert isinstance(result[0], module.asyncio.CancelledError)
+        assert job["stop_confirmed"] is True
+        assert job["_attention_navigation_trace"]["error_code"] == "capture_cancelled"
+        assert job["navigation"]["phase"] == "failed"
+        assert job["navigation"]["physical_state"] == "stopped"
+        camera.close.assert_awaited_once()
+        assert not service._navigation_scanners
+        return
     if reuse in {"cancel_cleanup", "failed_cleanup"}:
         with pytest.raises(module.asyncio.CancelledError if reuse == "cancel_cleanup" else PanoramaCaptureError):
             await operation
@@ -237,6 +265,8 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         assert trace["diagnostics"] == scanner.checkpoint["diagnostics"]
         assert len(job["_attention_navigation_history"]) == 8
         assert job["stop_confirmed"] is False
+        assert job["navigation"]["phase"] == "failed"
+        assert job["navigation"]["error_code"] == trace["error_code"]
         scanner._stop.assert_awaited()
         camera.close.assert_awaited_once()
         assert not service._navigation_scanners

@@ -1189,6 +1189,67 @@ class VisualNavigator:
             amount = predicted
         return axis, amount, direction, predicted
 
+    def _movement_axes(self, measured, error, final, maximum_error_pixels):
+        axes = [
+            axis
+            for axis in ("pan", "tilt")
+            if self.scanner.capabilities.get("axes", {}).get(axis) is True
+        ]
+        if final and measured and axes and len(measured.get("error_pixels", [])) == 2:
+            component_limit = maximum_error_pixels / np.sqrt(2)
+            needed = [
+                axis
+                for index, axis in enumerate(("pan", "tilt"))
+                if axis in axes and abs(float(measured["error_pixels"][index])) > component_limit
+            ]
+            if not needed and measured["center_error_pixels"] > maximum_error_pixels:
+                needed = [
+                    max(
+                        axes,
+                        key=lambda axis: abs(
+                            float(measured["error_pixels"][0 if axis == "pan" else 1])
+                        ),
+                    )
+                ]
+            axes = needed
+        if not axes:
+            raise PanoramaCaptureError("visual_control_resolution_unverified")
+        missing = [axis for axis in axes if axis not in self.response]
+        deferred_axes = []
+        known = [axis for axis in axes if axis in self.response]
+        if missing and known:
+            # A missing minor-axis response need not interrupt useful motion
+            # on a freshly qualified axis. Re-evaluate after every observed
+            # pulse; probe the missing axis once known motion cannot remove
+            # at least a tenth of the remaining error. Never reuse its stale gain.
+            known_matrix = np.column_stack([self.response[axis] for axis in known])
+            known_step = correction_step(known_matrix, error)
+            if np.linalg.norm(error + known_matrix @ known_step) <= np.linalg.norm(error) * .9:
+                deferred_axes, missing, axes = missing, [], known
+        return axes, missing, deferred_axes
+
+    def _correction_plan(self, axes, error, fine_control):
+        matrix = np.column_stack([self.response[axis] for axis in axes])
+        commands = correction_step(
+            matrix, error,
+            maximum=max(self.pulse_limits.get(axis, MAXIMUM_NAVIGATION_PULSE_SECONDS) for axis in axes),
+            minimum=0.05 if self.scanner.capabilities.get("velocity_supported") and not fine_control else 0,
+        )
+        for component, name in enumerate(axes):
+            limit = self.pulse_limits.get(name, MAXIMUM_NAVIGATION_PULSE_SECONDS)
+            commands[component] = np.clip(commands[component], -limit, limit)
+        # Motor time is not image error. Prefer the axis whose measured
+        # response leaves the smallest centre error; a slow minor axis
+        # must not precede the correction that can already reach it.
+        index = int(np.argmin([
+            np.linalg.norm(error + matrix[:, component] * command)
+            for component, command in enumerate(commands)
+        ]))
+        axis, amount = axes[index], float(commands[index])
+        if abs(amount) < 0.001:
+            raise PanoramaCaptureError("visual_control_resolution_unverified")
+        return axis, amount
+
     async def aim(
         self, ray: Any, *, maximum_error_pixels: float = MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
         target_provider: Callable[[], list[float]] | None = None,
@@ -1382,67 +1443,14 @@ class VisualNavigator:
                     np.asarray(measured["error_pixels"])
                     / (np.array([self.localizer.lens["fx"], self.localizer.lens["fy"]]) * scale)
                 )
-            axes = [
-                axis
-                for axis in ("pan", "tilt")
-                if self.scanner.capabilities.get("axes", {}).get(axis) is True
-            ]
-            if final and measured and axes and len(measured.get("error_pixels", [])) == 2:
-                component_limit = maximum_error_pixels / np.sqrt(2)
-                needed = [
-                    axis
-                    for index, axis in enumerate(("pan", "tilt"))
-                    if axis in axes and abs(float(measured["error_pixels"][index])) > component_limit
-                ]
-                if not needed and measured["center_error_pixels"] > maximum_error_pixels:
-                    needed = [
-                        max(
-                            axes,
-                            key=lambda axis: abs(
-                                float(measured["error_pixels"][0 if axis == "pan" else 1])
-                            ),
-                        )
-                    ]
-                axes = needed
-            if not axes:
-                raise PanoramaCaptureError("visual_control_resolution_unverified")
-            missing = [axis for axis in axes if axis not in self.response]
-            deferred_axes = []
-            known = [axis for axis in axes if axis in self.response]
-            if missing and known:
-                # A missing minor-axis response need not interrupt useful motion
-                # on a freshly qualified axis. Re-evaluate after every observed
-                # pulse; probe the missing axis once known motion cannot remove
-                # at least a tenth of the remaining error. Never reuse its stale gain.
-                known_matrix = np.column_stack([self.response[axis] for axis in known])
-                known_step = correction_step(known_matrix, error)
-                if np.linalg.norm(error + known_matrix @ known_step) <= np.linalg.norm(error) * .9:
-                    deferred_axes, missing, axes = missing, [], known
+            axes, missing, deferred_axes = self._movement_axes(measured, error, final, maximum_error_pixels)
             fine_control = bool(final and measured
                 and measured["center_error_pixels"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS * 4
                 and self.scanner.capabilities.get("velocity_supported"))
             if missing:
                 axis, amount, probe_direction, predicted = self._probe_plan(target, located, missing, error, near)
             else:
-                matrix = np.column_stack([self.response[axis] for axis in axes])
-                commands = correction_step(
-                    matrix, error,
-                    maximum=max(self.pulse_limits.get(axis, MAXIMUM_NAVIGATION_PULSE_SECONDS) for axis in axes),
-                    minimum=0.05 if self.scanner.capabilities.get("velocity_supported") and not fine_control else 0,
-                )
-                for component, name in enumerate(axes):
-                    limit = self.pulse_limits.get(name, MAXIMUM_NAVIGATION_PULSE_SECONDS)
-                    commands[component] = np.clip(commands[component], -limit, limit)
-                # Motor time is not image error. Prefer the axis whose measured
-                # response leaves the smallest centre error; a slow minor axis
-                # must not precede the correction that can already reach it.
-                index = int(np.argmin([
-                    np.linalg.norm(error + matrix[:, component] * command)
-                    for component, command in enumerate(commands)
-                ]))
-                axis, amount = axes[index], float(commands[index])
-                if abs(amount) < 0.001:
-                    raise PanoramaCaptureError("visual_control_resolution_unverified")
+                axis, amount = self._correction_plan(axes, error, fine_control)
             pulse_amount, pulse_speed = amount, DEFAULT_CONTINUOUS_PULSE_SPEED
             direction_key = (axis, 1 if amount > 0 else -1)
             directional = self.direction_responses.get(direction_key)
@@ -1527,19 +1535,27 @@ class VisualNavigator:
                         raise _TargetDispatchChanged("target_projection_unavailable", frame_age)
                     shift = float(np.linalg.norm(np.asarray(new["error_pixels"]) - old["error_pixels"]))
                     if shift > maximum_error_pixels / 2:
-                        # A fresh target may require the exact same initial probe; recompute, never widen its pixel gate.
-                        if (final and missing and not self.response and not self.direction_responses
-                                and not self.stationary_durations and not near and not fine_control
-                                and predicted is None and probe_direction is not None
+                        # Recompute through the same planner; a changed target is safe only for an identical coarse command.
+                        if (final and not near and not fine_control and prediction is None
+                                and not self.stationary_durations
                                 and new["center_error_pixels"] > MAXIMUM_LIVE_CENTER_ERROR_PIXELS * 4
                                 and self.localizer.target_reference(updated) is not None):
                             updated_error = self._error(updated, located)
-                            updated_axes = [name for index, name in enumerate(("pan", "tilt"))
-                                            if self.scanner.capabilities.get("axes", {}).get(name) is True
-                                            and abs(new["error_pixels"][index]) > maximum_error_pixels / np.sqrt(2)]
-                            replanned = (self._probe_plan(updated, located, updated_axes, updated_error, False)
-                                         if updated_axes and np.linalg.norm(updated_error) >= .04 else None)
-                            if (replanned == (axis, pulse_amount, probe_direction, None)
+                            replanned = None
+                            if np.linalg.norm(updated_error) >= .04:
+                                updated_axes, updated_missing, _ = self._movement_axes(
+                                    new, updated_error, True, maximum_error_pixels)
+                                if not missing and not updated_missing:
+                                    replanned = self._correction_plan(updated_axes, updated_error, False)
+                                elif (missing and updated_missing and not self.response
+                                        and not self.direction_responses and predicted is None
+                                        and probe_direction is not None):
+                                    new_axis, new_amount, new_direction, new_approach = self._probe_plan(
+                                        updated, located, updated_missing, updated_error, False)
+                                    if new_direction == probe_direction and new_approach is None:
+                                        replanned = new_axis, new_amount
+                            if (replanned == (axis, pulse_amount)
+                                    and pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED
                                     and 0 <= time.monotonic() - planned_frame_received <= 1):
                                 self.scanner.checkpoint["navigation_step"]["dispatch_replan"] = {
                                     "target_ray": updated.tolist(), "target_shift_pixels": shift,

@@ -847,8 +847,10 @@ class _ExpiredQualifiedFrame(PanoramaCaptureError):
 
 
 class _TargetDispatchChanged(PanoramaCaptureError):
-    def __init__(self):
+    def __init__(self, reason: str, frame_age_seconds: float, target_shift_pixels: float | None = None):
         super().__init__("attention_target_changed_before_dispatch")
+        self.details = {"reason": reason, "frame_age_seconds": frame_age_seconds,
+                        "target_shift_pixels": target_shift_pixels}
 
 
 class VisualNavigator:
@@ -1134,6 +1136,8 @@ class VisualNavigator:
         except PanoramaCaptureError as error:
             self.trace[-1].update(state="rejected_before_transport" if isinstance(error, _TargetDispatchChanged) else "failed",
                 failure_code=error.code)
+            if isinstance(error, _TargetDispatchChanged):
+                self.trace[-1]["dispatch_rejection"] = error.details
             raise
         finally:
             if self.dispatch_guard is not None:
@@ -1510,14 +1514,17 @@ class VisualNavigator:
             planned_frame_received = measured_frame.get("received_monotonic", 0)
             def guard_target_dispatch():
                 updated = np.asarray(read_target())
-                if not 0 <= time.monotonic() - planned_frame_received <= 1:
-                    raise _TargetDispatchChanged()
+                frame_age = time.monotonic() - planned_frame_received
+                if not 0 <= frame_age <= 1:
+                    raise _TargetDispatchChanged("frame_expired", frame_age)
                 if not np.allclose(updated, ray, atol=1e-7, rtol=0):
                     old = localized_axis_measurement(ray, self.localizer.lens, located)
                     new = localized_axis_measurement(updated, self.localizer.lens, located)
-                    if (old is None or new is None or
-                            np.linalg.norm(np.asarray(new["error_pixels"]) - old["error_pixels"]) > maximum_error_pixels / 2):
-                        raise _TargetDispatchChanged()
+                    if old is None or new is None:
+                        raise _TargetDispatchChanged("target_projection_unavailable", frame_age)
+                    shift = float(np.linalg.norm(np.asarray(new["error_pixels"]) - old["error_pixels"]))
+                    if shift > maximum_error_pixels / 2:
+                        raise _TargetDispatchChanged("target_shifted", frame_age, shift)
             self.dispatch_guard = guard_target_dispatch if target_provider is not None else None
             pulse_started = time.monotonic()
             try:

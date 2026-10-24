@@ -381,8 +381,10 @@ def test_extended_navigation_pulse_uses_existing_fresh_image_precondition(durati
     assert calls == ([{'expected_frame': frame}] if duration > .6 else [{}])
 
 
-def test_target_guard_survives_persistence_wait_and_is_removed_after_rejection():
+@pytest.mark.parametrize("shifted", [False, True])
+def test_target_guard_survives_persistence_wait_and_is_removed_after_rejection(shifted):
     import time
+    from toposync_ext_cameras.panorama_navigation import _TargetDispatchChanged
     current = [True]
     dispatched = []
     camera = SimpleNamespace(dispatch_guard=None)
@@ -390,6 +392,8 @@ def test_target_guard_survives_persistence_wait_and_is_removed_after_rejection()
 
     def guard():
         if not current[0]:
+            if shifted:
+                raise _TargetDispatchChanged("target_shifted", .5, 9.)
             raise PanoramaCaptureError("attention_target_lost")
 
     async def persist():
@@ -405,9 +409,13 @@ def test_target_guard_survives_persistence_wait_and_is_removed_after_rejection()
         _persist=persist, _pulse=pulse, capabilities={"velocity_supported": True}, physical_state="stopped")
     navigator = VisualNavigator(scanner, None)
     navigator.dispatch_guard = guard
-    with pytest.raises(PanoramaCaptureError, match="attention_target_lost"):
+    with pytest.raises(PanoramaCaptureError, match="attention_target_changed_before_dispatch" if shifted else "attention_target_lost"):
         asyncio.run(navigator._pulse("pan", .1))
     assert dispatched == [] and camera.dispatch_guard is None
+    if shifted:
+        assert navigator.trace[-1]["dispatch_rejection"] == {
+            "reason": "target_shifted", "frame_age_seconds": .5, "target_shift_pixels": 9.}
+        assert navigator.trace[-1]["state"] == "rejected_before_transport"
 
 
 def test_navigation_consumes_confirmed_fresh_observation_without_renewing_ranked_frame():
@@ -3088,6 +3096,7 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
             self.command_samples = []
             self.dispatch_delayed = False
             self.measurement_seconds = 0.
+            self.dispatch_rejections = []
 
         async def locate(self):
             if elapsed[0] >= 8:
@@ -3110,7 +3119,11 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
             if trajectory.startswith("dispatch_") and not self.dispatch_delayed:
                 self.dispatch_delayed = True
                 elapsed[0] += {"dispatch_delay": .2, "dispatch_expired": 1.01, "dispatch_small_change": .02}[trajectory]
-            self.dispatch_guard()
+            try:
+                self.dispatch_guard()
+            except navigation._TargetDispatchChanged as error:
+                self.dispatch_rejections.append(error.details)
+                raise
             assert axis == "pan" and abs(amount) <= .6
             assert self.commands < self.maximum_commands
             planned = scanner.checkpoint["navigation_step"]["observed_target_ray"]
@@ -3177,6 +3190,15 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
     assert scanner.checkpoint["navigation_target_rebases"] >= 1
     if trajectory in ("dispatch_delay", "dispatch_expired"):
         assert scanner.checkpoint["navigation_target_replans"] == 1
+        rejection, = navigator.dispatch_rejections
+        if trajectory == "dispatch_expired":
+            assert rejection["reason"] == "frame_expired"
+            assert rejection["frame_age_seconds"] > 1
+            assert rejection["target_shift_pixels"] is None
+        else:
+            assert rejection["reason"] == "target_shifted"
+            assert 0 <= rejection["frame_age_seconds"] <= 1
+            assert rejection["target_shift_pixels"] > 6
         assert navigator.command_samples[0]["time"] > .28, "Reject the first delayed command before dispatch"
     if trajectory == "dispatch_small_change":
         assert scanner.checkpoint.get("navigation_target_replans", 0) == 0

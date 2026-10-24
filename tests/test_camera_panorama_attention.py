@@ -62,7 +62,7 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
     "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive", "metadata_combined",
     "prepared_reference", "dynamic_reference_ignored", "cancel_initial_localization",
-    "continuous_preparation", "continuous_preparation_cancelled"])
+    "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -139,6 +139,9 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
                 raise PanoramaCaptureError("capture_timeout")
             return frame
         scanner._reference_window.side_effect = observe_with_preparation
+    if reuse in {"cancel_cleanup", "failed_cleanup"}:
+        scanner._confirm_stop.side_effect = (module.asyncio.CancelledError() if reuse == "cancel_cleanup"
+            else PanoramaCaptureError("stop_unconfirmed"))
     if reuse == "cancel_initial_localization":
         service.localize_frame.side_effect = module.asyncio.CancelledError()
     service._localizers = {("artifact", "geometry"): SimpleNamespace(lens=arrival_lens)}
@@ -226,6 +229,18 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
         **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}))
+    if reuse in {"cancel_cleanup", "failed_cleanup"}:
+        with pytest.raises(module.asyncio.CancelledError if reuse == "cancel_cleanup" else PanoramaCaptureError):
+            await operation
+        trace = job["_attention_navigation_trace"]
+        assert trace["error_code"] == ("capture_cancelled" if reuse == "cancel_cleanup" else "stop_unconfirmed")
+        assert trace["diagnostics"] == scanner.checkpoint["diagnostics"]
+        assert len(job["_attention_navigation_history"]) == 8
+        assert job["stop_confirmed"] is False
+        scanner._stop.assert_awaited()
+        camera.close.assert_awaited_once()
+        assert not service._navigation_scanners
+        return
     if reuse == "continuous_preparation_cancelled":
         with pytest.raises(HTTPException) as failure:
             await operation

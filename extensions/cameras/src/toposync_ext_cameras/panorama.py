@@ -1864,22 +1864,6 @@ class PanoramaService:
                         scanner.checkpoint["last_observed_frame"] = {"unavailable": True}
                 if borrowed_control is None:
                     job["_navigation_checkpoint"] = scanner.checkpoint
-                else:
-                    job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
-                        for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations")}
-                    job["_attention_navigation_trace"].update(preparation=preparation,
-                        diagnostics=copy.deepcopy(scanner.checkpoint.get("diagnostics", {})),
-                        target_replans=scanner.checkpoint.get("navigation_target_replans", 0),
-                        target_rebases=scanner.checkpoint.get("navigation_target_rebases", 0),
-                        target_predictions=scanner.checkpoint.get("navigation_target_predictions", 0),
-                        preparation_elapsed_ms=preparation_elapsed_ms, timing_clock="process_monotonic",
-                        discovery_reused=discovery_reused,
-                        final_stop_reused=scanner.checkpoint.get("final_stop_reused") is True,
-                        finished_at=time.time(), error_code=failure_code, target=target)
-                    job["_attention_navigation_history"] = [
-                        *job.get("_attention_navigation_history", []),
-                        job["_attention_navigation_trace"],
-                    ][-8:]
                 if response_binding is not None and navigator is not None:
                     if (not failure_code and job.get("stop_confirmed")
                             and getattr(navigator, "commands", 0) > 0 and getattr(navigator, "response", None)):
@@ -1895,24 +1879,49 @@ class PanoramaService:
                 job["navigation"] = {"phase": "failed" if failure_code else "complete", "error_code": failure_code, "physical_state": "restored" if restored and job.get("stop_confirmed") else "stopped" if job.get("stop_confirmed") else scanner.physical_state,
                                      "can_return": bool((return_checkpoint.get("return") or return_checkpoint.get("visual_original_ray")) and return_checkpoint.get("initial_path"))}
                 self._save(job)
+            except asyncio.CancelledError:
+                failure_code = "capture_cancelled"
+                raise
+            except Exception as error:
+                failure_code = getattr(error, "code", "capture_failed")
+                raise
             finally:
                 try:
-                    if continuous_preparation is not None:
-                        if not continuous_preparation.done():
-                            continuous_preparation.cancel()
-                        await asyncio.shield(asyncio.gather(continuous_preparation, return_exceptions=True))
-                    await camera.close()
-                    if (borrowed_control is not None and job.get("stop_confirmed")
-                            and failure_code in {None, "capture_cancelled", "following_observation_expired"}
-                            and callable(getattr(camera, "reuse_discovery_from", None))):
-                        self._attention_metadata[job["camera_id"]] = {
-                            "binding": copy.deepcopy(metadata_binding), "camera": camera}
-                    if "arrival_delivery" in evidence:
-                        evidence["arrival_delivery"]["capture_closed_at"] = time.time()
+                    if borrowed_control is not None:
+                        job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
+                            for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations")}
+                        job["_attention_navigation_trace"].update(preparation=preparation,
+                            diagnostics=copy.deepcopy(scanner.checkpoint.get("diagnostics", {})),
+                            target_replans=scanner.checkpoint.get("navigation_target_replans", 0),
+                            target_rebases=scanner.checkpoint.get("navigation_target_rebases", 0),
+                            target_predictions=scanner.checkpoint.get("navigation_target_predictions", 0),
+                            preparation_elapsed_ms=preparation_elapsed_ms, timing_clock="process_monotonic",
+                            discovery_reused=discovery_reused,
+                            final_stop_reused=scanner.checkpoint.get("final_stop_reused") is True,
+                            finished_at=time.time(), error_code=failure_code, target=target)
+                        job["_attention_navigation_history"] = [
+                            *job.get("_attention_navigation_history", []),
+                            job["_attention_navigation_trace"],
+                        ][-8:]
+                    self._save(job)
                 finally:
-                    self._navigation_scanners.pop(job["id"], None)
-                    if self.busy.get(job["camera_id"]) == job["id"]:
-                        self.busy.pop(job["camera_id"], None)
+                    try:
+                        if continuous_preparation is not None:
+                            if not continuous_preparation.done():
+                                continuous_preparation.cancel()
+                            await asyncio.shield(asyncio.gather(continuous_preparation, return_exceptions=True))
+                        await camera.close()
+                        if (borrowed_control is not None and job.get("stop_confirmed")
+                                and failure_code in {None, "capture_cancelled", "following_observation_expired"}
+                                and callable(getattr(camera, "reuse_discovery_from", None))):
+                            self._attention_metadata[job["camera_id"]] = {
+                                "binding": copy.deepcopy(metadata_binding), "camera": camera}
+                        if "arrival_delivery" in evidence:
+                            evidence["arrival_delivery"]["capture_closed_at"] = time.time()
+                    finally:
+                        self._navigation_scanners.pop(job["id"], None)
+                        if self.busy.get(job["camera_id"]) == job["id"]:
+                            self.busy.pop(job["camera_id"], None)
         if cleanup_cancellation is not None:
             raise cleanup_cancellation
         if job.get("stop_confirmed") is not True:

@@ -2597,15 +2597,27 @@ def test_live_probe_escalation_is_bounded_and_requires_qualified_no_effect(stati
         assert navigator.pulses == (expected if stationary_verified else [.12])
 
 
-def test_moving_destination_replaces_initial_ray_before_visual_arrival():
+@pytest.mark.parametrize("initial_coverage", ["visible", "unreachable", "disconnected"])
+def test_moving_destination_replaces_initial_ray_before_visual_arrival(initial_coverage):
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    distant_reference = {"id": "distant", "rotation_matrix": np.eye(3).tolist()}
     scanner = SimpleNamespace(checkpoint={}, last_frame={"capture_evidence": {}})
-    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
-        target_reference=lambda _: reference)
     latest = np.array([1., .1, 0.]); latest /= np.linalg.norm(latest)
+    requested_references = []
+    def target_reference(ray):
+        requested_references.append(np.asarray(ray))
+        if np.allclose(ray, latest) or initial_coverage == "visible":
+            return reference
+        return None if initial_coverage == "unreachable" else distant_reference
+    localizer = SimpleNamespace(lens=lens, references=[reference, distant_reference], model={"overlap_links": []},
+        target_reference=target_reference)
+    initial = [1, 0, 0] if initial_coverage == "visible" else [-1, 0, 0]
+    current = [initial]
     class Navigator(VisualNavigator):
         async def locate(self):
+            await asyncio.sleep(0)
+            current[0] = latest.tolist()  # A newer observation arrived during localization.
             return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
         def _error(self, *_):
             return np.zeros(2)
@@ -2614,8 +2626,9 @@ def test_moving_destination_replaces_initial_ray_before_visual_arrival():
             return {"center_error_pixels": 0}
         async def _pulse(self, *args, **kwargs):
             pytest.fail("A visually centred updated target must not cause a pulse")
-    result = asyncio.run(Navigator(scanner, localizer).aim([1, 0, 0], target_provider=lambda: latest.tolist()))
+    result = asyncio.run(Navigator(scanner, localizer).aim(initial, target_provider=lambda: current[0]))
     assert result["verified"] and result["target_ray"] == pytest.approx(latest.tolist())
+    assert requested_references and all(np.allclose(ray, latest) for ray in requested_references)
 
 
 def test_live_control_measures_each_direction_and_compensates_observed_startup_delay():

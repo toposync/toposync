@@ -1316,7 +1316,18 @@ class VisualNavigator:
     ) -> dict[str, Any]:
         if type(maximum_error_pixels) not in (int, float) or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
             raise PanoramaCaptureError("invalid_arrival_limit")
+        motion = TargetMotion()
+
+        def read_target():
+            updated = target_provider()
+            if target_observation_provider is not None:
+                motion.observe(target_observation_provider(), updated, time.monotonic())
+            return updated
+
         located = await self.locate()
+        if target_provider is not None:
+            # Localization can outlast the destination; route only the latest qualified observation.
+            ray = np.asarray(read_target())
         reference = self.localizer.target_reference(ray)
         if reference is None:
             raise PanoramaCaptureError("visual_target_unreachable")
@@ -1342,14 +1353,7 @@ class VisualNavigator:
         expired_measurements = 0
         overshoot_recovered = False
         self.scanner.checkpoint["navigation_target_observations"] = observations
-        motion = TargetMotion()
         cycle_seconds = 0.
-
-        def read_target():
-            updated = target_provider()
-            if target_observation_provider is not None:
-                motion.observe(target_observation_provider(), updated, time.monotonic())
-            return updated
 
         def target_is_current() -> bool:
             if target_provider is None or np.allclose(read_target(), ray, atol=1e-7, rtol=0):

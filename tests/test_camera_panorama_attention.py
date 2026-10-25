@@ -87,7 +87,8 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         locate=AsyncMock(return_value=arrival_location),
         _target_measurement=AsyncMock(return_value={"center_error_pixels": .3}),
         response={"pan": np.array([.2, 0])}, response_rotations={"pan": np.eye(3)},
-        pulse_limits={"pan": .3}, direction_responses={}, stationary_durations={}, commands=1)
+        pulse_limits={"pan": .3}, direction_responses={}, stationary_durations={},
+        probe_durations={"tilt": .48}, commands=1)
     reuse_expected = reuse in {"current_arrival", "current_return"}
     tolerance = 3 if reuse in {"current_return", "return_needs_correction"} else 12
     if reuse_expected or reuse in {"expired_during_status", "frame_aged_during_status", "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status"}:
@@ -476,6 +477,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     elif reuse == "stop_unknown":
         service._attention_stopped_control.return_value = False
     navigator.response = {}
+    navigator.probe_durations = {}
     navigator.commands = 0
     operation = service._visual_operation_with_pinned_reference(None, job, {"ray": [0, 0, 1]},
         borrowed_control={"lease_id": "attention", "fence": 7})
@@ -486,10 +488,14 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     else:
         await operation
         assert bool(navigator.response) is (reuse not in {"revision_changed", "optics_changed", "expired"})
+        assert navigator.probe_durations == (
+            {} if reuse in {"revision_changed", "optics_changed", "expired"} else {"tilt": .48})
         if reuse == "same" or reuse_expected:
             assert service._attention_responses["camera"]["observed_monotonic"] == cached_at
             navigator.response["pan"][0] = 99
             assert service._attention_responses["camera"]["response"]["response"]["pan"][0] == .2
+            navigator.probe_durations["tilt"] = .12
+            assert service._attention_responses["camera"]["response"]["probe_durations"] == {"tilt": .48}
 
 
 @pytest.mark.parametrize("change", ["job_id", "revision", "source_identity", "composition_digest", "artifact_id", "artifact_revision", "geometry_digest", "arrival_verified", "return_verified", "integer_boolean"])

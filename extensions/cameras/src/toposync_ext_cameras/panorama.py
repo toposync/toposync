@@ -1622,7 +1622,7 @@ class PanoramaService:
         cleanup_cancellation = None
         navigator = None
         response_fields = ("response", "response_rotations", "pulse_limits",
-                           "direction_responses", "stationary_durations")
+                           "direction_responses", "stationary_durations", "probe_durations")
         response_binding = None
         response_observed = None
         continuous_preparation = None

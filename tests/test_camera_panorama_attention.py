@@ -571,10 +571,19 @@ async def test_borrowed_camera_never_acquires_renews_or_releases_attention_lease
     assert all(name not in {"cameras.control.acquire", "cameras.control.renew", "cameras.control.release"} for name, _ in services.calls)
 
 
+@pytest.mark.parametrize("changes", [{"axis": "zoom"}, {"direction": 0}, {"direction": True},
+    {"speed": True}, {"speed": .1}, {"speed": .201}, {"speed": float("nan")}])
+def test_velocity_probe_request_rejects_unsupported_axis_direction_and_speed(changes):
+    with pytest.raises(ValueError):
+        QualifyAttention(revision=2, home={"x": 0, "z": 0}, target={"x": 1, "z": 0},
+            velocity_probe={"axis": "pan", "direction": -1, "speed": .2, **changes})
+
+
 @pytest.mark.anyio
+@pytest.mark.parametrize("probe_requested", [False, True, "missing", "mismatch", "unqualified"])
 @pytest.mark.parametrize("failure", [None, "arrival", "return", "stop", "motion", "reference", "cancel",
     "inactive", "same_target", "pending_return", "pending_visual_return"])
-async def test_supervised_round_trip_is_the_only_qualification_writer(failure):
+async def test_supervised_round_trip_is_the_only_qualification_writer(failure, probe_requested):
     job = bound_job()
     job["solution"] = {"type": "panorama_ray_plane_v1"}
     service = object.__new__(PanoramaService)
@@ -601,14 +610,24 @@ async def test_supervised_round_trip_is_the_only_qualification_writer(failure):
             "return" if failure == "pending_return" else "visual_original_ray": "preserve"}
     if failure == "reference":
         service._current.side_effect = [None, HTTPException(409, "reference changed")]
-    service._visual_operation_with_pinned_reference = AsyncMock(return_value=(
-        "image", {"verified": True, "stages": stages}))
+    probe = {"axis": "pan", "direction": -1, "speed": .2}
+    evidence = {"verified": True, "stages": stages}
+    if probe_requested:
+        evidence["velocity_probe"] = {**probe, "response_qualified": True}
+    if probe_requested == "missing":
+        evidence.pop("velocity_probe")
+    elif probe_requested == "mismatch":
+        evidence["velocity_probe"]["speed"] = .15
+    elif probe_requested == "unqualified":
+        evidence["velocity_probe"]["response_qualified"] = False
+    service._visual_operation_with_pinned_reference = AsyncMock(return_value=("image", evidence))
     if failure == "cancel":
         import asyncio
         service._visual_operation_with_pinned_reference.side_effect = asyncio.CancelledError()
     body = QualifyAttention(revision=2, home={"x": 0, "z": 0},
-        target={"x": 0 if failure == "same_target" else 1, "z": 0})
-    if failure:
+        target={"x": 0 if failure == "same_target" else 1, "z": 0},
+        **({"velocity_probe": probe} if probe_requested else {}))
+    if failure or probe_requested in {"missing", "mismatch", "unqualified"}:
         import asyncio
         with pytest.raises((HTTPException, asyncio.CancelledError)):
             await service.qualify_attention(None, "camera", "job", body)
@@ -622,7 +641,10 @@ async def test_supervised_round_trip_is_the_only_qualification_writer(failure):
         assert result["qualified"] and service._attention_qualified(job)
         assert result["trial"]["stages"] == stages
         assert service._visual_operation_with_pinned_reference.await_args.kwargs == {
-            "qualification_home": {"ray": [0., 0., 1]}}
+            "qualification_home": {"ray": [0., 0., 1]},
+            **({"velocity_probe": probe} if probe_requested else {})}
+        if probe_requested:
+            assert result["trial"]["velocity_probe"] == evidence["velocity_probe"]
 
 
 def subject_destination(job, *, published_at=1000., sequence=1, anchor=None, center=None):
@@ -952,7 +974,8 @@ async def test_following_subject_is_rechecked_before_commands_and_arrival(monkey
 
 @pytest.mark.anyio
 @pytest.mark.parametrize('outcome', ['native', 'visual', 'arrival_failure', 'restore_failure', 'cleanup_failure', 'visual_mismatch', 'cancel',
-    'prepared_reference', 'reference_binding_failed', 'reference_arrival_failed', 'reference_not_selected'])
+    'prepared_reference', 'reference_binding_failed', 'reference_arrival_failed', 'reference_not_selected',
+    'velocity', 'velocity_failure'])
 async def test_qualification_preserves_starting_view_until_verified_recovery(monkeypatch, tmp_path, outcome):
     import asyncio
     import copy
@@ -1009,6 +1032,10 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
             'measurement': {'center_error_pixels': 1}}
 
     navigator.aim = AsyncMock(side_effect=aim)
+    probe = {'axis': 'pan', 'direction': -1, 'speed': .2}
+    navigator.qualify_velocity = AsyncMock(return_value={**probe, 'response_qualified': True})
+    if outcome == 'velocity_failure':
+        navigator.qualify_velocity.side_effect = PanoramaCaptureError('visual_response_unavailable')
     reference = {'destination': {'kind': 'preset', 'token': 'panorama-reference'}}
     reference_outcomes = {'prepared_reference', 'reference_binding_failed', 'reference_arrival_failed', 'reference_not_selected'}
     navigator.locate = AsyncMock(return_value={'rotation_matrix': np.eye(3).tolist()})
@@ -1042,13 +1069,18 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
     service._image_write = lambda *args: None
     service._image_url = lambda job, name: name
     operation = service._visual_operation_with_pinned_reference(None, job,
-        {'ray': [0, 0, 1]}, qualification_home={'ray': [0, 1, 0]})
-    if outcome in {'native', 'visual', 'prepared_reference', 'reference_not_selected'}:
+        {'ray': [0, 0, 1]}, qualification_home={'ray': [0, 1, 0]},
+        **({'velocity_probe': probe} if outcome.startswith('velocity') else {}))
+    if outcome in {'native', 'visual', 'prepared_reference', 'reference_not_selected', 'velocity'}:
         _, evidence = await operation
         assert [stage['stage'] for stage in evidence['stages']] == ['home', 'arrival', 'return']
         assert job['navigation']['physical_state'] == 'restored'
         assert not job['navigation']['can_return']
         assert not scanner.saved_return and 'initial_path' not in scanner.checkpoint
+        if outcome == 'velocity':
+            navigator.qualify_velocity.assert_awaited_once_with(**probe)
+            assert evidence['velocity_probe']['response_qualified'] is True
+            assert job['_attention_trial']['velocity_probe'] == evidence['velocity_probe']
         if outcome == 'visual':
             assert destinations[-1] == [1, 0, 0]
             camera.remove_return.assert_not_awaited()

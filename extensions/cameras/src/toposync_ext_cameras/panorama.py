@@ -205,9 +205,22 @@ class Aim(_Input):
     world: World
 
 
+class VelocityProbe(_Input):
+    axis: Literal["pan", "tilt"]
+    direction: int = Field(strict=True, ge=-1, le=1)
+    speed: float = Field(strict=True, gt=.1, le=.2)
+
+    @model_validator(mode="after")
+    def signed_direction(self):
+        if self.direction == 0:
+            raise ValueError("A probe direction must be -1 or 1")
+        return self
+
+
 class QualifyAttention(Revision):
     home: World
     target: World
+    velocity_probe: VelocityProbe | None = None
 
 
 class Restore(_Input):
@@ -1562,6 +1575,7 @@ class PanoramaService:
         self, request: Request, job: dict[str, Any], target: dict[str, Any] | None,
         *, borrowed_control: dict | None = None, maximum_error_pixels: float = 12,
         qualification_home: dict[str, Any] | None = None,
+        velocity_probe: dict[str, Any] | None = None,
         target_provider: Callable[[], list[float]] | None = None,
         target_observation_provider: Callable[[], dict | None] | None = None,
     ) -> tuple[str, dict[str, Any]]:
@@ -1735,6 +1749,7 @@ class PanoramaService:
                         prepared("response_reused")
                 if qualification_home is not None:
                     stages = []
+                    velocity_evidence = None
                     for label, destination, tolerance in (
                         ("home", qualification_home, MAXIMUM_LIVE_CENTER_ERROR_PIXELS),
                         ("arrival", target, MAXIMUM_LIVE_CENTER_ERROR_PIXELS),
@@ -1752,8 +1767,16 @@ class PanoramaService:
                                        "image_url": self._image_url(job, stage_filename),
                                        "elapsed_seconds": time.monotonic() - started})
                         job["_attention_trial"] = {"status": "running", "stages": stages}
+                        if velocity_evidence is not None:
+                            job["_attention_trial"]["velocity_probe"] = velocity_evidence
                         self._save(job)
+                        if label == "arrival" and velocity_probe is not None:
+                            velocity_evidence = await navigator.qualify_velocity(**velocity_probe)
+                            job["_attention_trial"]["velocity_probe"] = velocity_evidence
+                            self._save(job)
                     evidence = {"verified": True, "kind": "attention_round_trip_verified", "stages": stages}
+                    if velocity_evidence is not None:
+                        evidence["velocity_probe"] = velocity_evidence
                     # Qualification must also restore its starting view; its home may differ.
                     if scanner.saved_return:
                         await scanner._restore(maximum_error_pixels=MAXIMUM_LIVE_CENTER_ERROR_PIXELS)
@@ -2463,7 +2486,8 @@ class PanoramaService:
             self._save(job)
             try:
                 image_url, evidence = await self._visual_operation_with_pinned_reference(
-                    request, job, target, qualification_home=home)
+                    request, job, target, qualification_home=home,
+                    **({"velocity_probe": body.velocity_probe.model_dump()} if body.velocity_probe is not None else {}))
                 stages = evidence.get("stages", [])
                 if (evidence.get("verified") is not True or job.get("stop_confirmed") is not True
                         or [stage.get("stage") for stage in stages] != ["home", "arrival", "return"]):
@@ -2479,6 +2503,13 @@ class PanoramaService:
                         or not 0 <= commands[0] < commands[1] < commands[2]):
                     raise _error("attention_motion_unconfirmed", "The trial must observe outward and return movements")
                 await self._current(job, request)
+                velocity_evidence = evidence.get("velocity_probe")
+                if body.velocity_probe is not None and (
+                    not isinstance(velocity_evidence, dict)
+                    or velocity_evidence.get("response_qualified") is not True
+                    or any(velocity_evidence.get(key) != value for key, value in body.velocity_probe.model_dump().items())
+                ):
+                    raise _error("visual_response_unavailable", "The requested velocity response was not verified")
                 binding = job["source_panorama"]
                 job["_attention_qualification"] = {
                     "job_id": job["id"], "revision": job["revision"],
@@ -2489,6 +2520,8 @@ class PanoramaService:
                 }
                 job["_attention_trial"] = {"status": "verified", "stages": stages,
                     "image_url": image_url, "verified_at": time.time()}
+                if velocity_evidence is not None:
+                    job["_attention_trial"]["velocity_probe"] = velocity_evidence
                 self._save(job)
                 return {"qualified": self._attention_qualified(job), "trial": job["_attention_trial"]}
             except BaseException:

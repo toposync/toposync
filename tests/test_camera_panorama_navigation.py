@@ -418,6 +418,32 @@ def test_target_guard_survives_persistence_wait_and_is_removed_after_rejection(s
         assert navigator.trace[-1]["state"] == "rejected_before_transport"
 
 
+def test_cancelled_navigation_pulse_records_interruption_without_claiming_transport_outcome():
+    import time
+    previous_guard = lambda: None
+    camera = SimpleNamespace(dispatch_guard=previous_guard)
+
+    async def persist():
+        pass
+
+    async def pulse(*args, **options):
+        raise asyncio.CancelledError()
+
+    scanner = SimpleNamespace(camera=camera, last_frame={"received_monotonic": time.monotonic()},
+        checkpoint={}, _check=lambda: None, _persist=persist, _pulse=pulse,
+        capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, None)
+    navigator.dispatch_guard = lambda: None
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(navigator._pulse("pan", .12))
+    assert camera.dispatch_guard is previous_guard
+    command, = scanner.checkpoint["navigation_commands"]
+    assert command["state"] == "interrupted"
+    assert command["failure_code"] == "capture_cancelled"
+    assert "command_outcome" not in command
+    assert "stationary_verified" not in command
+
+
 def test_navigation_consumes_confirmed_fresh_observation_without_renewing_ranked_frame():
     import time
     ranked = {'received_monotonic': time.monotonic(), 'sequence': 1}

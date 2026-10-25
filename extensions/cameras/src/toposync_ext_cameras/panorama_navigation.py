@@ -1133,6 +1133,9 @@ class VisualNavigator:
                 result = await self.scanner._absolute(target, allow_stationary=True)
             else:
                 raise PanoramaCaptureError("visual_control_unavailable")
+        except asyncio.CancelledError:
+            self.trace[-1].update(state="interrupted", failure_code="capture_cancelled")
+            raise
         except PanoramaCaptureError as error:
             self.trace[-1].update(state="rejected_before_transport" if isinstance(error, _TargetDispatchChanged) else "failed",
                 failure_code=error.code)

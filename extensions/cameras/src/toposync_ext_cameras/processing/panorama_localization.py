@@ -473,12 +473,17 @@ class PanoramaLocalizer:
 
     def locate_diagnostic(self, image: np.ndarray, evidence: dict[str, Any]) -> dict[str, Any]:
         """Private navigation replay; no images or feature arrays enter the API."""
+        started = time.monotonic()
         with self._lock:
+            acquired = time.monotonic()
             diagnostics: dict[str, Any] = {}
             result = self._locate_frame(image, evidence, None, diagnostics)
             return {**result, "diagnostics": {"model_sha256": self.model_digest,
                 "references": {reference["id"]: reference["sha256"] for reference in self.references},
-                **diagnostics}}
+                **diagnostics, "call_timing": {
+                    "lock_wait_seconds": acquired - started,
+                    "compute_seconds": time.monotonic() - acquired,
+                }}}
 
     def _locate_frame(
         self, image: np.ndarray, evidence: dict[str, Any], image_geometry: dict | None,

@@ -300,8 +300,42 @@ def test_diagnostics_reuse_the_original_decision_and_evidence(tmp_path, monkeypa
         diagnostic["diagnostics"]["candidates"][0]["current"][0][0] = -999
         diagnostic["rotation_matrix"][0][0] = -999
     diagnostic["capture_evidence"]["sequence"] = -999
-    assert localizer.locate_diagnostic(image, evidence) == original
+    repeated = localizer.locate_diagnostic(image, evidence)
+    for record in (original, repeated):
+        timing = record["diagnostics"].pop("call_timing")
+        assert timing["lock_wait_seconds"] >= 0 and timing["compute_seconds"] >= 0
+    assert repeated == original
     assert localizer.locate(image, evidence) == expected
+
+
+def test_diagnostic_timing_separates_lock_wait_from_computation(monkeypatch):
+    from toposync_ext_cameras.processing import panorama_localization
+
+    clock = [10.]
+    monkeypatch.setattr(panorama_localization.time, "monotonic", lambda: clock[0])
+
+    class Lock:
+        def __enter__(self):
+            clock[0] += .4
+
+        def __exit__(self, *args):
+            pass
+
+    localizer = PanoramaLocalizer.__new__(PanoramaLocalizer)
+    localizer._lock = Lock()
+    localizer.model_digest = "model"
+    localizer.references = []
+
+    def locate(*args):
+        clock[0] += .3
+        return {"status": "unlocalized", "reason": "insufficient_support"}
+
+    localizer._locate_frame = locate
+    result = localizer.locate_diagnostic(np.zeros((32, 32), np.uint8), {})
+    assert result["status"] == "unlocalized"
+    assert result["diagnostics"]["call_timing"] == pytest.approx({
+        "lock_wait_seconds": .4, "compute_seconds": .3,
+    })
 
 
 @pytest.mark.parametrize("change", ["sequence", "generation", "capture_instance", "bytes", "geometry", "shape"])

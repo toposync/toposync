@@ -968,6 +968,7 @@ class VisualNavigator:
                             final_frame_age_seconds=time.monotonic() - frame.get("received_monotonic", 0),
                             status=result.get("status"), reason=result.get("reason"),
                             photometry=result.get("diagnostics", {}).get("photometry"),
+                            localizer_timing=result.get("diagnostics", {}).get("call_timing"),
                             observation=observation)
         self.localization_replay.observe(frame, result, elapsed_seconds=time.monotonic() - started)
         result = {key: value for key, value in result.items() if key != "diagnostics"}

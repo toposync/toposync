@@ -622,7 +622,7 @@ def test_batched_tracking_preserves_uneven_reference_pairs_and_ambiguity(monkeyp
 
 
 @pytest.mark.parametrize("cross_capture", [False, True])
-@pytest.mark.parametrize("change", ["movement", "transient", "epoch", "generation", "blank", "zoom", "ambiguous", "expired", "crop", "source_geometry"])
+@pytest.mark.parametrize("change", ["movement", "out_of_order", "repeated_sequence", "transient", "epoch", "generation", "blank", "zoom", "ambiguous", "expired", "crop", "source_geometry"])
 def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp_path, monkeypatch, change, cross_capture):
     from collections import OrderedDict
     import time
@@ -644,11 +644,13 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
     localizer._matching_retry_after = float("inf")  # No recognition or downloads in this unit test.
     key = ("capture", 1, np.eye(3).tobytes(), image.shape)
     anchor = {"gray": image.copy(), "pairs": pairs, "seen": time.monotonic(), "sequence": 1}
+    if change in {"out_of_order", "repeated_sequence"}:
+        anchor["sequence"] = 3 if change == "out_of_order" else 2
     if change == "expired":
         anchor["seen"] -= 6
     localizer._anchors = OrderedDict([(key, anchor)])
     def recognize(*args, **kwargs):
-        assert change not in {"movement", "ambiguous"}, "Measure eligible anchors before costly recognition"
+        assert change not in {"movement", "out_of_order", "repeated_sequence", "ambiguous"}, "Measure eligible anchors before costly recognition"
         if change == "transient":
             assert cross_capture and not np.any(args[0]), "Only lost cross-capture support needs global recovery"
         return {"status": "unlocalized", "reason": "panorama_visual_localization_failed"}
@@ -661,6 +663,8 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         current = cv2.warpAffine(image, np.float32([[1, 0, 2], [0, 1, 3]]), (960, 540))
     evidence = {"capture_instance": "new" if change == "epoch" or cross_capture else "capture",
                 "generation": 1, "sequence": 2}
+    if change in {"out_of_order", "repeated_sequence"}:
+        evidence["published_at"] = 10.0
     if change == "generation":
         evidence = {**evidence, "capture_instance": "capture", "generation": 2}
     geometry = None
@@ -675,6 +679,7 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
     options = {"reference_candidates": cross_capture and change != "epoch"}
     diagnostics = {}
     last_qualified = anchor["seen"]
+    last_sequence = anchor["sequence"]
     result = localizer._locate_frame(current, evidence, geometry, diagnostics, **options)
     if change == "transient":
         assert result["status"] == "unlocalized"
@@ -684,7 +689,7 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         evidence = {**evidence, "sequence": 3}
         current = cv2.warpAffine(image, np.float32([[1, 0, 2], [0, 1, 3]]), (960, 540))
         result = localizer._locate_frame(current, evidence, None, diagnostics, **options)
-    if change in {"movement", "transient"}:
+    if change in {"movement", "out_of_order", "repeated_sequence", "transient"}:
         assert result["status"] == "localized"
         assert diagnostics["photometry"] == ("cross_capture_correspondences" if cross_capture else "tracked_correspondences")
         assert result["capture_evidence"] == evidence
@@ -696,8 +701,11 @@ def test_tracked_registration_measures_new_pixels_and_retains_original_gates(tmp
         assert np.array_equal(anchor["gray"], image)
         assert np.array_equal(anchor["pairs"][0][1], points.astype(np.float32))
         if cross_capture:
-            assert anchor["sequence"] == 1
+            assert anchor["sequence"] == last_sequence
             assert list(localizer._anchors) == [key]  # No identity relabel or anchor chain.
+        elif change in {"out_of_order", "repeated_sequence"}:
+            assert anchor["seen"] == last_qualified
+            assert anchor["sequence"] == last_sequence
     else:
         assert result["status"] == "unlocalized"
         if change == "ambiguous":

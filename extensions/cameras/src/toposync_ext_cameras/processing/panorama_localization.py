@@ -709,7 +709,7 @@ class PanoramaLocalizer:
                 return None
             key, anchor = candidate
         pairs = []
-        if anchor is not None and (other_capture or identity[2] > anchor["sequence"]):
+        if anchor is not None:
             # All references share the same two rasters. Build their optical
             # flow pyramids once per attempt, then keep each reference's pairs
             # separate for fitting and ambiguity checks.
@@ -733,11 +733,14 @@ class PanoramaLocalizer:
                         or result.get("reason") == "panorama_visual_localization_ambiguous"):
                     break
             if result["status"] == "localized":
-                anchor["seen"] = started
-                if not other_capture:
-                    anchor["sequence"] = identity[2]
-                anchor["neighbors"] = self._recognition_neighbors(result)
-                self._anchors.move_to_end(key)
+                # Shared consumers can finish out of order. Fit each raster independently,
+                # but an older/repeated sequence must not renew the anchor's lifetime.
+                if other_capture or identity[2] > anchor["sequence"]:
+                    anchor["seen"] = started
+                    if not other_capture:
+                        anchor["sequence"] = identity[2]
+                    anchor["neighbors"] = self._recognition_neighbors(result)
+                    self._anchors.move_to_end(key)
                 return result
             if result.get("reason") == "panorama_visual_localization_ambiguous":
                 self._anchors.pop(key, None)

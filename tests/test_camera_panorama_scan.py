@@ -10817,3 +10817,31 @@ def test_stop_reference_diagnostics_preserve_bounded_motion_samples_without_imag
     assert all(item["speed_px_s"] is None and "private" not in item for item in samples)
     assert diagnostic.replay == []
     assert diagnostic.telemetry() is None
+
+
+@pytest.mark.parametrize("observer_fails", [False, True])
+def test_motion_frame_offer_does_not_replace_stop_or_stability(tmp_path, monkeypatch, observer_fails):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    observations = []
+
+    async def scenario():
+        scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+        def offer(frame):
+            observations.append((frame["sequence"], "stop" in _event_names(camera)))
+            assert scanner.physical_state != "stopped"
+            if observer_fails:
+                raise RuntimeError("optional observer failed")
+        result = await scanner._move(
+            lambda: camera.move_velocity(pan=.1, timeout_s=.6),
+            duration=.6, allow_stationary=True, frame_observer=offer,
+        )
+        assert scanner.physical_state == "stopped"
+        return result
+
+    result = asyncio.run(scenario())
+    assert observations and any(not stopped for _, stopped in observations)
+    assert "stop" in _event_names(camera) and result["stable"] is True
+    diagnostic = json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1]
+    assert bool(diagnostic.get("frame_observer_failed")) == observer_fails
+    assert diagnostic["stop_command_accepted"] is True

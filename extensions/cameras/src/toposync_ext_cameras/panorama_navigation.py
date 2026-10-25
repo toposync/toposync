@@ -31,6 +31,7 @@ from .processing.panorama_mapping import _rotation_basis, image_pixel_to_ray, ra
 from .panorama_target_motion import TargetMotion
 from .processing.panorama_localization import (
     ANALYSIS_WIDTH,
+    frame_identity,
     MAXIMUM_ERROR_PIXELS as MAXIMUM_LOCALIZATION_ERROR_PIXELS,
 )
 from .processing.panorama_localization_replay import LocalizationReplay
@@ -276,7 +277,7 @@ def localized_axis_measurement(
 
 
 def arrival_frame_geometry(frame: dict, located: dict, lens: dict, ray: Any) -> dict | None:
-    """Snapshot only qualified geometry bound to this stopped arrival image."""
+    """Snapshot qualified image geometry; the caller supplies Stop/arrival proof."""
     capture = frame.get("capture_evidence") or {}
     image = frame.get("image")
     if (not isinstance(capture.get("capture_instance"), str) or not capture["capture_instance"]
@@ -853,6 +854,105 @@ class _TargetDispatchChanged(PanoramaCaptureError):
                         "target_shift_pixels": target_shift_pixels}
 
 
+
+class MotionFrameObservations:
+    """Latest-only visual pose preparation; never a Stop or arrival certificate.
+
+    The scanner's synchronous offer does no localization and cannot hold up
+    its Stop path. One worker and one replaceable pending frame bound memory
+    and work. Close drains the worker before its localizer can be released.
+    """
+
+    def __init__(self, localizer: Any, records: list[dict], command: int):
+        self.localizer, self.records, self.command = localizer, records, command
+        self.pending = None
+        self.worker = None
+        self.closed = False
+        self.identity = None
+        self.last_sequence = -1
+        self.last_offered = -float("inf")
+
+    def offer(self, frame: dict) -> None:
+        if self.closed:
+            return
+        identity = frame_identity(frame.get("capture_evidence"))
+        now = time.monotonic()
+        received = frame.get("received_monotonic")
+        if (identity is None or type(received) not in (int, float)
+                or not 0 <= now - received <= 1):
+            return
+        if self.identity is not None and identity[:2] != self.identity:
+            # A decoder change invalidates this movement window. The caller
+            # must qualify the next operation instead of joining two epochs.
+            self.closed = True
+            self.pending = None
+            return
+        self.identity = identity[:2]
+        if identity[2] <= self.last_sequence or now - self.last_offered < .1:
+            return
+        self.last_sequence, self.last_offered = identity[2], now
+        self.pending = {**frame, "capture_evidence": deepcopy(frame["capture_evidence"])}
+        if frame.get("image_geometry") is not None:
+            self.pending["image_geometry"] = deepcopy(frame["image_geometry"])
+        if self.worker is None or self.worker.done():
+            self.worker = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        while self.pending is not None and not self.closed:
+            frame, self.pending = self.pending, None
+            started = time.monotonic()
+            if not 0 <= started - frame["received_monotonic"] <= 1:
+                continue
+            record = {"kind": "visual_motion_observation", "command": self.command,
+                "arrival_verified": False, "capture_evidence": frame["capture_evidence"],
+                "frame_received_monotonic": frame["received_monotonic"],
+                "physical_capture_verified": False, "timing_basis": "local_observation",
+                "localization_model_sha256": getattr(self.localizer, "model_digest", None)}
+            try:
+                located = await asyncio.to_thread(
+                    self.localizer.locate,
+                    frame["image"], frame["capture_evidence"],
+                    **({"image_geometry": frame["image_geometry"]} if frame.get("image_geometry") else {}),
+                )
+                record.update(status=located.get("status"), reason=located.get("reason"))
+                if located.get("status") == "localized" and located.get("capture_evidence") != frame["capture_evidence"]:
+                    record.update(status="unlocalized", reason="panorama_frame_binding_mismatch")
+                elif located.get("status") == "localized":
+                    ray = _rotation_basis(located["rotation_matrix"])[:, 2]
+                    geometry = arrival_frame_geometry(frame, located, self.localizer.lens, ray)
+                    if geometry is not None and not self.closed:
+                        record["frame_geometry"] = geometry
+                        if frame.get("image_geometry") is not None:
+                            record["image_geometry"] = deepcopy(frame["image_geometry"])
+                    else:
+                        reason = ("panorama_frame_not_recent"
+                            if not 0 <= time.monotonic() - frame["received_monotonic"] <= 1
+                            else "motion_frame_geometry_unqualified")
+                        record.update(status="unlocalized", reason=reason)
+            except Exception:
+                # Optional preparation must not alter physical cleanup or leak
+                # arbitrary exception text into persisted diagnostics.
+                record.update(status="unlocalized", reason="motion_observation_failed")
+            record["elapsed_seconds"] = time.monotonic() - started
+            if not self.closed:
+                self.records.append(record)
+                del self.records[:-32]
+
+    async def close(self) -> None:
+        self.closed = True
+        self.pending = None
+        if self.worker is not None:
+            cancelled = False
+            while not self.worker.done():
+                try:
+                    await asyncio.shield(self.worker)
+                except asyncio.CancelledError:
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
+            self.worker.result()
+
+
 class VisualNavigator:
     def __init__(self, scanner: _Scan, localizer: Any, *, maximum_commands: int = MAXIMUM_NAVIGATION_COMMANDS,
                  stable_frame_observer: Callable[[dict], None] | None = None):
@@ -1115,6 +1215,10 @@ class VisualNavigator:
         })
         self.scanner.checkpoint["navigation_commands"] = self.trace
         await self.scanner._persist()
+        motion_observations = None
+        if self.dispatch_guard is not None and self.localizer is not None:
+            motion_observations = MotionFrameObservations(self.localizer,
+                self.scanner.checkpoint.setdefault("navigation_motion_observations", []), self.commands)
         previous_guard = None
         if self.dispatch_guard is not None:
             previous_guard = self.scanner.camera.dispatch_guard
@@ -1125,6 +1229,8 @@ class VisualNavigator:
             capabilities = self.scanner.capabilities
             if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
                 options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
+                if motion_observations is not None:
+                    options["frame_observer"] = motion_observations.offer
                 transition_estimator = getattr(self.localizer, "calibrated_transition", None)
                 if callable(transition_estimator):
                     options["transition_estimator"] = transition_estimator
@@ -1159,6 +1265,8 @@ class VisualNavigator:
         finally:
             if self.dispatch_guard is not None:
                 self.scanner.camera.dispatch_guard = previous_guard
+            if motion_observations is not None:
+                await motion_observations.close()
         self.scanner.last_frame = result.get("observation_frame", result["frame"])
         self.scanner.last_pose = result.get("pose", {})
         if (result.get("stable") is True and self.scanner.physical_state == "stopped"

@@ -1,5 +1,21 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Observação visual durante aproximação móvel — 23/10/2026
+
+A navegação de atenção passa a preparar orientações visuais durante seus pulsos,
+reutilizando os quadros do scanner e o localizador da panorâmica. O processamento
+mantém um trabalhador e um quadro pendente substituível; o histórico limita-se
+às 32 observações mais recentes. Capturas vencidas, divergentes ou de outro
+decodificador não produzem geometria utilizável. O encerramento aguarda o
+trabalhador após a limpeza física, inclusive sob cancelamento.
+
+`navigation_motion_observations` distingue esse progresso visual da chegada:
+`arrival_verified=false` permanece explícito. O observador não envia comandos,
+não substitui Stop nem altera a confirmação final. Atualização contínua de
+velocidade e ganho físico de cadência ainda dependem da integração do controle
+e de ensaio real; essa preparação de observações não certifica seguimento.
+
+
 ## Continuidade da reprodução MSE — 22/10/2026
 
 O serviço MSE preserva a porta alternativa já vinculada enquanto a porta

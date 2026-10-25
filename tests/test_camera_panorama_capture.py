@@ -1326,6 +1326,50 @@ def test_destination_capacity_preserves_original_and_creates_each_role_once(maxi
     asyncio.run(run())
 
 
+def test_new_return_session_does_not_reuse_removed_preset_operation():
+    async def run():
+        first, _, _, services, _ = environment()
+        original_call = services.call
+        operations = {}
+
+        async def call(name, **kwargs):
+            if name == "cameras.ptz.set_preset":
+                key = kwargs["idempotency_key"]
+                if key in operations:
+                    from fastapi import HTTPException
+                    if operations[key] not in services.presets:
+                        raise HTTPException(409, "Preset created by this Idempotency-Key was removed")
+                    return operations[key]
+                result = await original_call(name, **kwargs)
+                operations[key] = result
+                return result
+            return await original_call(name, **kwargs)
+
+        services.call = call
+        second, _, _, _, _ = environment()
+        second.services = services
+        intents = []
+
+        async def persist(value):
+            intents.append(value)
+
+        for camera in (first, second):
+            await camera.acquire()
+            camera._capabilities["absolute_supported"] = False
+            try:
+                saved = await camera.save_return(before_create=persist)
+                assert await camera.save_return(before_create=persist) == saved
+                await camera.remove_return(saved)
+            finally:
+                await camera.close()
+        assert len(operations) == 2
+        assert len(intents) == 2
+        assert {item["idempotency_key"] for item in intents} == set(operations)
+        assert services.presets == []
+
+    asyncio.run(run())
+
+
 def test_work_does_not_consume_the_only_preset_slot_before_original():
     async def run():
         camera, _, _, services, _ = environment()

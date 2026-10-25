@@ -932,6 +932,8 @@ class PanoramaCamera:
                 "preset_name": name, "owner_id": self.owner_id,
                 "baseline_tokens": [str(item["token"]) for item in inventory],
                 "zoom": pose["zoom"],
+                # A later session may recreate a preset already removed by this job.
+                "idempotency_key": f"panorama-return:{self.owner_id}:{role}:{uuid.uuid4().hex}",
             }
             if optical_state is not None:
                 pending["optical_state"] = optical_state
@@ -944,7 +946,7 @@ class PanoramaCamera:
                 result = await self.services.call(
                     "cameras.ptz.set_preset", camera_id=self.camera_id,
                     camera_source_id=self.source_id, preset_name=name,
-                    idempotency_key=f"panorama-return:{self.owner_id}:{role}",
+                    idempotency_key=pending["idempotency_key"],
                 )
                 token = str(result.get("token") or "") if isinstance(result, dict) else ""
                 if token in pending["baseline_tokens"]:

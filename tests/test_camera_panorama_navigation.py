@@ -2661,7 +2661,9 @@ def test_live_control_measures_each_direction_and_compensates_observed_startup_d
     assert any(.12 < pulse < .24 for pulse in navigator.pulses[4:])
 
 
-def test_expired_measurement_after_no_effect_renews_without_an_extra_pulse():
+@pytest.mark.parametrize("expiry_stage", ["measurement", "pulse"])
+@pytest.mark.parametrize("recovers", [False, True])
+def test_expired_measurement_after_no_effect_renews_without_an_extra_pulse(expiry_stage, recovers):
     from toposync_ext_cameras.panorama_navigation import _ExpiredQualifiedFrame
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
     reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
@@ -2671,25 +2673,54 @@ def test_expired_measurement_after_no_effect_renews_without_an_extra_pulse():
         target_reference=lambda _: reference)
     class Navigator(VisualNavigator):
         renewed = False
+        renewals = 0
         async def locate(self):
             return {"rotation_matrix": np.eye(3).tolist(), "reference_id": "reference"}
         def _error(self, *_):
             return np.array([.2, 0])
         async def _target_measurement(self, *_):
-            if self.commands and not self.renewed:
+            if expiry_stage == "measurement" and self.commands and not self.renewed:
                 raise _ExpiredQualifiedFrame()
             return {"center_error_pixels": 0 if self.renewed else 100}
         async def _renew_localization_frame(self, error):
             assert self.commands == 1
-            self.renewed = True
+            self.renewals += 1
+            self.renewed = recovers
             return {"capture_evidence": {"sequence": 2}}
         async def _pulse(self, axis, amount):
+            if expiry_stage == "pulse" and self.commands and not self.renewed:
+                raise _ExpiredQualifiedFrame()
             self.commands += 1
             self.last_pulse_stationary = True
             self.trace.append({"axis": axis})
     navigator = Navigator(scanner, localizer)
-    result = asyncio.run(navigator.aim([1, 0, 0]))
-    assert result["verified"] and navigator.renewed and navigator.commands == 1
+    if recovers:
+        result = asyncio.run(navigator.aim([1, 0, 0]))
+        assert result["verified"] and navigator.renewed
+    else:
+        with pytest.raises(_ExpiredQualifiedFrame):
+            asyncio.run(navigator.aim([1, 0, 0]))
+    assert navigator.renewals == (2 if expiry_stage == "pulse" and not recovers else 1)
+    assert navigator.commands == 1
+
+
+@pytest.mark.parametrize("expires_during_persist", [False, True])
+def test_expired_pulse_is_rejected_before_transport(monkeypatch, expires_during_persist):
+    import toposync_ext_cameras.panorama_navigation as navigation
+    clock = [100. if expires_during_persist else 102.]
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: clock[0])
+    async def persist():
+        clock[0] = 102.
+    scanner = SimpleNamespace(last_frame={"received_monotonic": 99.5}, checkpoint={},
+        _check=lambda: None, _persist=persist, _pulse=AsyncMock(),
+        capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, None)
+    with pytest.raises(navigation._ExpiredQualifiedFrame):
+        asyncio.run(navigator._pulse("pan", .12))
+    scanner._pulse.assert_not_awaited()
+    assert navigator.commands == int(expires_during_persist)
+    if expires_during_persist:
+        assert navigator.trace[-1]["state"] == "rejected_before_transport"
 
 
 def test_navigation_leaves_overlap_route_as_soon_as_requested_target_is_visible(monkeypatch):

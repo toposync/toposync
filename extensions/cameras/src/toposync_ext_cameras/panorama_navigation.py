@@ -1102,6 +1102,9 @@ class VisualNavigator:
             not self.scanner.last_frame
             or not 0 <= time.monotonic() - self.scanner.last_frame.get("received_monotonic", 0) <= 1
         ):
+            if (self.scanner.last_frame
+                    and time.monotonic() - self.scanner.last_frame.get("received_monotonic", 0) > 1):
+                raise _ExpiredQualifiedFrame()
             raise PanoramaCaptureError("panorama_frame_not_recent")
         self.commands += 1
         self.last_pulse_stationary = False
@@ -1117,6 +1120,8 @@ class VisualNavigator:
             previous_guard = self.scanner.camera.dispatch_guard
             self.scanner.camera.dispatch_guard = self.dispatch_guard
         try:
+            if time.monotonic() - self.scanner.last_frame.get("received_monotonic", 0) > 1:
+                raise _ExpiredQualifiedFrame()
             capabilities = self.scanner.capabilities
             if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
                 options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
@@ -1146,7 +1151,7 @@ class VisualNavigator:
             self.trace[-1].update(state="interrupted", failure_code="capture_cancelled")
             raise
         except PanoramaCaptureError as error:
-            self.trace[-1].update(state="rejected_before_transport" if isinstance(error, _TargetDispatchChanged) else "failed",
+            self.trace[-1].update(state="rejected_before_transport" if isinstance(error, (_TargetDispatchChanged, _ExpiredQualifiedFrame)) else "failed",
                 failure_code=error.code)
             if isinstance(error, _TargetDispatchChanged):
                 self.trace[-1]["dispatch_rejection"] = error.details
@@ -1625,6 +1630,14 @@ class VisualNavigator:
                     await self._pulse(axis, pulse_amount)
                 else:
                     await self._pulse(axis, pulse_amount, speed=pulse_speed)
+            except _ExpiredQualifiedFrame as error:
+                if near:
+                    fine -= 1
+                expired_measurements += 1
+                if expired_measurements > 2:
+                    raise
+                self.scanner.last_frame = await self._renew_localization_frame(error)
+                continue
             except _TargetDispatchChanged:
                 if near:
                     fine -= 1

@@ -361,7 +361,8 @@ def test_navigation_duration_adapts_to_diagonal_displacement_and_never_exceeds_s
 
 
 @pytest.mark.parametrize('duration', [.6, 1.2])
-def test_extended_navigation_pulse_uses_existing_fresh_image_precondition(duration):
+@pytest.mark.parametrize('calibrated', [False, True])
+def test_extended_navigation_pulse_uses_existing_fresh_image_precondition(duration, calibrated):
     import time
     frame = {'received_monotonic': time.monotonic()}
     calls = []
@@ -376,9 +377,13 @@ def test_extended_navigation_pulse_uses_existing_fresh_image_precondition(durati
     scanner = SimpleNamespace(last_frame=frame, checkpoint={}, _check=lambda: None,
                               _persist=persist, _pulse=pulse, capabilities={'velocity_supported': True},
                               physical_state='stopped')
-    navigator = VisualNavigator(scanner, None)
+    estimator = lambda before, after: None
+    navigator = VisualNavigator(scanner, SimpleNamespace(calibrated_transition=estimator) if calibrated else None)
     asyncio.run(navigator._pulse('pan', duration))
-    assert calls == ([{'expected_frame': frame}] if duration > .6 else [{}])
+    expected = {'expected_frame': frame} if duration > .6 else {}
+    if calibrated:
+        expected['transition_estimator'] = estimator
+    assert calls == [expected]
 
 
 @pytest.mark.parametrize("shifted", [False, True])

@@ -2103,10 +2103,12 @@ def test_relative_pulse_uses_displacement_and_never_calls_velocity(tmp_path):
         return options
 
     scanner._move, camera.move_relative = move, relative
-    result = asyncio.run(scanner._pulse("pan", -1, 0.3))
+    estimator = lambda before, after: None
+    result = asyncio.run(scanner._pulse("pan", -1, 0.3, transition_estimator=estimator))
     assert moves == [{"pan": -0.03, "tilt": 0.0}]
     assert "duration" not in result
     assert "velocity" not in _event_names(camera)
+    assert result["transition_estimator"] is estimator
 
 
 def test_legacy_continuous_job_requires_a_new_capture_for_precise_resume():
@@ -9909,11 +9911,14 @@ def test_pulse_can_explicitly_qualify_a_bounded_velocity(tmp_path, speed, durati
     scanner._move = move
     scanner.physical_state = "stopped"
     baseline = {"received_monotonic": time.monotonic()}
-    asyncio.run(scanner._pulse("pan", -1, duration, speed=speed, expected_frame=baseline))
+    estimator = lambda before, after: None
+    asyncio.run(scanner._pulse("pan", -1, duration, speed=speed, expected_frame=baseline,
+                              transition_estimator=estimator))
     event = next(payload for name, payload in camera.events if name == "velocity")
     assert event == {"pan": -speed, "tilt": 0.0, "timeout_s": duration}
     assert movement_options["requested_velocity"] == {"pan": -speed, "tilt": 0.0}
     assert movement_options["expected_frame"] is baseline
+    assert movement_options["transition_estimator"] is estimator
 
 
 @pytest.mark.parametrize("state,baseline,duration", [

@@ -245,19 +245,32 @@ class PanoramaLocalizer:
     def calibrated_transition(self, previous: np.ndarray, current: np.ndarray) -> dict | None:
         """Recover observed displacement, never arrival, using the bound lens.
 
-        Reuse the loaded contextual matcher. No panorama target or cached pose
+        Reuse native features or the loaded contextual matcher. No target or cached pose
         participates in this independent two-frame rotation estimate.
         """
         matching = self._contextual_matcher
-        if (matching is None or previous.shape != current.shape or current.ndim != 2
-                or (matching.height, matching.width) != current.shape):
+        if previous.shape != current.shape or current.ndim != 2:
             return None
         matrix, distortion, width, height = _lens_arrays(self.lens)
         if abs(current.shape[1] / current.shape[0] - width / height) > 1e-6:
             return None
-        before, after = matching.correspondences(matching.features(previous), matching.features(current))
         scale = width / current.shape[1]
-        fitted = fit_frame_rotation(after * scale, before * scale, self.lens, np.eye(3))
+        before_points, before_features, _ = self._features(previous)
+        after_points, after_features, _ = self._features(current)
+        fitted = None
+        if before_features is not None and after_features is not None:
+            pairs = _mutual_matches(cv2.BFMatcher(), _matching_descriptors(before_features),
+                                    _matching_descriptors(after_features))
+            if pairs:
+                before = np.asarray([before_points[pair.queryIdx] for pair in pairs])
+                after = np.asarray([after_points[pair.trainIdx] for pair in pairs])
+                fitted = fit_frame_rotation(after * scale + (scale - 1) / 2,
+                    before * scale + (scale - 1) / 2, self.lens, np.eye(3))
+        if (fitted is None and matching is not None
+                and (matching.height, matching.width) == current.shape):
+            before, after = matching.correspondences(matching.features(previous), matching.features(current))
+            fitted = fit_frame_rotation(after * scale + (scale - 1) / 2,
+                before * scale + (scale - 1) / 2, self.lens, np.eye(3))
         if fitted is None:
             return None
         grid = np.asarray([(width * x, height * y) for y in (.15, .5, .85)

@@ -1120,6 +1120,9 @@ class VisualNavigator:
             capabilities = self.scanner.capabilities
             if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
                 options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
+                transition_estimator = getattr(self.localizer, "calibrated_transition", None)
+                if callable(transition_estimator):
+                    options["transition_estimator"] = transition_estimator
                 if abs(amount) > MAXIMUM_NAVIGATION_PULSE_SECONDS or speed > DEFAULT_CONTINUOUS_PULSE_SPEED:
                     # Reuse the scanner's fresh baseline comparison before spending
                     # an overlap-qualified larger pulse; external motion cancels it.

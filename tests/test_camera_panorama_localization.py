@@ -46,7 +46,8 @@ def test_rotation_has_independent_pixel_oracle_and_held_out_validation():
 
 
 @pytest.mark.parametrize("case", ["rotation", "static", "foreground", "zoom", "missing_matcher", "dimensions"])
-def test_calibrated_transition_uses_observed_rotation_not_scene_change(case):
+@pytest.mark.parametrize("native", [False, True])
+def test_calibrated_transition_uses_observed_rotation_not_scene_change(case, native, monkeypatch):
     from types import SimpleNamespace
 
     lens, current, reference, _ = _correspondences()
@@ -64,6 +65,12 @@ def test_calibrated_transition_uses_observed_rotation_not_scene_change(case):
     )
     previous = np.zeros((540, 960), np.uint8)
     image = previous[:, :800] if case == "dimensions" else previous.copy()
+    if native:
+        localizer._contextual_matcher = None
+        descriptors = np.random.default_rng(17).integers(0, 255, (len(current), 128), dtype=np.uint8)
+        monkeypatch.setattr(localizer, "_features", lambda frame: (
+            reference if frame is previous else current,
+            None if case == "missing_matcher" else descriptors, None))
     result = localizer.calibrated_transition(previous, image)
     assert (result is not None) == (case == "rotation")
     if result is not None:

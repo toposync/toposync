@@ -5323,6 +5323,7 @@ class _Scan:
         intent_type: str = "seek_pulse",
         intent_step: int | None = None,
         connection_recovery_phase: str | None = None,
+        transition_estimator: Callable | None = None,
     ) -> dict:
         # Start slowly enough to retain inter-frame correspondence on cameras
         # with fast motors. Duration adapts to measured overlap in _seek; speed
@@ -5405,6 +5406,7 @@ class _Scan:
                 lambda: self.camera.move_relative(**delta),
                 allow_stationary=True,
                 expected_frame=expected_frame,
+                **({"transition_estimator": transition_estimator} if transition_estimator is not None else {}),
                 movement_intent={
                     "type": movement_type,
                     "axis": axis,
@@ -5449,6 +5451,7 @@ class _Scan:
             allow_stationary=True,
             requested_velocity=velocity,
             expected_frame=expected_frame,
+            **({"transition_estimator": transition_estimator} if transition_estimator is not None else {}),
             movement_intent={
                 "type": movement_type,
                 "axis": axis,

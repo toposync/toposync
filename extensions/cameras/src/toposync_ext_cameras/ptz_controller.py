@@ -872,6 +872,23 @@ class PtzController:
                             motion_epoch=command_motion_epoch,
                             timeout_s=pulse_remaining,
                         )
+                    elif (rejected_before_dispatch and device.continuous_watchdog_task is not None
+                            and not device.continuous_watchdog_task.done()):
+                        # The rejected intent changed the epoch; the previous pulse's watchdog can no longer stop it.
+                        self._cancel_continuous_watchdog_locked(device)
+                        stop_command_id = f"rejected_retarget_stop_{uuid.uuid4().hex}"
+                        device.state = "stopping"
+                        device.last_command_id = stop_command_id
+                        device.last_command_kind = "stop"
+                        device.last_preset_token = ""
+                        self._mark_motion_unsafe_locked(
+                            device, now_wall=self._wall_time(), now_monotonic=self._monotonic(),
+                        )
+                        self._schedule_fenced_stop_locked(
+                            device, camera_id=lease.camera_id, camera_source_id=lease.camera_source_id,
+                            transport_binding=lease.transport_binding, expected_fence=int(device.fence),
+                            command_id=stop_command_id, reason="retarget_rejected",
+                        )
 
             if rejected_before_dispatch:
                 assert guard_error is not None

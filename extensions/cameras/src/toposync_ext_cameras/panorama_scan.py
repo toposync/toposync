@@ -24,6 +24,8 @@ from typing import Any, Awaitable, Callable
 import cv2
 import numpy as np
 
+from toposync.runtime.pipelines.image_geometry import image_geometry
+
 from .panorama_capture import PanoramaCaptureError
 from .processing.panorama_stability import VisualStabilityDetector
 from .panorama_region import acquire_region, region_policy, region_progress, region_resume_error
@@ -943,7 +945,21 @@ class _AttemptDiagnostic:
             gray = _gray(frame["image"])
             encoded_ok, encoded = cv2.imencode(".png", gray, [cv2.IMWRITE_PNG_COMPRESSION, 1])
             if encoded_ok and self.replay_bytes + encoded.nbytes <= MAX_REPLAY_BYTES and len(self.replay) < 256:
+                evidence = {key: frame["capture_evidence"][key] for key in (
+                    "capture_instance", "generation", "sequence", "published_at",
+                    "received_monotonic", "physical_timestamp_verified", "captured_monotonic",
+                ) if key in (frame.get("capture_evidence") or {})}
+                height, width = frame["image"].shape[:2]
+                geometry = image_geometry(width, height, evidence)
+                horizontal, vertical = width / gray.shape[1], height / gray.shape[0]
+                # Preserve the actual resize, including rounded height and pixel centres.
+                geometry.update(image_size=list(gray.shape[::-1]), to_source=[
+                    [horizontal, 0, (horizontal - 1) / 2],
+                    [0, vertical, (vertical - 1) / 2], [0, 0, 1],
+                ])
                 self.replay.append((encoded, {
+                    "capture_evidence": evidence,
+                    "image_geometry": geometry,
                     "observed_seconds": now - self.start,
                     "received_monotonic": received,
                     "media_time": media,

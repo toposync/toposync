@@ -3284,6 +3284,49 @@ def test_attempt_diagnostics_are_bounded_and_exclude_unlisted_frame_fields(
     assert '"image"' not in persisted
 
 
+@pytest.mark.parametrize("source_size", [(640, 360), (1920, 1080), (1001, 563)])
+def test_movement_replay_keeps_capture_bound_resize_geometry(tmp_path, source_size):
+    from toposync.runtime.pipelines.image_geometry import geometry_matrix, source_pixels
+
+    width, height = source_size
+    frame = {
+        "image": np.zeros((height, width, 3), dtype=np.uint8),
+        "width": 99, "height": 99,  # Geometry belongs to the pixels, not a stale hint.
+        "capture_evidence": {
+            "capture_instance": "original-decoder", "generation": 3, "sequence": 17,
+            "published_at": 123.5, "received_monotonic": 45.5,
+            "physical_timestamp_verified": False, "captured_monotonic": None,
+            "password": "private-secret",
+        },
+        "received_monotonic": 45.5, "sequence": 17, "generation": 3,
+    }
+    scanner = scan._Scan(SimulatedCamera(), tmp_path, _progress, lambda: False, None)
+    attempt = scan._AttemptDiagnostic("movement")
+    attempt.frame(frame, {"code": "moving"})
+    frame["capture_evidence"]["sequence"] = 18
+    attempt.value["outcome"] = "capture_stable"
+    asyncio.run(scanner._preserve_replay(attempt))
+    record_path, = tmp_path.glob("replay-accepted-*.json")
+    record = json.loads(record_path.read_text())["frames"][0]
+    evidence = record["capture_evidence"]
+    assert evidence == {
+        "capture_instance": "original-decoder", "generation": 3, "sequence": 17,
+        "published_at": 123.5, "received_monotonic": 45.5,
+        "physical_timestamp_verified": False, "captured_monotonic": None,
+    }
+    assert "private-secret" not in record_path.read_text()
+    with np.load(record_path.with_suffix(".npz"), allow_pickle=False) as images:
+        image = images["frame_0"]
+        geometry = record["image_geometry"]
+        assert geometry["capture_evidence"] == evidence
+        assert geometry["source_size"] == [width, height]
+        matrix = geometry_matrix(geometry, image.shape[1], image.shape[0])
+        points = np.array([[0, 0], [image.shape[1] - 1, image.shape[0] - 1], [300, 200]])
+        # OpenCV resize maps pixel centres, independently on rounded axes.
+        expected = (points + .5) * [width / image.shape[1], height / image.shape[0]] - .5
+        np.testing.assert_allclose(source_pixels(points, matrix), expected)
+
+
 def test_movement_replay_is_lossless_bounded_and_keeps_timing_without_secrets(tmp_path, monkeypatch):
     camera = SimulatedCamera()
     _clock(monkeypatch, camera)
@@ -3304,6 +3347,8 @@ def test_movement_replay_is_lossless_bounded_and_keeps_timing_without_secrets(tm
     assert not record["complete"]
     assert record["frames"][0]["sequence"] == frame["sequence"]
     assert record["frames"][0]["received_monotonic"] == frame["received_monotonic"]
+    assert record["frames"][0]["capture_evidence"] == frame.get("capture_evidence", {})
+    assert record["frames"][0]["image_geometry"]["source_size"] == list(frame["image"].shape[1::-1])
     assert "private-secret" not in records[0].read_text()
     with np.load(records[0].with_suffix(".npz"), allow_pickle=False) as images:
         assert list(images) == ["frame_0"]

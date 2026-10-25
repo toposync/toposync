@@ -980,9 +980,36 @@ async def test_following_subject_is_rechecked_before_commands_and_arrival(monkey
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize('initial,pending', [(True, True), (False, True), (True, False)])
+async def test_return_route_admits_pending_cleanup_only_with_original_image(initial, pending):
+    from toposync_ext_cameras.panorama import Revision
+    job = bound_job()
+    job['_navigation_checkpoint'] = {
+        **({'initial_path': 'initial-reference.jpg'} if initial else {}),
+        **({'pending_returns': [{'kind': 'pending_preset'}]} if pending else {}),
+    }
+    service = object.__new__(PanoramaService)
+    service._authorize = Mock()
+    service._job = Mock(return_value=job)
+    service._current = AsyncMock()
+    service._public = AsyncMock(return_value={})
+    service._visual_operation = AsyncMock(return_value=('verified.jpg', {}))
+    operation = service.return_framing(None, 'camera', job['id'], Revision(revision=job['revision']))
+    if initial and pending:
+        assert (await operation)['aim_image_url'] == 'verified.jpg'
+        service._visual_operation.assert_awaited_once_with(None, job, None)
+    else:
+        with pytest.raises(HTTPException) as failure:
+            await operation
+        assert failure.value.detail['code'] == 'return_reference_unavailable'
+        service._visual_operation.assert_not_awaited()
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize('outcome', ['native', 'visual', 'arrival_failure', 'restore_failure', 'cleanup_failure', 'visual_mismatch', 'cancel',
     'prepared_reference', 'reference_binding_failed', 'reference_arrival_failed', 'reference_not_selected',
-    'velocity', 'velocity_failure'])
+    'velocity', 'velocity_failure', 'pending_cleanup', 'pending_visual_mismatch', 'pending_cleanup_failure',
+    'pending_cleanup_partial', 'pending_initial_missing'])
 async def test_qualification_preserves_starting_view_until_verified_recovery(monkeypatch, tmp_path, outcome):
     import asyncio
     import copy
@@ -996,6 +1023,15 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
     scanner = SimpleNamespace(acquired=False, physical_state='stopped', last_frame=frame,
         saved_return=None, checkpoint={}, _stop=AsyncMock(return_value=True),
         _reference_window=AsyncMock(return_value=frame), _private_image=lambda path: frame['image'])
+    pending_cleanup = outcome.startswith('pending_')
+    pending = {'kind': 'pending_preset', 'role': 'original', 'owner_id': job['id']}
+    if pending_cleanup:
+        scanner.checkpoint = {'initial_path': 'initial-reference.jpg', 'pending_returns': [pending.copy()]}
+        if outcome == 'pending_initial_missing':
+            scanner.checkpoint.pop('initial_path')
+        if outcome == 'pending_cleanup_partial':
+            scanner.checkpoint['pending_returns'].append({**pending, 'role': 'work'})
+        job['_navigation_checkpoint'] = scanner.checkpoint
     persisted = []
 
     async def persist():
@@ -1054,12 +1090,14 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
         navigator.approach_reference.side_effect = PanoramaCaptureError('visual_native_reference_unconfirmed')
     selector = Mock(return_value=None if outcome == 'reference_not_selected' else reference)
     monkeypatch.setattr(panorama_navigation, 'select_direct_native_reference', selector)
-    if outcome == 'cleanup_failure':
+    if outcome in {'cleanup_failure', 'pending_cleanup_failure'}:
         camera.remove_return.side_effect = PanoramaCaptureError('return_cleanup_unconfirmed')
+    if outcome == 'pending_cleanup_partial':
+        camera.remove_return.side_effect = [None, PanoramaCaptureError('return_cleanup_unconfirmed')]
     monkeypatch.setattr(panorama_scan, '_Scan', lambda *args: scanner)
     monkeypatch.setattr(panorama_scan, '_write_image', lambda *args: None)
     monkeypatch.setattr(panorama_scan, '_match', lambda *args: {
-        'verified': True, 'overlap': .99, 'displacement': 13 if outcome == 'visual_mismatch' else 1})
+        'verified': True, 'overlap': .99, 'displacement': 13 if outcome in {'visual_mismatch', 'pending_visual_mismatch'} else 1})
     monkeypatch.setattr(panorama_navigation, 'VisualNavigator', lambda *args: navigator)
     service = object.__new__(PanoramaService)
     service.root, service.services = tmp_path, SimpleNamespace()
@@ -1075,6 +1113,30 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
     service.invalidate_native_reference = Mock()
     service._image_write = lambda *args: None
     service._image_url = lambda job, name: name
+    if pending_cleanup:
+        operation = service._visual_operation_with_pinned_reference(None, job, None)
+        if outcome == 'pending_cleanup':
+            _, evidence = await operation
+            assert evidence['verified'] is True
+            assert not scanner.checkpoint['pending_returns']
+            assert 'initial_path' not in scanner.checkpoint
+            assert job['navigation']['can_return'] is False
+            camera.remove_return.assert_awaited_once_with(pending)
+        else:
+            with pytest.raises(HTTPException):
+                await operation
+            assert scanner.checkpoint['pending_returns']
+            if outcome == 'pending_cleanup_partial':
+                assert scanner.checkpoint['pending_returns'] == [{**pending, 'role': 'work'}]
+                assert persisted[-1]['pending_returns'] == [{**pending, 'role': 'work'}]
+            elif outcome in {'pending_visual_mismatch', 'pending_initial_missing'}:
+                camera.remove_return.assert_not_awaited()
+            assert job['navigation']['can_return'] is (outcome != 'pending_initial_missing')
+        navigator.aim.assert_not_awaited()
+        scanner._restore.assert_not_awaited()
+        camera.close.assert_awaited_once()
+        assert job['stop_confirmed'] is True
+        return
     operation = service._visual_operation_with_pinned_reference(None, job,
         {'ray': [0, 0, 1]}, qualification_home={'ray': [0, 1, 0]},
         **({'velocity_probe': probe} if outcome.startswith('velocity') else {}))

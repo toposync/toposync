@@ -1664,11 +1664,12 @@ class PanoramaService:
             if target is None:
                 if scanner.saved_return:
                     await scanner._restore(maximum_error_pixels=MAXIMUM_LIVE_CENTER_ERROR_PIXELS)
-                elif scanner.checkpoint.get("visual_original_ray"):
-                    binding = job["source_panorama"]
-                    await self.localize_frame(camera_id=job["camera_id"], source_id=job["source_id"], job_id=job["id"], revision=job["revision"], image=scanner.last_frame["image"], capture_evidence=scanner.last_frame.get("capture_evidence", {}))
-                    localizer = self._localizers[(binding["id"], binding["geometry"]["model_digest"])]
-                    await VisualNavigator(scanner, localizer).aim(scanner.checkpoint["visual_original_ray"])
+                elif scanner.checkpoint.get("initial_path"):
+                    if scanner.checkpoint.get("visual_original_ray"):
+                        binding = job["source_panorama"]
+                        await self.localize_frame(camera_id=job["camera_id"], source_id=job["source_id"], job_id=job["id"], revision=job["revision"], image=scanner.last_frame["image"], capture_evidence=scanner.last_frame.get("capture_evidence", {}))
+                        localizer = self._localizers[(binding["id"], binding["geometry"]["model_digest"])]
+                        await VisualNavigator(scanner, localizer).aim(scanner.checkpoint["visual_original_ray"])
                     original = scanner._private_image(scanner.checkpoint["initial_path"])
                     comparison = await asyncio.to_thread(_match, original, scanner.last_frame["image"])
                     if comparison.get("verified") and comparison.get("overlap", 0) >= .85 and comparison["displacement"] <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
@@ -1685,6 +1686,10 @@ class PanoramaService:
                         scanner.saved_return = None
                         scanner.checkpoint["return"] = None
                 if not scanner.saved_return:
+                    for pending in list(scanner.checkpoint.get("pending_returns", [])):
+                        await camera.remove_return(pending)
+                        scanner.checkpoint["pending_returns"].remove(pending)
+                        await scanner._persist()
                     scanner.checkpoint.pop("visual_original_ray", None)
                     scanner.checkpoint.pop("initial_path", None)
             else:
@@ -1925,7 +1930,7 @@ class PanoramaService:
                     return_checkpoint = job.get("_navigation_checkpoint") or {}
                     job["navigation"] = {"phase": "failed" if failure_code else "complete", "error_code": failure_code,
                         "physical_state": "restored" if restored and job.get("stop_confirmed") else "stopped" if job.get("stop_confirmed") else scanner.physical_state,
-                        "can_return": bool((return_checkpoint.get("return") or return_checkpoint.get("visual_original_ray")) and return_checkpoint.get("initial_path"))}
+                        "can_return": bool((return_checkpoint.get("return") or return_checkpoint.get("visual_original_ray") or return_checkpoint.get("pending_returns")) and return_checkpoint.get("initial_path"))}
                     if borrowed_control is not None:
                         job["_attention_navigation_trace"] = {key: scanner.checkpoint.get(key, [])
                             for key in ("navigation_commands", "navigation_observation_timings", "navigation_target_observations")}
@@ -2008,7 +2013,8 @@ class PanoramaService:
         job = self._job(camera_id, job_id, body.revision)
         await self._current(job, request)
         checkpoint = job.get("_navigation_checkpoint") or {}
-        if not (checkpoint.get("return") or checkpoint.get("visual_original_ray")):
+        if not (checkpoint.get("return") or checkpoint.get("visual_original_ray")
+                or (checkpoint.get("pending_returns") and checkpoint.get("initial_path"))):
             raise _error("return_reference_unavailable", "The original camera framing is unavailable")
         image_url, _ = await self._visual_operation(request, job, None)
         return {**await self._public(job), "aim_image_url": image_url}

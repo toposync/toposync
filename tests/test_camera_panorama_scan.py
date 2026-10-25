@@ -9878,7 +9878,9 @@ def test_fine_pulse_never_uses_unqualified_smaller_velocity(tmp_path):
     assert not camera.events
 
 
-def test_fine_pulse_can_explicitly_qualify_a_lower_bounded_velocity(tmp_path):
+@pytest.mark.parametrize("speed,duration", [(0.025, 0.05), (0.2, 0.12)])
+def test_pulse_can_explicitly_qualify_a_bounded_velocity(tmp_path, speed, duration):
+    import time
     camera = SimulatedCamera()
     scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
     scanner.capabilities = {
@@ -9905,10 +9907,54 @@ def test_fine_pulse_can_explicitly_qualify_a_lower_bounded_velocity(tmp_path):
         return {"frame": await camera.frame()}
 
     scanner._move = move
-    asyncio.run(scanner._pulse("pan", -1, 0.05, speed=0.025))
+    scanner.physical_state = "stopped"
+    baseline = {"received_monotonic": time.monotonic()}
+    asyncio.run(scanner._pulse("pan", -1, duration, speed=speed, expected_frame=baseline))
     event = next(payload for name, payload in camera.events if name == "velocity")
-    assert event == {"pan": -0.025, "tilt": 0.0, "timeout_s": 0.05}
-    assert movement_options["requested_velocity"] == {"pan": -0.025, "tilt": 0.0}
+    assert event == {"pan": -speed, "tilt": 0.0, "timeout_s": duration}
+    assert movement_options["requested_velocity"] == {"pan": -speed, "tilt": 0.0}
+    assert movement_options["expected_frame"] is baseline
+
+
+@pytest.mark.parametrize("state,baseline,duration", [
+    ("moving", True, .12), ("stopped", False, .12), ("stopped", True, .121),
+])
+def test_faster_probe_requires_stopped_baseline_and_short_duration(tmp_path, state, baseline, duration):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
+    scanner.capabilities = {"velocity_supported": True, "axes": {"pan": True}}
+    scanner.physical_state = state
+    with pytest.raises(PanoramaCaptureError, match="invalid_velocity"):
+        asyncio.run(scanner._pulse("pan", 1, duration, speed=.2,
+            expected_frame={} if baseline else None))
+    assert not camera.events
+
+
+@pytest.mark.parametrize("speed", [.025, .2])
+def test_alternative_velocity_never_falls_back_to_relative_displacement(tmp_path, speed):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
+    scanner.capabilities = {"relative_supported": True, "axes": {"pan": True}}
+    scanner.physical_state = "stopped"
+    with pytest.raises(PanoramaCaptureError, match="visual_control_resolution_unverified"):
+        asyncio.run(scanner._pulse("pan", 1, .12, speed=speed, expected_frame={}))
+    assert not camera.events
+
+
+@pytest.mark.parametrize("returning,intent,cursor", [
+    (True, "seek_pulse", None), (False, "connection_anchor_return", None),
+    (False, "seek_pulse", {}),
+])
+def test_faster_probe_never_changes_recovery_movement(tmp_path, returning, intent, cursor):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
+    scanner.capabilities = {"velocity_supported": True, "axes": {"pan": True}}
+    scanner.physical_state, scanner.returning = "stopped", returning
+    scanner.checkpoint["continuous_cursor"] = cursor
+    with pytest.raises(PanoramaCaptureError, match="invalid_velocity"):
+        asyncio.run(scanner._pulse("pan", 1, .12, speed=.2,
+            expected_frame={}, intent_type=intent))
+    assert not camera.events
 
 
 def test_fine_pulse_rejects_a_velocity_that_the_advertised_space_would_clamp(tmp_path):
@@ -9938,7 +9984,8 @@ def test_fine_pulse_rejects_a_velocity_that_the_advertised_space_would_clamp(tmp
     "invalidity",
     ["duplicate", "not_normalized", "missing_bounds", "default_mismatch"],
 )
-def test_lower_velocity_requires_one_exact_normalized_default_space(tmp_path, invalidity):
+@pytest.mark.parametrize("speed", [.025, .2])
+def test_alternative_velocity_requires_one_exact_normalized_default_space(tmp_path, invalidity, speed):
     camera = SimulatedCamera()
     scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, {})
     selected = {
@@ -9964,8 +10011,9 @@ def test_lower_velocity_requires_one_exact_normalized_default_space(tmp_path, in
         "defaults": {"continuous": default},
     }
 
+    scanner.physical_state = "stopped"
     with pytest.raises(PanoramaCaptureError, match="visual_control_resolution_unverified"):
-        asyncio.run(scanner._pulse("pan", 1, 0.05, speed=0.025))
+        asyncio.run(scanner._pulse("pan", 1, 0.05, speed=speed, expected_frame={}))
 
     assert not camera.events
 

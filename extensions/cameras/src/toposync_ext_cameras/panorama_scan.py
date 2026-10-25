@@ -5335,7 +5335,14 @@ class _Scan:
         if duration is None or not 0 < duration <= 2.0:
             raise PanoramaCaptureError("invalid_movement_duration")
         speed = _finite(speed)
-        if speed is None or not 0 < speed <= DEFAULT_CONTINUOUS_PULSE_SPEED:
+        if speed is None or not 0 < speed <= 0.2:
+            raise PanoramaCaptureError("invalid_velocity")
+        if speed > DEFAULT_CONTINUOUS_PULSE_SPEED and (
+            duration > 0.12 or expected_frame is None or self.physical_state != "stopped"
+            or self.returning or intent_type != "seek_pulse"
+            or self.checkpoint.get("continuous_cursor") is not None
+        ):
+            # A faster first probe needs a fresh baseline; it grants no response model.
             raise PanoramaCaptureError("invalid_velocity")
         if intent_type not in {
             "seek_pulse",
@@ -5389,6 +5396,8 @@ class _Scan:
             and not self.capabilities.get("velocity_supported")
         )
         if use_relative:
+            if speed != DEFAULT_CONTINUOUS_PULSE_SPEED:
+                raise PanoramaCaptureError("visual_control_resolution_unverified")
             if self.capabilities.get("relative_supported") is not True:
                 raise PanoramaCaptureError("normalized_motion_unavailable")
             delta = {key: value * duration for key, value in velocity.items()}

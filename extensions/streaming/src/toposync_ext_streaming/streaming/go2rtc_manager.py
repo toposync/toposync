@@ -38,6 +38,7 @@ class Go2RtcSidecarStatus:
 @dataclass(frozen=True, slots=True)
 class _RuntimeConfig:
     bind_host: str
+    preferred_api_port: int
     api_port: int
     warnings: tuple[str, ...]
     platform_key: str
@@ -56,6 +57,7 @@ class Go2RtcSidecarManager:
         self._last_error: str | None = None
         self._bind_host = "127.0.0.1"
         self._api_port = 18764
+        self._preferred_api_port: int | None = None
         self._warnings: tuple[str, ...] = ()
         self._config_hash: str | None = None
         self._platform_key: str | None = None
@@ -81,6 +83,8 @@ class Go2RtcSidecarManager:
 
             config = self._resolve_runtime_config(sidecar_settings, streams=streams or {})
             if self._is_running_locked() and self._config_hash == config.config_hash:
+                self._preferred_api_port = config.preferred_api_port
+                self._warnings = config.warnings
                 return self._status_locked()
             if self._is_running_locked():
                 await self._stop_locked(clear_error=False)
@@ -120,8 +124,13 @@ class Go2RtcSidecarManager:
     ) -> _RuntimeConfig:
         bind_host = "127.0.0.1"
         preferred_port = int(sidecar_settings.api_port)
-        if self._is_running_locked() and self._bind_host == bind_host and self._api_port == preferred_port:
-            api_port, changed = preferred_port, False
+        if (
+            self._is_running_locked()
+            and self._bind_host == bind_host
+            and preferred_port in (self._preferred_api_port, self._api_port)
+        ):
+            # Reuse our bound fallback port until the requested port changes.
+            api_port, changed = self._api_port, self._api_port != preferred_port
         else:
             api_port, changed = _pick_port(bind_host=bind_host, preferred=preferred_port)
         warnings: list[str] = []
@@ -137,6 +146,7 @@ class Go2RtcSidecarManager:
         config_hash = hashlib.sha256(config_text.encode("utf-8")).hexdigest()
         return _RuntimeConfig(
             bind_host=bind_host,
+            preferred_api_port=preferred_port,
             api_port=api_port,
             warnings=tuple(warnings),
             platform_key=platform.key,
@@ -175,6 +185,7 @@ class Go2RtcSidecarManager:
         self._started_at_unix = time.time()
         self._last_error = None
         self._bind_host = config.bind_host
+        self._preferred_api_port = config.preferred_api_port
         self._api_port = config.api_port
         self._warnings = config.warnings
         self._config_hash = config.config_hash

@@ -1,5 +1,14 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Continuidade da reprodução MSE — 22/10/2026
+
+O serviço MSE preserva a porta alternativa já vinculada enquanto a porta
+solicitada não mudar. Consultas simultâneas de reprodução não devem reiniciar
+o serviço por confundir sua própria porta com um conflito. Alterações reais
+de fontes ou de porta continuam sendo aplicadas. A regressão cobre dois
+clientes concorrentes, mudança de fontes, mudança de porta e nova partida.
+Essa correção de disponibilidade não altera cobertura, calibração ou controle físico.
+
 ## Preparação de atenção — reaproveitamento de descoberta, 20/10/2026
 
 A atenção panorâmica pode reutilizar metadados ONVIF recentes de uma operação

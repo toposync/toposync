@@ -1003,6 +1003,11 @@ class VisualNavigator:
             raise PanoramaCaptureError("visual_route_unavailable")
         return np.arctan2(local[:2], local[2])
 
+    def _response_pixel_delta(self, before: np.ndarray, after: np.ndarray) -> float:
+        return float(np.linalg.norm((np.tan(after) - np.tan(before))
+            * np.array([self.localizer.lens["fx"], self.localizer.lens["fy"]])
+            * ANALYSIS_WIDTH / self.localizer.lens["width"]))
+
     async def approach_reference(self, destination: dict, ray: Any) -> dict:
         """Recall a prepared native point and verify it before visual refinement.
 
@@ -1114,7 +1119,7 @@ class VisualNavigator:
             capabilities = self.scanner.capabilities
             if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
                 options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
-                if abs(amount) > MAXIMUM_NAVIGATION_PULSE_SECONDS:
+                if abs(amount) > MAXIMUM_NAVIGATION_PULSE_SECONDS or speed > DEFAULT_CONTINUOUS_PULSE_SPEED:
                     # Reuse the scanner's fresh baseline comparison before spending
                     # an overlap-qualified larger pulse; external motion cancels it.
                     options["expected_frame"] = self.scanner.last_frame
@@ -1148,7 +1153,7 @@ class VisualNavigator:
         self.scanner.last_frame = result.get("observation_frame", result["frame"])
         self.scanner.last_pose = result.get("pose", {})
         if (result.get("stable") is True and self.scanner.physical_state == "stopped"
-                and speed == DEFAULT_CONTINUOUS_PULSE_SPEED):
+                and speed >= DEFAULT_CONTINUOUS_PULSE_SPEED):
             self.last_pulse_match = result.get("match", {})
         # Only the scanner's full causal no-effect window and observed Stop
         # can qualify a larger identification probe. A tiny fitted delta alone
@@ -1159,6 +1164,45 @@ class VisualNavigator:
         self.trace[-1]["state"] = "observed"
         self._record_timing("movement_cycle", started, axis=axis, amount=amount)
         await self.scanner._persist()
+
+    async def qualify_velocity(self, axis: str, direction: int, speed: float) -> dict[str, Any]:
+        """Measure one short probe without replacing the default-speed model."""
+        if (axis not in {"pan", "tilt"} or isinstance(direction, bool) or direction not in {-1, 1}
+                or not isinstance(speed, (int, float)) or isinstance(speed, bool)
+                or not DEFAULT_CONTINUOUS_PULSE_SPEED < speed <= .2):
+            raise PanoramaCaptureError("invalid_velocity")
+        if self.scanner.physical_state != "stopped":
+            raise PanoramaCaptureError("stop_unconfirmed")
+        located = await self.locate()
+        target = _rotation_basis(located["rotation_matrix"])[:, 2]
+        before = self._error(target, located)
+        amount = direction * DEFAULT_NAVIGATION_PROBE_SECONDS
+        self.scanner.checkpoint["navigation_step"] = {"kind": "velocity_qualification",
+            "response_qualified": False, "axis": axis, "speed": speed, "direction": direction}
+        await self._pulse(axis, amount, speed=speed)
+        after = await self.locate()
+        updated = self._error(target, after)
+        delta = updated - before
+        pixel_delta = self._response_pixel_delta(before, updated)
+        displacement = _matched_target_displacement(self.last_pulse_match, target, self.localizer.lens, located)
+        qualified = bool(self.scanner.physical_state == "stopped"
+            and not self.last_pulse_stationary and np.isfinite(delta).all()
+            and np.linalg.norm(delta / amount) >= .01
+            and pixel_delta >= MINIMUM_QUALIFIED_RESPONSE_PIXELS
+            and self.last_pulse_match.get("overlap", 0) >= .85
+            and displacement is not None and displacement >= MINIMUM_QUALIFIED_RESPONSE_PIXELS)
+        result = {"axis": axis, "direction": direction, "speed": speed,
+            "duration_seconds": abs(amount), "response": (delta / amount).tolist(),
+            "rotation_matrix": np.asarray(after["rotation_matrix"]).tolist(),
+            "displacement_pixels": displacement, "response_pixel_delta": pixel_delta, "response_qualified": qualified,
+            "capture_evidence": deepcopy(self.scanner.last_frame.get("capture_evidence", {}))}
+        self.trace[-1].update(result)
+        if not qualified:
+            self.trace[-1]["failure_code"] = "visual_response_unavailable"
+        await self.scanner._persist()
+        if not qualified:
+            raise PanoramaCaptureError("visual_response_unavailable")
+        return result
 
     async def _target_measurement(self, target: np.ndarray, located: dict[str, Any]) -> dict[str, Any] | None:
         started = time.monotonic()
@@ -1587,9 +1631,7 @@ class VisualNavigator:
             cycle_seconds = time.monotonic() - pulse_started
             updated = self._error(target, after)
             response = (updated - before) / amount
-            pixel_delta = np.linalg.norm((np.tan(updated) - np.tan(before))
-                * np.array([self.localizer.lens["fx"], self.localizer.lens["fy"]])
-                * ANALYSIS_WIDTH / self.localizer.lens["width"])
+            pixel_delta = self._response_pixel_delta(before, updated)
             self.trace[-1].update(
                 observed_error_radians=updated.tolist(), response=response.tolist(),
                 response_pixel_delta=float(pixel_delta),

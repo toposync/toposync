@@ -444,6 +444,46 @@ def test_cancelled_navigation_pulse_records_interruption_without_claiming_transp
     assert "stationary_verified" not in command
 
 
+@pytest.mark.parametrize("failure", [None, "small", "small_pose", "stationary", "support", "overlap", "nonfinite", "cancel"])
+def test_velocity_qualification_measures_separate_model_and_preserves_default_gain(failure):
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560,
+        "cx": 479.5, "cy": 269.5, "distortion": []}
+    match = {"verified": True, "support_scope": "distributed_scene", "overlap": .9,
+        "analysis_size": [960, 540], "homography": [[1., 0, 4.], [0, 1., 0], [0, 0, 1.]]}
+    if failure == "small": match["homography"][0][2] = .5
+    if failure == "support": match["support_scope"] = "localized_command_transition"
+    if failure == "overlap": match["overlap"] = .7
+    baseline = {"received_monotonic": time.monotonic(), "capture_evidence": {"sequence": 1}}
+    observed = {"received_monotonic": time.monotonic(), "capture_evidence": {"sequence": 2}}
+    calls = []
+
+    async def pulse(axis, sign, duration, **options):
+        calls.append((axis, sign, duration, options))
+        if failure == "cancel": raise asyncio.CancelledError()
+        return {"frame": observed, "stable": True, "stationary": failure == "stationary", "match": match}
+
+    scanner = SimpleNamespace(last_frame=baseline, checkpoint={}, _check=lambda: None,
+        _persist=AsyncMock(), _pulse=pulse, capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, SimpleNamespace(lens=lens))
+    navigator.response["pan"] = np.array([.1, .2])
+    navigator.locate = AsyncMock(return_value={"rotation_matrix": np.eye(3)})
+    navigator._error = lambda target, located: np.array([0., 0.]) if not calls else np.array([
+        float("nan") if failure == "nonfinite" else .002 if failure == "small_pose" else .008, 0.])
+    if failure:
+        with pytest.raises(asyncio.CancelledError if failure == "cancel" else PanoramaCaptureError):
+            asyncio.run(navigator.qualify_velocity("pan", -1, .2))
+        assert navigator.trace[-1]["response_qualified"] is False
+    else:
+        result = asyncio.run(navigator.qualify_velocity("pan", -1, .2))
+        assert result["response_qualified"] is True
+        assert result["response"] == pytest.approx([-.008/.12, 0.])
+        assert result["capture_evidence"] == {"sequence": 2}
+        assert result["speed"] == .2 and result["direction"] == -1
+    assert calls == [("pan", -1, .12, {"speed": .2, "expected_frame": baseline})]
+    assert navigator.response["pan"] == pytest.approx([.1, .2])
+
+
 def test_navigation_consumes_confirmed_fresh_observation_without_renewing_ranked_frame():
     import time
     ranked = {'received_monotonic': time.monotonic(), 'sequence': 1}

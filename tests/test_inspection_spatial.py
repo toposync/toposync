@@ -95,6 +95,34 @@ def test_visual_panorama_mapping_remains_visible_during_motion_only_for_its_exac
     assert visual["properties"]["mapping_reason"] == "mapping_frame_mismatch"
 
 
+@pytest.mark.parametrize("reason", [
+    "panorama_visual_support_insufficient", "panorama_frame_binding_mismatch",
+    "panorama_projection_outside_support",
+])
+def test_mapping_inspection_preserves_operator_failure_during_motion(reason):
+    source = packet()
+    source.payload.update(
+        mapping={"status": "unmapped", "reason": reason, "composition_id": "synthetic"},
+        pan_tilt_zoom_state={"geometry_safe": False, "move_status": "moving"},
+    )
+    visual = InspectionVisual.model_validate(mapping_visual(source))
+    assert visual.state == "mapping_unavailable" and not visual.points
+    assert visual.properties["mapping_reason"] == reason
+    assert "world_x" not in visual.properties
+
+
+@pytest.mark.parametrize("reason", [None, "", "invalid reason", "x" * 65])
+def test_mapping_inspection_uses_pose_fallback_without_a_valid_operator_reason(reason):
+    source = packet()
+    source.payload.update(
+        mapping={"status": "unmapped", "reason": reason},
+        pan_tilt_zoom_state={"geometry_safe": False, "move_status": "moving"},
+    )
+    visual = InspectionVisual.model_validate(mapping_visual(source))
+    assert visual.state == "mapping_unavailable" and not visual.points
+    assert visual.properties["mapping_reason"] == "unsafe_pose"
+
+
 def test_zone_filter_and_occurrence_report_observed_membership_without_reprojecting_boundaries():
     async def scenario():
         source = packet()

@@ -30,7 +30,9 @@ def mapping_visual(packet, *, world_field="world", produced=True):
     if (not visual_pose and pose
             and (pose.get("geometry_safe") is not True or pose.get("move_status") == "moving")):
         valid = False
-        properties["mapping_reason"] = "unsafe_pose"
+        # Visual localization can fail independently of the numeric pose gate.
+        # Keep the operator's bounded reason instead of hiding it during motion.
+        properties.setdefault("mapping_reason", "unsafe_pose")
     if mapping.get("pose_evidence") == "visual_frame_rotation" and not visual_pose:
         valid = False
         properties["mapping_reason"] = "mapping_frame_mismatch"

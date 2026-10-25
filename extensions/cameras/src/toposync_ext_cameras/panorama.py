@@ -209,6 +209,7 @@ class VelocityProbe(_Input):
     axis: Literal["pan", "tilt"]
     direction: int = Field(strict=True, ge=-1, le=1)
     speed: float = Field(strict=True, gt=.1, le=.2)
+    duration_seconds: float = Field(default=.12, strict=True, ge=.12, le=.24)
 
     @model_validator(mode="after")
     def signed_direction(self):

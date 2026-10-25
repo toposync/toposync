@@ -5338,7 +5338,7 @@ class _Scan:
         if speed is None or not 0 < speed <= 0.2:
             raise PanoramaCaptureError("invalid_velocity")
         if speed > DEFAULT_CONTINUOUS_PULSE_SPEED and (
-            duration > 0.12 or expected_frame is None or self.physical_state != "stopped"
+            duration > 0.24 or expected_frame is None or self.physical_state != "stopped"
             or self.returning or intent_type != "seek_pulse"
             or self.checkpoint.get("continuous_cursor") is not None
         ):

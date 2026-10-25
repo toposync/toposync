@@ -445,7 +445,8 @@ def test_cancelled_navigation_pulse_records_interruption_without_claiming_transp
 
 
 @pytest.mark.parametrize("failure", [None, "small", "small_pose", "stationary", "support", "overlap", "nonfinite", "cancel"])
-def test_velocity_qualification_measures_separate_model_and_preserves_default_gain(failure):
+@pytest.mark.parametrize("duration", [.12, .24])
+def test_velocity_qualification_measures_separate_model_and_preserves_default_gain(failure, duration):
     import time
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560,
         "cx": 479.5, "cy": 269.5, "distortion": []}
@@ -472,15 +473,16 @@ def test_velocity_qualification_measures_separate_model_and_preserves_default_ga
         float("nan") if failure == "nonfinite" else .002 if failure == "small_pose" else .008, 0.])
     if failure:
         with pytest.raises(asyncio.CancelledError if failure == "cancel" else PanoramaCaptureError):
-            asyncio.run(navigator.qualify_velocity("pan", -1, .2))
+            asyncio.run(navigator.qualify_velocity("pan", -1, .2, duration))
         assert navigator.trace[-1]["response_qualified"] is False
     else:
-        result = asyncio.run(navigator.qualify_velocity("pan", -1, .2))
+        result = asyncio.run(navigator.qualify_velocity("pan", -1, .2, duration))
         assert result["response_qualified"] is True
-        assert result["response"] == pytest.approx([-.008/.12, 0.])
+        assert result["response"] == pytest.approx([-.008/duration, 0.])
+        assert result["duration_seconds"] == duration
         assert result["capture_evidence"] == {"sequence": 2}
         assert result["speed"] == .2 and result["direction"] == -1
-    assert calls == [("pan", -1, .12, {"speed": .2, "expected_frame": baseline})]
+    assert calls == [("pan", -1, duration, {"speed": .2, "expected_frame": baseline})]
     assert navigator.response["pan"] == pytest.approx([.1, .2])
 
 

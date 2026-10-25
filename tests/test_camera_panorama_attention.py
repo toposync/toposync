@@ -572,7 +572,8 @@ async def test_borrowed_camera_never_acquires_renews_or_releases_attention_lease
 
 
 @pytest.mark.parametrize("changes", [{"axis": "zoom"}, {"direction": 0}, {"direction": True},
-    {"speed": True}, {"speed": .1}, {"speed": .201}, {"speed": float("nan")}])
+    {"speed": True}, {"speed": .1}, {"speed": .201}, {"speed": float("nan")},
+    {"duration_seconds": .241}, {"duration_seconds": .119}, {"duration_seconds": True}])
 def test_velocity_probe_request_rejects_unsupported_axis_direction_and_speed(changes):
     with pytest.raises(ValueError):
         QualifyAttention(revision=2, home={"x": 0, "z": 0}, target={"x": 1, "z": 0},
@@ -610,7 +611,7 @@ async def test_supervised_round_trip_is_the_only_qualification_writer(failure, p
             "return" if failure == "pending_return" else "visual_original_ray": "preserve"}
     if failure == "reference":
         service._current.side_effect = [None, HTTPException(409, "reference changed")]
-    probe = {"axis": "pan", "direction": -1, "speed": .2}
+    probe = {"axis": "pan", "direction": -1, "speed": .2, "duration_seconds": .24}
     evidence = {"verified": True, "stages": stages}
     if probe_requested:
         evidence["velocity_probe"] = {**probe, "response_qualified": True}
@@ -1032,7 +1033,7 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
             'measurement': {'center_error_pixels': 1}}
 
     navigator.aim = AsyncMock(side_effect=aim)
-    probe = {'axis': 'pan', 'direction': -1, 'speed': .2}
+    probe = {'axis': 'pan', 'direction': -1, 'speed': .2, 'duration_seconds': .24}
     navigator.qualify_velocity = AsyncMock(return_value={**probe, 'response_qualified': True})
     if outcome == 'velocity_failure':
         navigator.qualify_velocity.side_effect = PanoramaCaptureError('visual_response_unavailable')

@@ -1165,18 +1165,21 @@ class VisualNavigator:
         self._record_timing("movement_cycle", started, axis=axis, amount=amount)
         await self.scanner._persist()
 
-    async def qualify_velocity(self, axis: str, direction: int, speed: float) -> dict[str, Any]:
+    async def qualify_velocity(self, axis: str, direction: int, speed: float,
+                               duration_seconds: float = DEFAULT_NAVIGATION_PROBE_SECONDS) -> dict[str, Any]:
         """Measure one short probe without replacing the default-speed model."""
         if (axis not in {"pan", "tilt"} or isinstance(direction, bool) or direction not in {-1, 1}
                 or not isinstance(speed, (int, float)) or isinstance(speed, bool)
-                or not DEFAULT_CONTINUOUS_PULSE_SPEED < speed <= .2):
+                or not DEFAULT_CONTINUOUS_PULSE_SPEED < speed <= .2
+                or not isinstance(duration_seconds, (int, float)) or isinstance(duration_seconds, bool)
+                or not DEFAULT_NAVIGATION_PROBE_SECONDS <= duration_seconds <= .24):
             raise PanoramaCaptureError("invalid_velocity")
         if self.scanner.physical_state != "stopped":
             raise PanoramaCaptureError("stop_unconfirmed")
         located = await self.locate()
         target = _rotation_basis(located["rotation_matrix"])[:, 2]
         before = self._error(target, located)
-        amount = direction * DEFAULT_NAVIGATION_PROBE_SECONDS
+        amount = direction * duration_seconds
         self.scanner.checkpoint["navigation_step"] = {"kind": "velocity_qualification",
             "response_qualified": False, "axis": axis, "speed": speed, "direction": direction}
         await self._pulse(axis, amount, speed=speed)

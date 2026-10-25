@@ -9878,7 +9878,7 @@ def test_fine_pulse_never_uses_unqualified_smaller_velocity(tmp_path):
     assert not camera.events
 
 
-@pytest.mark.parametrize("speed,duration", [(0.025, 0.05), (0.2, 0.12)])
+@pytest.mark.parametrize("speed,duration", [(0.025, 0.05), (0.2, 0.12), (0.2, 0.24)])
 def test_pulse_can_explicitly_qualify_a_bounded_velocity(tmp_path, speed, duration):
     import time
     camera = SimulatedCamera()
@@ -9917,7 +9917,7 @@ def test_pulse_can_explicitly_qualify_a_bounded_velocity(tmp_path, speed, durati
 
 
 @pytest.mark.parametrize("state,baseline,duration", [
-    ("moving", True, .12), ("stopped", False, .12), ("stopped", True, .121),
+    ("moving", True, .12), ("stopped", False, .12), ("stopped", True, .241),
 ])
 def test_faster_probe_requires_stopped_baseline_and_short_duration(tmp_path, state, baseline, duration):
     camera = SimulatedCamera()

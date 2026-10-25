@@ -57,10 +57,10 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
 @pytest.mark.parametrize("reuse", ["same", "revision_changed", "optics_changed", "expired", "stop_unknown",
     "current_arrival", "current_return", "expired_during_status", "frame_aged_during_status",
     "stop_failed_after_expiry", "return_needs_correction", "cancel_receipt", "cancel_status",
-    "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence",
+    "clock_jump", "clock_jump_failure", "metadata_same", "metadata_revision", "metadata_fence", "metadata_lease",
     "metadata_geometry", "metadata_refresh_failure", "moving_during_cleanup", "lost_during_cleanup",
     "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
-    "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_passive", "metadata_combined",
+    "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_combined",
     "prepared_reference", "dynamic_reference_ignored", "cancel_initial_localization",
     "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup", "external_cancel_cleanup"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
@@ -403,13 +403,10 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     if reuse.startswith("metadata_"):
         assert service._attention_metadata["camera"]["camera"] is camera
         assert trace["discovery_reused"] is False
-        if reuse == "metadata_passive":
-            service._attention_metadata["camera"]["passive"] = True
-            service._attention_metadata["camera"]["binding"]["control"] = None
         following = SimpleNamespace(discover=AsyncMock(return_value={}), acquire=AsyncMock(),
             position=AsyncMock(return_value={}), close=AsyncMock(),
             reuse_discovery_from=Mock(return_value=True), refresh_discovery_observations=AsyncMock(return_value={}))
-        service.camera_factory = lambda **kwargs: following
+        service.camera_factory = Mock(return_value=following)
         if reuse == "metadata_combined":
             following.acquire_with_capabilities = AsyncMock(return_value={"fresh": True})
         if reuse == "metadata_revision":
@@ -427,8 +424,10 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
                                           else "following_observation_expired"))
             if reuse == "metadata_stop_failure":
                 service._attention_stopped_control.return_value = False
+        current_control = {"lease_id": "next-attention" if reuse == "metadata_lease" else "attention",
+                           "fence": 8 if reuse in {"metadata_fence", "metadata_lease"} else 7}
         operation = service._visual_operation_with_pinned_reference(None, job, {"ray": [0, 0, 1]},
-            borrowed_control={"lease_id": "attention", "fence": 8 if reuse == "metadata_fence" else 7})
+            borrowed_control=current_control)
         if interrupted:
             with pytest.raises(module.asyncio.CancelledError if reuse == "metadata_cancelled" else HTTPException):
                 await operation
@@ -454,8 +453,9 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
             assert "camera" not in service._attention_metadata
         else:
             await operation
-            expected = reuse in {"metadata_same", "metadata_passive", "metadata_combined"}
+            expected = reuse in {"metadata_same", "metadata_combined", "metadata_fence", "metadata_lease"}
             assert job["_attention_navigation_trace"]["discovery_reused"] is expected
+            assert service.camera_factory.call_args.kwargs["borrowed_control"] == current_control
             assert following.discover.await_count == int(not expected)
             assert following.refresh_discovery_observations.await_count == int(expected and reuse != "metadata_combined")
             assert following.acquire.await_count == int(reuse != "metadata_combined")
@@ -743,8 +743,7 @@ async def test_passive_attention_preparation_never_acquires_or_captures(monkeypa
         camera.close.assert_awaited_once()
     assert bool(service._attention_metadata) is (failure is None)
     if failure is None:
-        assert service._attention_metadata["camera"]["binding"]["control"] is None
-        assert service._attention_metadata["camera"]["passive"] is True
+        assert "control" not in service._attention_metadata["camera"]["binding"]
 
 
 @pytest.mark.anyio

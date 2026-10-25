@@ -1614,7 +1614,6 @@ class PanoramaService:
         self._navigation_scanners[job["id"]] = scanner
         metadata_binding = {key: job.get(key) for key in
             ("id", "revision", "source_id", "_source_digest", "_composition_digest", "source_panorama")}
-        metadata_binding["control"] = borrowed_control
         metadata = getattr(self, "_attention_metadata", {}).pop(job["camera_id"], None)
         discovery_reused = False
         image_url, evidence = "", {}
@@ -1629,10 +1628,10 @@ class PanoramaService:
         job["stop_confirmed"] = False
         try:
             discovery_reused = bool(borrowed_control is not None and metadata
-                and metadata["binding"] == (dict(metadata_binding, control=None)
-                    if metadata.get("passive") is True else metadata_binding)
+                and metadata["binding"] == metadata_binding
                 and callable(getattr(camera, "reuse_discovery_from", None))
                 and camera.reuse_discovery_from(metadata["camera"]))
+            # Protocol metadata crosses leases; acquire still verifies the new owner's fence and current optics.
             if discovery_reused and callable(getattr(camera, "acquire_with_capabilities", None)):
                 scanner.capabilities = await camera.acquire_with_capabilities()
                 prepared("discovered_and_acquired")
@@ -2360,7 +2359,7 @@ class PanoramaService:
         if camera_id in self.busy or any(job.get(key) != value for key, value in binding.items()):
             return {"prepared": False}
         self._attention_metadata[camera_id] = {
-            "binding": {**binding, "control": None}, "camera": camera, "passive": True}
+            "binding": binding, "camera": camera}
         return {"prepared": True}
 
     async def resolve_target(self, *, camera_id: str, source_id: str, composition_id: str,

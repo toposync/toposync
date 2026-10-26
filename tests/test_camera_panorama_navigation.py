@@ -3281,10 +3281,16 @@ def test_moving_subject_replay_exposes_speed_limit_without_relaxing_arrival(monk
                 assert planned == pytest.approx(direction())
             prediction = scanner.checkpoint["navigation_step"]["prediction"]
             if prediction:
-                assert self.command_samples, "Prediction requires an observed complete motion cycle"
-                previous = self.command_samples[-1]
-                assert prediction["cycle_seconds"] == pytest.approx(
-                    previous["time_after"] - previous["time"] + self.measurement_seconds)
+                if self.command_samples:
+                    previous = self.command_samples[-1]
+                    assert prediction["cycle_seconds"] == pytest.approx(
+                        previous["time_after"] - previous["time"] + self.measurement_seconds)
+                else:
+                    # A rejected dispatch can leave measured subject history
+                    # before the first physical command, without a motor cycle.
+                    assert self.dispatch_rejections and prediction["motion_cycle_seconds"] == 0
+                    assert 0 < prediction["cycle_seconds"] <= .1
+                    assert prediction["horizon_seconds"] <= 1
             self.command_samples.append({"time": elapsed[0], "observed_angle": target_angle(),
                 "camera_angle_before": camera_angle[0], "amount": amount,
                 "measurement_seconds": self.measurement_seconds, "prediction": prediction})
@@ -3650,6 +3656,54 @@ def test_feedback_shortened_pulse_remeasures_latest_target_without_learning_full
     assert navigator.trace[0]["response_qualified"] is False
     assert navigator.trace[0]["stationary_verified"] is False
     assert navigator.motion_feedback_target is None and navigator.dispatch_guard is None
+
+
+@pytest.mark.parametrize("support", ["qualified", "expired", "no_coverage", "insufficient_history"])
+def test_prepared_target_age_can_change_initial_acquisition_direction(monkeypatch, support):
+    import toposync_ext_cameras.panorama_navigation as navigation
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
+    lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}, "velocity_supported": True},
+        checkpoint={}, physical_state="stopped", last_frame={"received_monotonic": 10., "capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference, coverage_mask=np.ones((20, 40)))
+    if support == "no_coverage":
+        localizer.coverage_mask[:] = 0
+    motion = navigation.TargetMotion()
+    for index in range(3):
+        timestamp, angle = 8.7 + index * .4, -.11 + index * .04
+        observation = {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+            "capture_instance": "capture", "generation": 1, "sequence": index + 1,
+            "observed_monotonic": timestamp}
+        target = np.array([np.cos(angle), np.sin(angle), 0.])
+        if support != "insufficient_history" or index == 2:
+            motion.observe(observation, target, timestamp)
+    if support == "expired":
+        monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.4)
+    class Planned(Exception):
+        pass
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .9}
+        async def _target_measurement(self, ray, located):
+            return localized_axis_measurement(ray, lens, located)
+        async def _pulse(self, axis, amount, **options):
+            prediction = scanner.checkpoint["navigation_step"]["prediction"]
+            assert axis == "pan"
+            if support == "qualified":
+                assert amount > 0, "The observed target has already crossed the old direction"
+                assert prediction["observation_age_seconds"] == pytest.approx(.5)
+                assert prediction["horizon_seconds"] <= .8
+            else:
+                assert prediction is None and amount < 0
+            raise Planned()
+    navigator = Navigator(scanner, localizer)
+    navigator.response["pan"] = np.array([-.2, 0.])
+    with pytest.raises(Planned):
+        asyncio.run(navigator.aim(target, target_provider=lambda: target,
+            target_observation_provider=lambda: observation, target_motion=motion))
 
 
 def test_unqualified_probe_keeps_live_target_guard_until_observation_finishes():

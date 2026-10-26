@@ -293,6 +293,41 @@ def test_velocity_feedback_uses_measured_in_motion_rate_and_fresh_dispatch(monke
         assert navigator.trace[-1]["velocity_updates"][0] is entry
 
 
+@pytest.mark.parametrize("target_age", [0., .3, .5, .9])
+def test_following_control_aligns_target_and_camera_observation_times(monkeypatch, target_age):
+    now, pose_age = 10., .2
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: now)
+    model = localizer()
+    model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    model.coverage_mask = np.ones((20, 40), bool)
+    model.target_reference = lambda _: {"id": "reference"}
+    navigator = navigation.VisualNavigator(SimpleNamespace(), model)
+    motion = navigation.TargetMotion()
+    for index in range(3):
+        timestamp = now - target_age - .8 + index * .4
+        angle = .05 - .1 * (now - timestamp)
+        ray = np.array([np.cos(angle), np.sin(angle), 0.])
+        motion.observe({"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+            "capture_instance": "source", "generation": 1, "sequence": index + 1,
+            "observed_monotonic": timestamp}, ray, timestamp)
+    navigator.motion_prediction = lambda geometry, seconds: navigator._predict_target(motion, geometry, 12., seconds)
+    camera_angle = .04 - .08 * pose_age
+    c, s = np.cos(camera_angle), np.sin(camera_angle)
+    geometry = {"rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]],
+        "analysis_width": 960, "validation_p95_pixels": 1., "validation_matches": 24, "inlier_fraction": .9}
+    rate = {"rate": np.array([-.08, 0.]), "interval_seconds": .1, "observed_response_seconds": .4}
+    control = navigator._following_control(ray, geometry, rate, pose_age)
+    if target_age == .9:
+        assert np.array_equal(control["target_rate"], np.zeros(2))
+        assert control["target_observation_age_seconds"] is None
+        assert control["control_error"][0] == pytest.approx(.01 - .1 * target_age)
+        return
+    assert control["target_rate"][0] == pytest.approx(.1, abs=.001)
+    assert control["target_observation_age_seconds"] == pytest.approx(target_age)
+    # Current target (.05) minus current camera (.04), despite different publication ages.
+    assert control["control_error"][0] == pytest.approx(.01, abs=.001)
+
+
 def test_following_progress_emits_once_per_frame_without_arrival_or_visibility_claim(monkeypatch):
     monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
     model = localizer()

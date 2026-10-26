@@ -11090,8 +11090,9 @@ def test_following_window_requires_bounded_live_velocity_control(tmp_path, case)
     assert not camera.events
 
 
-@pytest.mark.parametrize("delay_frames,localization_seconds", [(0, 0), (2, 0), (4, 0), (5, 0), (4, .25)])
-def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path, monkeypatch, delay_frames, localization_seconds):
+@pytest.mark.parametrize("delay_frames,localization_seconds,target_delay", [(0, 0, 0), (2, 0, 0),
+    (4, 0, 0), (5, 0, 0), (4, .25, 0), (4, .25, .3)])
+def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path, monkeypatch, delay_frames, localization_seconds, target_delay):
     from toposync_ext_cameras import panorama_navigation as navigation
     history, errors, updates = [], [], []
     class Camera(SimulatedCamera):
@@ -11142,6 +11143,9 @@ def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path,
     navigator.pulse_limits["pan"] = 1.2
     motion = navigation.TargetMotion()
     ray = [np.array([1., 0., 0.])]
+    target_queue = []
+    if target_delay:
+        ray[0] = np.array([np.cos(.26), np.sin(.26), 0.])
     observer = SimpleNamespace(closed=False, latest=None, command=1)
     navigator.motion_feedback_target = lambda: (ray[0], 12.)
     navigator.motion_prediction = lambda geometry, seconds: navigator._predict_target(motion, geometry, 12., seconds)
@@ -11161,14 +11165,19 @@ def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path,
     def observe(frame):
         if camera.started is None: return
         target_angle = (.26 if localization_seconds else .06) + (.05 if localization_seconds else .15) * max(0., frame["test_exposure"] - camera.started)
-        ray[0] = np.array([np.cos(target_angle), np.sin(target_angle), 0.])
+        observed_ray = np.array([np.cos(target_angle), np.sin(target_angle), 0.])
         capture = {"capture_instance": "test", "generation": 1, "sequence": frame["sequence"]}
         c, s = np.cos(frame["test_angle"]), np.sin(frame["test_angle"])
         geometry = {"rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]],
             "analysis_width": 960, "validation_p95_pixels": 1., "validation_matches": 24,
             "inlier_fraction": .9, "capture_evidence": capture}
-        motion.observe({"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
-            **capture, "observed_monotonic": camera.now}, ray[0], camera.now)
+        if not target_delay or frame["sequence"] % 3 == 0:
+            target_queue.append((camera.now + target_delay, observed_ray,
+                {"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+                 **capture, "observed_monotonic": camera.now}))
+        while target_queue and target_queue[0][0] <= camera.now + 1e-9:
+            _, ray[0], target_observation = target_queue.pop(0)
+            motion.observe(target_observation, ray[0], camera.now)
         pending[0] = {"status": "localized", "command": 1, "frame_received_monotonic": camera.now,
             "capture_evidence": capture, "frame_geometry": geometry}
         publish()
@@ -11197,7 +11206,9 @@ def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path,
         "errors_sample": errors[::5], "poses_sample": published[::3],
         "velocities": [entry["velocity"] for entry in result["motion_velocity_updates"]]}
 
-    print("FOLLOWING_METRICS", {"delay_frames": delay_frames, "localization_seconds": localization_seconds, "p95_pixels": float(np.percentile(following, 95) * 560), "updates_seconds": [round(t-camera.started, 3) for t in updates], "feedback_stop": result.get("motion_feedback_stop")})
+    print("FOLLOWING_METRICS", {"delay_frames": delay_frames, "localization_seconds": localization_seconds,
+        "target_delay": target_delay, "p95_pixels": float(np.percentile(following, 95) * 560),
+        "updates_seconds": [round(t-camera.started, 3) for t in updates], "feedback_stop": result.get("motion_feedback_stop")})
 
 
 @pytest.mark.parametrize("phase", ["before_transport", "during_motion", "after_stop"])

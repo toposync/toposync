@@ -1,5 +1,22 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Idade do alvo na aquisição e no controle — 23/10/2026
+
+O navegador compartilhado alinha a observação do alvo com sua idade de publicação,
+separadamente da idade da pose da câmera. Usa a velocidade estimada pelo histórico
+existente, sem presumir que o atraso observado seja exclusivamente do motor ou do
+vídeo. Sem histórico, cobertura ou concordância suficientes, não extrapola.
+
+A primeira aquisição também pode usar o histórico preparado antes do movimento;
+não precisa esperar um ciclo mecânico para corrigir uma direção já ultrapassada
+pelo alvo. A previsão conserva o horizonte limitado pelo histórico e não certifica
+chegada, visibilidade ou capacidade de movimento. O planejamento e a autoridade
+existentes continuam responsáveis por qualificar cada comando.
+
+Regressões isoladas e seis cenários sintéticos de feedback aprovados. A travessia
+completa pelo centro e o enquadramento sustentado em hardware continuam pendentes;
+esta correção não constitui aceite móvel, Wide ou Zoom.
+
 ## Histórico do alvo durante a preparação — 23/10/2026
 
 A aquisição de atenção aproveita a espera pela referência estacionária para

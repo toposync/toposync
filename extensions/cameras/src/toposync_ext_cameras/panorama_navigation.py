@@ -1291,17 +1291,21 @@ class VisualNavigator:
     def _following_control(self, ray, geometry, model, pose_age):
         error = self._error(ray, geometry)
         target_rate = np.zeros(2)
+        target_age = 0.
         prediction = self.motion_prediction(geometry, None) if self.motion_prediction else None
         if prediction is not None:
             forecast = prediction[0]
             target_rate = (self._error(forecast["ray"], geometry) - error) / forecast["horizon_seconds"]
+            target_age = forecast["observation_age_seconds"]
         feedback_delay = model.get("observed_response_seconds", 0) + pose_age
         # A new command cannot yield a qualified replacement rate until its
         # visual response plus two pose intervals and localization have arrived.
         # Damp over that measured feedback cycle, not just the first effect.
         correction_seconds = max(.2, 2 * (feedback_delay + 2 * model["interval_seconds"]))
-        control_error = error + model["rate"] * pose_age
+        # Target and camera observations can arrive at different times.
+        control_error = error + target_rate * target_age + model["rate"] * pose_age
         return {"target_rate": target_rate, "control_error": control_error,
+            "target_observation_age_seconds": target_age if prediction is not None else None,
             "correction_seconds": correction_seconds,
             "desired_rate": -target_rate - .8 * control_error / correction_seconds}
 
@@ -1426,6 +1430,7 @@ class VisualNavigator:
                     "comparison_rate_radians_per_second": model["comparison_rate"].tolist(),
                     "qualified_velocity": model["velocity"], "model_age_seconds": now - model["observation"]["frame_received_monotonic"],
                     "target_rate_radians_per_second": target_rate.tolist(), "correction_seconds": correction_seconds,
+                    "target_observation_age_seconds": control.get("target_observation_age_seconds"),
                     "control_error_radians": control_error.tolist(),
                     "interval_seconds": interval, "capture_evidence": deepcopy(model["capture_evidence"])}
             if abs(proposed - current_speed) < (.01 * speed if renewal else .01):
@@ -1964,15 +1969,20 @@ class VisualNavigator:
                 continue
             prediction = None
             supported_axes = [axis for axis in ("pan", "tilt") if self.scanner.capabilities.get("axes", {}).get(axis) is True]
-            if final and cycle_seconds > 0 and supported_axes and all(axis in self.response for axis in supported_axes):
+            forecast = None
+            if final and cycle_seconds == 0 and target_observation_provider is not None:
+                # Prepared observations can already be old at first acquisition.
+                # Use their bounded history; do not invent a motor-cycle duration.
+                forecast = self._predict_target(motion, located, maximum_error_pixels, None)
+            elif final and cycle_seconds > 0 and supported_axes and all(axis in self.response for axis in supported_axes):
                 # Arrival also waits for target measurement after the motor/localization cycle.
                 forecast = self._predict_target(motion, located, maximum_error_pixels, cycle_seconds + measurement_seconds)
-                if forecast is not None:
-                    candidate, measured = forecast
-                    prediction = {**candidate, "motion_cycle_seconds": cycle_seconds, "measurement_seconds": measurement_seconds}
-                    target = np.asarray(candidate["ray"])
-                    error = self._error(target, located)
-                    self.scanner.checkpoint["navigation_target_predictions"] = self.scanner.checkpoint.get("navigation_target_predictions", 0) + 1
+            if forecast is not None:
+                candidate, measured = forecast
+                prediction = {**candidate, "motion_cycle_seconds": cycle_seconds, "measurement_seconds": measurement_seconds}
+                target = np.asarray(candidate["ray"])
+                error = self._error(target, located)
+                self.scanner.checkpoint["navigation_target_predictions"] = self.scanner.checkpoint.get("navigation_target_predictions", 0) + 1
             near = final and np.linalg.norm(error) < 0.04
             if near and fine >= MAXIMUM_LIVE_FINE_CORRECTIONS:
                 raise PanoramaCaptureError("visual_arrival_unconfirmed")

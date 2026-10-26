@@ -62,7 +62,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "parallel_reference", "parallel_reference_failure", "metadata_cancelled",
     "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_combined",
     "prepared_reference", "dynamic_reference_ignored", "cancel_initial_localization",
-    "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup", "external_cancel_cleanup"])
+    "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup", "external_cancel_cleanup",
+    "response_cancelled", "response_expired", "response_empty", "response_stop_failure", "response_control_failure"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -154,6 +155,14 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         service.localize_frame.side_effect = module.asyncio.CancelledError()
     service._localizers = {("artifact", "geometry"): SimpleNamespace(lens=arrival_lens)}
     service._attention_stopped_control = AsyncMock(return_value=True)
+    if reuse.startswith("response_"):
+        navigator.aim.side_effect = (module.asyncio.CancelledError() if reuse == "response_cancelled"
+            else PanoramaCaptureError("control_lease_lost" if reuse == "response_control_failure"
+                                      else "following_observation_expired"))
+        if reuse == "response_empty":
+            navigator.response = {}
+        if reuse == "response_stop_failure":
+            service._attention_stopped_control.return_value = False
     if reuse in {"prepared_reference", "dynamic_reference_ignored"}:
         reference = {"destination": {"kind": "preset", "token": "prepared"}}
         service.native_references = Mock(return_value=[reference])
@@ -237,6 +246,30 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
         **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}))
+    if reuse.startswith("response_"):
+        with pytest.raises(module.asyncio.CancelledError if reuse == "response_cancelled" else HTTPException):
+            await operation
+        retained = reuse in {"response_cancelled", "response_expired"}
+        assert ("camera" in service._attention_responses) is retained
+        scanner._confirm_stop.assert_awaited()
+        camera.close.assert_awaited_once()
+        assert not service._navigation_scanners and not service.busy
+        if retained:
+            cached_at = service._attention_responses["camera"]["observed_monotonic"]
+            assert job["stop_confirmed"] is True
+            assert job["_attention_navigation_trace"]["error_code"] == (
+                "capture_cancelled" if reuse == "response_cancelled" else "following_observation_expired")
+            navigator.response["pan"][0] = 99
+            assert service._attention_responses["camera"]["response"]["response"]["pan"][0] == .2
+            navigator.response, navigator.probe_durations, navigator.commands = {}, {}, 0
+            navigator.aim.side_effect = None
+            await service._visual_operation_with_pinned_reference(None, job, {"ray": [0, 0, 1]},
+                borrowed_control={"lease_id": "next-attention", "fence": 8})
+            assert navigator.response["pan"][0] == .2
+            assert navigator.probe_durations == {"tilt": .48}
+            assert service._attention_responses["camera"]["observed_monotonic"] == cached_at
+            assert "response_reused_at" in job["_attention_navigation_trace"]["preparation"]
+        return
     if reuse == "external_cancel_cleanup":
         task = module.asyncio.create_task(operation)
         await module.asyncio.wait_for(cleanup_started.wait(), 1)

@@ -1910,7 +1910,8 @@ class PanoramaService:
                 if borrowed_control is None:
                     job["_navigation_checkpoint"] = scanner.checkpoint
                 if response_binding is not None and navigator is not None:
-                    if (not failure_code and job.get("stop_confirmed")
+                    # Losing the target does not invalidate a measured motor response after confirmed Stop.
+                    if (failure_code in {None, "capture_cancelled", "following_observation_expired"} and job.get("stop_confirmed")
                             and getattr(navigator, "commands", 0) > 0 and getattr(navigator, "response", None)):
                         # shortcut: reuse expires after five minutes; longer reuse needs a durable actuator calibration.
                         self._attention_responses[job["camera_id"]] = {

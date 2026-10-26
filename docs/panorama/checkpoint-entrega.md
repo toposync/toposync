@@ -1,5 +1,31 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Aquisição móvel e reversão na janela compartilhada — 23/10/2026
+
+Um alvo com movimento comprovado pelo histórico pode entrar na janela contínua
+usando a duração já qualificada para o eixo, mesmo quando a correção estática seria
+curta demais para receber feedback. Exige velocidade contínua, resposta medida nos
+dois sentidos, capacidade atual, geometria e observações válidas. Correções finas,
+sondagens, alvos estáticos e capacidades ausentes conservam o caminho anterior.
+
+Após duas poses confirmarem o sentido, o ganho finito já medido pode orientar uma
+proposta inicial. A telemetria o identifica como estimativa, com idade original e
+sem velocidade de cruzeiro certificada. A medição de velocidade por três poses
+continua separada. O ganho anterior pode orientar propostas seguintes após o tempo
+de resposta; renovar o mesmo comando não reinicia essa espera. A pose atual usa
+movimento observado, sem atribuir a ela a velocidade antiga.
+
+Reversões exigem resposta medida no sentido solicitado; velocidades diferentes nos
+dois sentidos não são tratadas como iguais. A autoridade, o eixo, o envelope de
+velocidade, a janela de seis segundos, o limite de oito atualizações, os orçamentos
+e a parada permanecem compartilhados. Expiração da capacidade entre planejamento
+e despacho impede o comando. Não há novo controlador ou calibração obrigatória.
+
+Oito travessias sintéticas completas passaram, com publicação atrasada, atraso de
+vídeo e localização, aquisição curta ou longa e ambos os sentidos. Preservados os
+cenários anteriores de maior precisão. Isso ainda não comprova enquadramento real,
+Zoom, identidade, rastro mundial ou funcionamento em outras câmeras.
+
 ## Idade do alvo na aquisição e no controle — 23/10/2026
 
 O navegador compartilhado alinha a observação do alvo com sua idade de publicação,

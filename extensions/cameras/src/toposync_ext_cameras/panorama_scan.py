@@ -3959,10 +3959,11 @@ class _Scan:
                             start_stop(reason)
                     if plan is not None and stop_operation is None and len(velocity_updates) < 8:
                         velocity = plan.get("velocity", {})
-                        # Same axis, direction and speed envelope. Renewal requires
-                        # an explicit bounded window and never lengthens an individual pulse.
+                        # Keep the axis and speed envelope. Reversal requires measured
+                        # support in a bounded window; renewal cannot lengthen a pulse.
                         if (set(velocity) != {"pan", "tilt"}
-                                or any(_finite(v) is None or v * requested_velocity.get(axis, 0) < 0
+                                or any(_finite(v) is None or (v * requested_velocity.get(axis, 0) < 0
+                                    and not (window_deadline is not None and plan.get("reversal_qualified") is True))
                                     or abs(v) > abs(requested_velocity.get(axis, 0)) for axis, v in velocity.items())
                                 or not any(velocity.values()) or not callable(plan.get("dispatch_guard"))
                                 or not callable(plan.get("reserve"))):

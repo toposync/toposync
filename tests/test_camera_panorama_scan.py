@@ -11014,7 +11014,7 @@ def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypa
         assert not updates
 
 
-@pytest.mark.parametrize("case", ["following", "expired", "cancelled", "no_observations", "late_dispatch", "oversized", "renewal_without_window"])
+@pytest.mark.parametrize("case", ["following", "expired", "cancelled", "no_observations", "late_dispatch", "oversized", "renewal_without_window", "qualified_reverse", "unqualified_reverse"])
 def test_following_window_renews_short_commands_without_stopping_between_them(tmp_path, monkeypatch, case):
     updates, offered, contexts = [], [], []
     class Camera(SimulatedCamera):
@@ -11042,7 +11042,8 @@ def test_following_window_renews_short_commands_without_stopping_between_them(tm
         if camera.now + .3 >= context.get("window_deadline_monotonic", float("inf")):
             return None
         contexts.append(context)
-        return {"velocity": {"pan": .05, "tilt": 0.},
+        return {"velocity": {"pan": -.05 if case in {"qualified_reverse", "unqualified_reverse"} else .05, "tilt": 0.},
+            "reversal_qualified": case == "qualified_reverse",
             "duration_seconds": 1.3 if case == "oversized" else 1.2,
             "frame_received_monotonic": camera.now,
             "capture_evidence": {"capture_instance": camera.capture_instance, "generation": 1, "sequence": camera.sequence},
@@ -11052,7 +11053,7 @@ def test_following_window_renews_short_commands_without_stopping_between_them(tm
             frame_observer=offered.append, observation_guard=target_guard,
             motion_stop_requested=lambda: None, motion_velocity_update=feedback,
             **({"following_seconds": 3.2} if case != "renewal_without_window" else {}))
-    errors = {"expired": "following_observation_expired", "late_dispatch": "visual_feedback_expired",
+    errors = {"expired": "following_observation_expired", "late_dispatch": "visual_feedback_expired", "unqualified_reverse": "invalid_visual_feedback",
         "oversized": "invalid_visual_feedback", "renewal_without_window": "invalid_visual_feedback"}
     if case == "cancelled":
         with pytest.raises(asyncio.CancelledError): asyncio.run(scenario())
@@ -11062,7 +11063,7 @@ def test_following_window_renews_short_commands_without_stopping_between_them(tm
         result = asyncio.run(scenario())
         assert result["stable"] is True and scanner.physical_state == "stopped"
     assert _event_names(camera).count("stop") == 1
-    if case in {"following", "expired", "cancelled"}:
+    if case in {"following", "expired", "cancelled", "qualified_reverse"}:
         assert len(updates) >= 2
         assert updates[-1][0] > contexts[0]["deadline_monotonic"]
         hard_deadline = contexts[0]["window_deadline_monotonic"]
@@ -11292,3 +11293,144 @@ def test_optional_replay_storage_failure_preserves_motion_outcome_and_existing_e
     assert 'replay_id' not in attempt.value
     assert old.read_text() == 'preserved evidence' and old_pixels.read_bytes() == b'preserved pixels'
     assert set(tmp_path.iterdir()) == {old, old_pixels}
+
+
+@pytest.mark.parametrize('source_delay', [0.0, 0.3])
+@pytest.mark.parametrize('target_start', [-0.3, -0.22], ids=['long_acquisition', 'short_acquisition'])
+@pytest.mark.parametrize('target_direction', [-1, 1], ids=['right_to_left', 'left_to_right'])
+def test_prepared_moving_acquisition_crosses_center_with_delayed_images(tmp_path, monkeypatch, source_delay, target_start, target_direction, record_property):
+    """Synthetic full acquisition with prepared response, delayed video, and source observations."""
+    from toposync_ext_cameras import panorama_navigation as nav
+    target_rate, pulse_limit = (0.05, 1.2)
+    motion = nav.TargetMotion()
+    target_queue = []
+    history, errors, updates, entries = ([], [], [], [])
+    latest_target = {'ray': np.array([np.cos(-0.17722518825877848), np.sin(-0.17722518825877848), 0.0]), 'observation': None}
+    geometries = {}
+    timeline_start = [None]
+
+    class Camera(SimulatedCamera):
+
+        def __init__(self):
+            super().__init__()
+            self.velocity, self.expires, self.started, self.mechanical_velocity = (0.0, 0.0, None, 0.0)
+            self.dispatch_guard = None
+
+        async def move_velocity(self, *, pan=0.0, tilt=0.0, timeout_s=0.5, dispatch_guard=None):
+            if dispatch_guard is not None:
+                dispatch_guard()
+                updates.append(self.now)
+            self.events.append(('velocity', {'pan': pan, 'timeout_s': timeout_s}))
+            self.velocity, self.expires = (pan, self.now + timeout_s)
+            if self.started is None:
+                self.started = self.now
+            return {'pulse_remaining_seconds': timeout_s}
+
+        async def frame(self, **options):
+            requested = self.velocity if self.now < self.expires else 0.0
+            self.mechanical_velocity += np.clip(requested - self.mechanical_velocity, -0.1 / 3, 0.1 / 3)
+            self.pan += 2 * self.mechanical_velocity * 0.1
+            result = await super().frame(**options)
+            history.append((result['image'], self.pan, self.now))
+            result['image'], angle, exposure = history[max(0, len(history) - 5)]
+            capture = {'capture_instance': self.capture_instance, 'generation': 1, 'sequence': result['sequence'], 'published_at': self.now, 'received_monotonic': self.now}
+            result['capture_evidence'] = capture
+            c, s = (np.cos(angle), np.sin(angle))
+            geometry = {'rotation_matrix': [[c, 0, s], [0, 1, 0], [-s, 0, c]], 'reference_id': 'reference', 'status': 'localized', 'analysis_width': 960, 'validation_p95_pixels': 1.0, 'validation_matches': 24, 'inlier_fraction': 0.9, 'capture_evidence': capture}
+            geometries[result['sequence']] = geometry
+            if timeline_start[0] is None:
+                timeline_start[0] = self.now
+            target = target_direction * (target_start + target_rate * min(8.0, max(0.0, exposure - timeline_start[0])))
+            if not source_delay or result['sequence'] % 3 == 0:
+                target_queue.append((self.now + source_delay, np.array([np.cos(target), np.sin(target), 0.0]), {'scope': ['camera', 'wide', 'job', 1, 'artifact', 'geometry'], **capture, 'observed_monotonic': self.now}))
+            while target_queue and target_queue[0][0] <= self.now + 1e-09:
+                _, target_ray, observation = target_queue.pop(0)
+                latest_target.update(ray=target_ray, observation=observation)
+                motion.observe(observation, target_ray, self.now)
+            if self.started is not None:
+                errors.append((self.now - self.started, abs(np.tan(target - angle)) * 560))
+            return result
+
+        async def stop(self):
+            self.velocity = 0.0
+            return await super().stop()
+    camera = Camera()
+    _clock(monkeypatch, camera)
+    monkeypatch.setattr(nav, 'time', SimpleNamespace(monotonic=lambda: camera.now))
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={'pan': True}, velocity_supported=True, defaults={'continuous': 'normalized'}, spaces={'continuous': [{'uri': 'normalized', 'normalized': True, 'x': {'min': -1.0, 'max': 1.0}, 'y': {'min': -1.0, 'max': 1.0}}]})
+    lens = {'width': 960, 'height': 540, 'fx': 560.0, 'fy': 560.0, 'cx': 479.5, 'cy': 269.5}
+    reference = {'id': 'reference', 'rotation_matrix': np.eye(3).tolist()}
+    model = SimpleNamespace(lens=lens, coverage_mask=np.ones((20, 40)), references=[reference], model={'overlap_links': []}, target_reference=lambda _: reference)
+
+    class DelayedPose:
+
+        def __init__(self, localizer, records, command):
+            self.command, self.records, self.closed, self.qualified_rate = (command, records, False, None)
+            self.pending = self.processing = self._latest = None
+
+        @property
+        def latest(self):
+            if self.processing is not None and self.processing[0] <= camera.now:
+                self._latest = self.processing[1]
+                self.records.append(self._latest)
+                self.processing = None
+            if self.processing is None and self.pending is not None:
+                self.processing = (camera.now + 0.25, self.pending)
+                self.pending = None
+            return self._latest
+
+        def offer(self, frame):
+            if self.closed:
+                return
+            self.pending = {'status': 'localized', 'command': self.command, 'capture_evidence': frame['capture_evidence'], 'frame_received_monotonic': frame['received_monotonic'], 'frame_geometry': geometries[frame['sequence']]}
+            self.latest
+
+        async def close(self):
+            self.closed = True
+    monkeypatch.setattr(nav, 'MotionFrameObservations', DelayedPose)
+    result = {}
+
+    class Navigator(nav.VisualNavigator):
+
+        async def locate(self):
+            return geometries[self.scanner.last_frame['sequence']]
+
+        async def _target_measurement(self, ray, located):
+            return nav.localized_axis_measurement(ray, lens, located)
+
+        async def _pulse(self, axis, amount, **options):
+            entries.append({'axis': axis, 'amount': amount, 'following_seconds': self.following_seconds})
+            try:
+                await super()._pulse(axis, amount, **options)
+            finally:
+                result.update(trace=self.trace, diagnostics=self.scanner.checkpoint.get('diagnostics', {}))
+            return
+    navigator = Navigator(scanner, model)
+    navigator.response['pan'] = np.array([-0.1437689184737356, 0.004264422230247329])
+    navigator.response_rotations['pan'] = np.eye(3)
+    navigator.direction_responses['pan', 1] = (0.6, np.array([-0.08626135108424136, 0.0025586533381483974]))
+    navigator.direction_responses['pan', -1] = (0.6, np.array([0.08626135108424136, -0.0025586533381483974]))
+    navigator.pulse_limits['pan'] = pulse_limit
+    navigator.pulse_capacity['pan'] = {'limit_seconds': pulse_limit, 'observed_monotonic': camera.now, 'rotation_matrix': np.eye(3), 'response': navigator.response['pan'].copy(), 'pixel_budget': navigator._response_pixel_delta(np.zeros(2), navigator.response['pan'] * pulse_limit)}
+
+    async def scenario():
+        for _ in range(14):
+            scanner.last_frame = await camera.frame()
+        scanner.physical_state = 'stopped'
+        result['arrival'] = await navigator.aim(latest_target['ray'], target_provider=lambda: latest_target['ray'], target_observation_provider=lambda: latest_target['observation'], target_motion=motion)
+    asyncio.run(scenario())
+    acquired = next((elapsed for elapsed, error in errors if error <= 96), None)
+    assessed = [error for elapsed, error in errors if acquired is not None and acquired <= elapsed <= 6.5]
+    result.update(source_delay=source_delay, entries=entries, updates_seconds=[t - camera.started for t in updates], errors=errors, stop_count=_event_names(camera).count('stop'), p95_pixels=float(np.percentile(assessed, 95)) if assessed else None, evaluated_seconds=errors[-1][0] if errors else 0.0, commands=navigator.commands)
+    record_property('crossing', {key: result[key] for key in ('source_delay', 'p95_pixels', 'commands', 'stop_count')})
+    assert acquired is not None and acquired <= 1.5
+    assert len(updates) >= 2 and updates[-1] - camera.started >= 4.5
+    assert len(assessed) >= 30 and result['p95_pixels'] <= 96
+    assert result.get('arrival', {}).get('verified') is True
+    assert _event_names(camera).count('stop') >= 1 and scanner.physical_state == 'stopped'
+    updates_in_trace = [entry for step in navigator.trace for entry in step.get('velocity_updates', [])]
+    assert updates_in_trace and any((entry['measurement']['kind'] == 'finite_response_model' for entry in updates_in_trace))
+    assert all((entry['measurement']['qualified_velocity'] is None for entry in updates_in_trace if entry['measurement']['kind'] == 'finite_response_model'))
+    assert all((len(step.get('velocity_updates', [])) <= 8 for step in navigator.trace))
+    assert navigator.commands <= navigator.maximum_commands

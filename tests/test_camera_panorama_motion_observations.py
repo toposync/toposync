@@ -328,6 +328,73 @@ def test_following_control_aligns_target_and_camera_observation_times(monkeypatc
     assert control["control_error"][0] == pytest.approx(.01, abs=.001)
 
 
+@pytest.mark.parametrize("case", ["prepared", "missing_reverse", "expired_capacity", "zero_response",
+    "wrong_observed_direction", "missing_prediction", "expired_before_dispatch", "reverse_removed_before_dispatch", "asymmetric_reverse"])
+def test_finite_response_bootstraps_proposals_without_certifying_cruise_rate(monkeypatch, case):
+    clock = [10.1]
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: clock[0])
+    model = localizer()
+    model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    capabilities = {"defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
+        {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
+    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator.following_seconds, navigator.trace = 6., [{}]
+    navigator.response["pan"] = np.array([-.2, 0.])
+    navigator.response_rotations["pan"] = np.eye(3)
+    navigator.direction_responses = {("pan", 1): (.6, np.array([-.12, 0.])),
+        ("pan", -1): (.6, np.array([.12, 0.]))}
+    navigator.pulse_limits["pan"] = 1.2
+    navigator.pulse_capacity["pan"] = {"limit_seconds": 1.2, "observed_monotonic": 9.,
+        "rotation_matrix": np.eye(3), "response": navigator.response["pan"].copy(),
+        "pixel_budget": navigator._response_pixel_delta(np.zeros(2), navigator.response["pan"] * 1.2)}
+    if case == "missing_reverse": navigator.direction_responses.pop(("pan", -1))
+    if case == "expired_capacity": navigator.pulse_capacity["pan"]["observed_monotonic"] = -300.
+    if case == "zero_response": navigator.response["pan"][:] = 0.
+    if case == "asymmetric_reverse": navigator.direction_responses[("pan", -1)] = (.6, np.array([.06, 0.]))
+    target = lambda angle: np.array([np.cos(angle), np.sin(angle), 0.])
+    target_angle = -.18 if case == "asymmetric_reverse" else .18
+    navigator.motion_feedback_target = lambda: (target(target_angle), 12.)
+    navigator.motion_prediction = lambda geometry, seconds: None if case == "missing_prediction" else (
+        {"ray": target(target_angle + .005), "horizon_seconds": .1, "observation_age_seconds": 0.,
+         "observed_displacement_pixels": 10.}, {})
+    observer = SimpleNamespace(closed=False, latest=None, command=1)
+    feedback = navigator._velocity_feedback(observer, "pan", 1, .1)
+    context = {"velocity": {"pan": .1, "tilt": 0.}, "accepted_monotonic": 10.,
+        "deadline_monotonic": 11.2, "window_deadline_monotonic": 16.,
+        "maximum_duration_seconds": 1.2, "observed_response_seconds": .4}
+    for index in range(2):
+        clock[0] = 10.1 + .2 * index
+        angle = .04 * index * (-1 if case == "wrong_observed_direction" else 1)
+        c, s = np.cos(angle), np.sin(angle)
+        capture = {"capture_instance": "decoder", "generation": 1, "sequence": index + 1}
+        geometry = {"rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]],
+            "analysis_width": 960, "validation_p95_pixels": 1., "validation_matches": 24,
+            "inlier_fraction": .9, "capture_evidence": capture}
+        observer.latest = {"status": "localized", "command": 1, "frame_received_monotonic": clock[0],
+            "capture_evidence": capture, "frame_geometry": geometry}
+        plan = feedback(context)
+    if case in {"missing_reverse", "expired_capacity", "zero_response", "wrong_observed_direction", "missing_prediction"}:
+        assert plan is None or plan["measurement"]["kind"] != "finite_response_model"
+        assert getattr(observer, "response_model", None) is None
+        return
+    assert plan is not None and plan["measurement"]["kind"] == "finite_response_model"
+    assert plan["measurement"]["qualified_velocity"] is None
+    assert plan["measurement"]["comparison_rate_radians_per_second"] is None
+    assert plan["measurement"]["estimated_from_finite_response"] is True
+    assert getattr(observer, "qualified_rate", None) is None
+    assert len(plan["measurement"]["capture_evidence"]) == 2
+    if case == "asymmetric_reverse":
+        assert plan["velocity"]["pan"] == pytest.approx(-.06)
+        assert plan["measurement"]["reversal_model"]["delta_radians"] == [.06, 0.]
+    if case == "expired_before_dispatch": navigator.pulse_capacity["pan"]["observed_monotonic"] = -300.
+    if case == "reverse_removed_before_dispatch": navigator.direction_responses.pop(("pan", -1))
+    if case in {"expired_before_dispatch", "reverse_removed_before_dispatch"}:
+        with pytest.raises(navigation.PanoramaCaptureError, match="visual_response_unavailable"):
+            plan["dispatch_guard"]()
+    else:
+        plan["dispatch_guard"]()
+
+
 def test_following_progress_emits_once_per_frame_without_arrival_or_visibility_claim(monkeypatch):
     monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
     model = localizer()

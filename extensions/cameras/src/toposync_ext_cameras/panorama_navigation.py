@@ -972,7 +972,7 @@ class VisualNavigator:
         self.observation_guard: Callable[[], None] | None = None
         self.motion_feedback_target: Callable[[], tuple[Any, float]] | None = None
         self.following_seconds: float | None = None
-        self.motion_prediction: Callable[[dict, float], tuple | None] | None = None
+        self.motion_prediction: Callable[[dict, float | None], tuple | None] | None = None
         self.following_observer: Callable[[dict], None] | None = None
         self.following_capture = None
         self.last_pulse_feedback_stop = None
@@ -1233,44 +1233,72 @@ class VisualNavigator:
                 "capture_evidence": deepcopy(record["capture_evidence"]), "frame_geometry": deepcopy(geometry),
                 "target_ray": np.asarray(ray).tolist(), "measurement": measured,
                 "frame_received_monotonic": record["frame_received_monotonic"]})
-        predicted = self.motion_prediction(geometry, .1) if self.following_seconds is not None and self.motion_prediction else None
+        predicted = self.motion_prediction(geometry, None) if self.following_seconds is not None and self.motion_prediction else None
         control_ray = predicted[0]["ray"] if predicted is not None else ray
         control_error = self._error(control_ray, geometry)
         predicted_shift = self._response_pixel_delta(self._error(ray, geometry), control_error)
         prediction_noise = max(4., 2 * geometry["validation_p95_pixels"] * ANALYSIS_WIDTH / geometry["analysis_width"])
         if measured["center_error_pixels"] <= maximum_error and (
-            predicted is None or predicted_shift < prediction_noise
+            predicted is None or max(predicted_shift, predicted[0].get("observed_displacement_pixels", 0)) < prediction_noise
         ):
             return "visual_feedback_target_reached"
         response_rotation = self.response_rotations.get(axis)
         response = direction * self.response[axis] if axis in self.response else None
-        rate = getattr(observer, "qualified_rate", None)
-        if self.following_seconds is not None and rate is not None:
+        rate = self._following_rate_reference(observer, record)
+        if rate is not None:
             origin = rate["observation"]
             # This is a direction anchor inside the same finite window, not a
             # fresh speed estimate. Current pose and view-angle checks still apply.
-            if (0 <= time.monotonic() - origin["frame_received_monotonic"] <= MAXIMUM_FOLLOWING_WINDOW_SECONDS
-                    and all(origin["capture_evidence"].get(key) == record["capture_evidence"].get(key)
-                            for key in ("capture_instance", "generation"))):
-                response, response_rotation = rate["rate"], np.asarray(origin["frame_geometry"]["rotation_matrix"])
+            response, response_rotation = rate["rate"], np.asarray(origin["frame_geometry"]["rotation_matrix"])
         if response_rotation is not None:
             rotation = np.asarray(geometry["rotation_matrix"])
             angle = np.arccos(np.clip((np.trace(response_rotation.T @ rotation) - 1) / 2, -1, 1))
             if angle > np.radians(MAXIMUM_RESPONSE_VIEW_CHANGE_DEGREES):
                 return "visual_feedback_response_changed"
         if response is not None and float(control_error @ response) >= 0:
+            if self.following_seconds is not None and rate is not None and predicted is not None:
+                control = self._following_control(ray, geometry, rate,
+                    time.monotonic() - record["frame_received_monotonic"])
+                if float(control["desired_rate"] @ rate["rate"]) > 0:
+                    return None
             return "visual_feedback_direction_changed"
         return None
 
-    def _velocity_feedback(self, observer: MotionFrameObservations, axis: str, direction: int, speed: float):
-        previous = None
-        previous_rate = None
-        previous_rate_origin = None
-        segment = None
-        segment_velocity = None
-        rate_valid_after = None
+    def _following_rate_reference(self, observer, record):
+        model = getattr(observer, "qualified_rate", None)
+        if self.following_seconds is None or model is None:
+            return None
+        origin = model["observation"]
+        rotation = np.asarray(origin["frame_geometry"]["rotation_matrix"]).T @ np.asarray(record["frame_geometry"]["rotation_matrix"])
+        if (not 0 <= time.monotonic() - origin["frame_received_monotonic"] <= MAXIMUM_FOLLOWING_WINDOW_SECONDS
+                or any(origin["capture_evidence"].get(key) != record["capture_evidence"].get(key)
+                       for key in ("capture_instance", "generation"))
+                or np.arccos(np.clip((np.trace(rotation) - 1) / 2, -1, 1)) > np.radians(MAXIMUM_RESPONSE_VIEW_CHANGE_DEGREES)):
+            return None
+        return model
 
-        def plan(context):
+    def _following_control(self, ray, geometry, model, pose_age):
+        error = self._error(ray, geometry)
+        target_rate = np.zeros(2)
+        prediction = self.motion_prediction(geometry, None) if self.motion_prediction else None
+        if prediction is not None:
+            forecast = prediction[0]
+            target_rate = (self._error(forecast["ray"], geometry) - error) / forecast["horizon_seconds"]
+        feedback_delay = model.get("observed_response_seconds", 0) + pose_age
+        # A new command cannot yield a qualified replacement rate until its
+        # visual response plus two pose intervals and localization have arrived.
+        # Damp over that measured feedback cycle, not just the first effect.
+        correction_seconds = max(.2, 2 * (feedback_delay + 2 * model["interval_seconds"]))
+        control_error = error + model["rate"] * pose_age
+        return {"target_rate": target_rate, "control_error": control_error,
+            "correction_seconds": correction_seconds,
+            "desired_rate": -target_rate - .8 * control_error / correction_seconds}
+
+    def _velocity_feedback(self, observer: MotionFrameObservations, axis: str, direction: int, speed: float):
+        previous = previous_rate = previous_rate_origin = None
+        segment = segment_velocity = rate_valid_after = processed = None
+
+        def measure(context, record):
             nonlocal previous, previous_rate, previous_rate_origin, segment, segment_velocity, rate_valid_after
             if segment != context["accepted_monotonic"]:
                 if "window_deadline_monotonic" not in context or segment_velocity != context["velocity"]:
@@ -1279,15 +1307,7 @@ class VisualNavigator:
                         context.get("observed_response_seconds", 0) if segment is not None else 0)
                 segment = context["accepted_monotonic"]
                 segment_velocity = dict(context["velocity"])
-            record = observer.latest
-            now = time.monotonic()
-            if (record is None or observer.closed or record.get("status") != "localized"
-                    or record["frame_received_monotonic"] < rate_valid_after
-                    or not 0 <= now - record["frame_received_monotonic"] <= .35
-                    or record is previous):
-                return None
-            geometry = record.get("frame_geometry")
-            if not isinstance(geometry, dict) or geometry.get("capture_evidence") != record.get("capture_evidence"):
+            if record["frame_received_monotonic"] < rate_valid_after:
                 return None
             before, previous = previous, record
             if before is None:
@@ -1296,41 +1316,72 @@ class VisualNavigator:
             if not .08 <= interval <= .5:
                 previous_rate = None
                 return None
-            origin = before["frame_geometry"]
+            origin, geometry = before["frame_geometry"], record["frame_geometry"]
             fixed_ray = _rotation_basis(origin["rotation_matrix"])[:, 2]
             old_error, new_error = self._error(fixed_ray, origin), self._error(fixed_ray, geometry)
             rate = (new_error - old_error) / interval
+            displacement = self._response_pixel_delta(old_error, new_error)
             noise = max(4., 2 * max(item["validation_p95_pixels"] * ANALYSIS_WIDTH / item["analysis_width"]
                 for item in (origin, geometry)))
-            if self._response_pixel_delta(old_error, new_error) < noise:
-                previous_rate = None
+            if displacement < noise:
+                # Accumulate observable displacement at low speed instead of
+                # discarding the anchor on every sub-noise frame. The existing
+                # maximum interval still bounds the measurement.
+                if previous_rate is not None or getattr(observer, "qualified_rate", None) is not None:
+                    previous = before
                 return None
             last_rate, previous_rate = previous_rate, rate
             rate_origin, previous_rate_origin = previous_rate_origin, before["capture_evidence"]
             # Two agreeing intervals at the current commanded velocity qualify
             # a local rate estimate. Finite-pulse gains never stand in for it.
-            qualified_rate = bool(last_rate is not None
+            qualified = bool(last_rate is not None
                 and rate @ last_rate >= .9 * np.linalg.norm(rate) * np.linalg.norm(last_rate)
                 and .5 <= np.linalg.norm(rate) / max(np.linalg.norm(last_rate), 1e-8) <= 2)
-            if qualified_rate:
-                observer.qualified_rate = {"rate": rate.copy(), "observation": record}
+            sample = {"rate": rate.copy(), "observation": record, "interval_seconds": interval,
+                "velocity": dict(context["velocity"]), "displacement_pixels": displacement,
+                "observed_response_seconds": context.get("observed_response_seconds", 0),
+                "capture_evidence": [deepcopy(before["capture_evidence"]), deepcopy(record["capture_evidence"])]}
+            if qualified:
+                sample["capture_evidence"].insert(0, deepcopy(rate_origin))
+                sample["comparison_rate"] = last_rate.copy()
+                observer.qualified_rate = sample
+            return sample
+
+        def plan(context):
+            nonlocal processed
+            record, now = observer.latest, time.monotonic()
+            if record is not None and "feedback_first_seen_monotonic" not in record:
+                record.update(feedback_first_seen_monotonic=now,
+                    feedback_first_frame_age_seconds=now - record["frame_received_monotonic"],
+                    feedback_first_remaining_seconds=context["deadline_monotonic"] - now)
+            if (record is None or observer.closed or record.get("status") != "localized" or record is processed
+                    or not 0 <= now - record["frame_received_monotonic"] <= .35):
+                return None
+            geometry = record.get("frame_geometry")
+            if not isinstance(geometry, dict) or geometry.get("capture_evidence") != record.get("capture_evidence"):
+                return None
+            processed = record
+            sample = measure(context, record)
+            renewal = "window_deadline_monotonic" in context
+            model = getattr(observer, "qualified_rate", None)
+            if model is not None and model is not sample:
+                model = self._following_rate_reference(observer, record) if renewal else None
+            if model is None and (sample is None or not renewal):
+                return None
             ray, maximum_error = self.motion_feedback_target()
             error = self._error(ray, geometry)
             remaining = context["deadline_monotonic"] - now
-            renewal = "window_deadline_monotonic" in context
             duration = min(context["maximum_duration_seconds"], context["window_deadline_monotonic"] - now - .2) if renewal else remaining
             if renewal and remaining >= .1:
                 remaining = duration
             if remaining < .2:
                 return None
-            continuation = not qualified_rate
             current_speed = abs(context["velocity"][axis])
-            if continuation:
-                response = self.response.get(axis)
-                # Acceleration may consume the first pulse before a steady rate
-                # is measurable. Continue only its already-qualified direction
-                # and speed, with another full correction still ahead.
-                if (not renewal or self.following_seconds is None or current_speed != speed
+            if model is None:
+                # Continuing the original speed needs current direction and a
+                # full correction still ahead, not a steady-speed estimate.
+                response, rate = self.response.get(axis), sample["rate"]
+                if (self.following_seconds is None or current_speed != speed
                         or (axis, direction) not in self.direction_responses or response is None
                         or rate @ (direction * response) < .9 * np.linalg.norm(rate) * np.linalg.norm(response)
                         or self._motion_stop_reason(observer, axis, direction) is not None):
@@ -1338,23 +1389,35 @@ class VisualNavigator:
                 _, amount = self._correction_plan([axis], error, False)
                 if direction * amount < duration or float(error @ rate) >= 0:
                     return None
+                velocity = dict(context["velocity"])
+                measurement = {"kind": "visual_direction_continuation", "timing_basis": "local_frame_receipt",
+                    "interval_seconds": sample["interval_seconds"], "displacement_pixels": sample["displacement_pixels"],
+                    "planned_amount": amount, "capture_evidence": sample["capture_evidence"]}
                 proposed = current_speed
             else:
-                target_rate = np.zeros(2)
-                prediction = self.motion_prediction(geometry, interval) if renewal and self.motion_prediction else None
-                if prediction is not None:
-                    forecast = prediction[0]
-                    target_rate = (self._error(forecast["ray"], geometry) - error) / forecast["horizon_seconds"]
-                # Tracking responds on the observed feedback cadence, not on the
-                # duration of a stopped arrival. World-target motion is separate.
-                correction_seconds = max(.2, 2 * interval, 2 * context.get("observed_response_seconds", 0)) if renewal else remaining
-                desired_rate = -target_rate - .8 * error / correction_seconds
+                rate, interval = model["rate"], model["interval_seconds"]
+                control = self._following_control(ray, geometry, model,
+                    now - record["frame_received_monotonic"]) if renewal else {
+                        "target_rate": np.zeros(2), "control_error": error,
+                        "correction_seconds": remaining, "desired_rate": -.8 * error / remaining}
+                target_rate, control_error = control["target_rate"], control["control_error"]
+                correction_seconds, desired_rate = control["correction_seconds"], control["desired_rate"]
                 factor = float(desired_rate @ rate) / float(rate @ rate)
                 if factor <= 0:
                     return None
-                proposed = float(np.clip(current_speed * factor, .025, speed))
-            velocity = {"pan": 0., "tilt": 0., axis: direction * proposed}
-            if abs(proposed - current_speed) < .01:
+                # Preserve the measured speed binding while newer video is in
+                # flight; an old rate never becomes proof of the new speed.
+                proposed = (float(np.clip(abs(model["velocity"][axis]) * factor, 0. if renewal else .025, speed))
+                    if model is sample else current_speed)
+                velocity = {"pan": 0., "tilt": 0., axis: direction * proposed}
+                measurement = {"kind": "visual_rate_estimate" if model is sample else "visual_velocity_hold",
+                    "timing_basis": "local_frame_receipt", "rate_radians_per_second": rate.tolist(),
+                    "comparison_rate_radians_per_second": model["comparison_rate"].tolist(),
+                    "qualified_velocity": model["velocity"], "model_age_seconds": now - model["observation"]["frame_received_monotonic"],
+                    "target_rate_radians_per_second": target_rate.tolist(), "correction_seconds": correction_seconds,
+                    "control_error_radians": control_error.tolist(),
+                    "interval_seconds": interval, "capture_evidence": deepcopy(model["capture_evidence"])}
+            if abs(proposed - current_speed) < (.01 * speed if renewal else .01):
                 if (not renewal or context["deadline_monotonic"] - now > duration * .6
                         or context["deadline_monotonic"] - now >= duration - .1):
                     return None
@@ -1372,7 +1435,7 @@ class VisualNavigator:
                 shift = self._response_pixel_delta(error, self._error(latest, geometry))
                 if shift > maximum_error / 2:
                     raise PanoramaCaptureError("visual_feedback_target_changed")
-                if continuation:
+                if model is None:
                     _, amount = self._correction_plan([axis], self._error(latest, geometry), False)
                     if direction * amount < duration:
                         raise PanoramaCaptureError("visual_feedback_target_changed")
@@ -1382,19 +1445,12 @@ class VisualNavigator:
                 self.commands += 1
                 entry["navigation_command"] = self.commands
                 self.trace[-1].setdefault("velocity_updates", []).append(entry)
-            return {"velocity": velocity,
-                **({"duration_seconds": duration} if renewal else {}),
-                "measurement": ({"kind": "visual_direction_continuation", "timing_basis": "local_frame_receipt",
-                    "interval_seconds": interval, "displacement_pixels": self._response_pixel_delta(old_error, new_error),
-                    "planned_amount": amount, "capture_evidence": [deepcopy(before["capture_evidence"]), capture]}
-                    if continuation else {"kind": "visual_rate_estimate", "timing_basis": "local_frame_receipt",
-                    "rate_radians_per_second": rate.tolist(), "comparison_rate_radians_per_second": last_rate.tolist(),
-                    "target_rate_radians_per_second": target_rate.tolist(), "correction_seconds": correction_seconds,
-                    "interval_seconds": interval, "capture_evidence": [deepcopy(rate_origin),
-                        deepcopy(before["capture_evidence"]), capture]}),
-                "capture_evidence": capture, "frame_received_monotonic": record["frame_received_monotonic"],
-                "dispatch_guard": guard, "reserve": reserve}
+            record.update(feedback_planned_monotonic=now, feedback_planned_kind=measurement["kind"])
+            return {"velocity": velocity, **({"duration_seconds": duration} if renewal else {}),
+                "measurement": measurement, "capture_evidence": capture,
+                "frame_received_monotonic": record["frame_received_monotonic"], "dispatch_guard": guard, "reserve": reserve}
         return plan
+
 
     async def _pulse(self, axis: str, amount: float, *, speed: float = DEFAULT_CONTINUOUS_PULSE_SPEED) -> None:
         started = time.monotonic()
@@ -1638,7 +1694,9 @@ class VisualNavigator:
         return axis, amount
 
     def _predict_target(self, motion, located, maximum_error_pixels, seconds):
-        candidate = motion.predict(time.monotonic(), seconds)
+        # None requests a rate on the target's own measured cadence. A motor
+        # arrival still requests its full horizon and may be refused.
+        candidate = motion.predict_rate(time.monotonic()) if seconds is None else motion.predict(time.monotonic(), seconds)
         coverage = getattr(self.localizer, "coverage_mask", None)
         if candidate is None or getattr(coverage, "ndim", None) != 2 or not coverage.size:
             return None
@@ -1656,7 +1714,12 @@ class VisualNavigator:
         uncertainty = float(np.linalg.norm(np.asarray(estimates[0]["error_pixels"]) - estimates[1]["error_pixels"]))
         if uncertainty > maximum_error_pixels / 2:
             return None
-        return {**candidate, "velocity_disagreement_pixels": uncertainty}, estimates[0]
+        observed = [localized_axis_measurement(candidate[key], self.localizer.lens, located)
+            for key in ("observed_start_ray", "observed_end_ray")]
+        displacement = (float(np.linalg.norm(np.asarray(observed[1]["error_pixels"]) - observed[0]["error_pixels"]))
+            if all(item is not None for item in observed) else 0.)
+        return {**candidate, "velocity_disagreement_pixels": uncertainty,
+            "observed_displacement_pixels": displacement}, estimates[0]
 
     async def aim(
         self, ray: Any, *, maximum_error_pixels: float = MAXIMUM_LIVE_CENTER_ERROR_PIXELS,

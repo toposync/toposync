@@ -72,3 +72,22 @@ def test_stop_or_reversal_does_not_extend_previous_velocity(last_angle):
     for index, angle in enumerate([0, .02, last_angle]):
         motion.observe(observation(index + 1, 100 + index * .1), direction(angle), 100 + index * .1)
     assert motion.predict(100.2, .1) is None
+
+
+@pytest.mark.parametrize("interval", [1 / 30, .1, .4])
+def test_rate_projection_uses_target_cadence_without_extending_arrival_horizon(interval):
+    motion = TargetMotion()
+    for index in range(3):
+        timestamp = 100 + index * interval
+        motion.observe(observation(index + 1, timestamp), direction(index * interval * .2), timestamp)
+    now = 100 + 2 * interval
+    estimate = motion.predict_rate(now)
+    assert estimate is not None
+    assert 0 < estimate["horizon_seconds"] <= min(1., 2 * interval)
+    angle = math.atan2(estimate["ray"][1], estimate["ray"][0])
+    assert (angle - 2 * interval * .2) / estimate["horizon_seconds"] == pytest.approx(.2, abs=.001)
+    assert estimate["observed_start_ray"] == direction(0)
+    assert estimate["observed_end_ray"] == direction(2 * interval * .2)
+    assert motion.predict(now, 2 * interval + .01) is None
+    assert motion.predict_rate(now + 2 * interval + .01) is None
+    assert motion.predict_rate(now - .01) is None

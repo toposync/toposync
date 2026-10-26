@@ -44,6 +44,18 @@ class TargetMotion:
                 self.samples.clear()
         self.samples.append((sequence, timestamp, direction.copy()))
 
+    def predict_rate(self, now):
+        """Project over observed target cadence solely to estimate its rate.
+
+        This is not a prediction for a requested motor/pose cycle. Keep that
+        arrival contract in predict(), including refusal beyond the history.
+        """
+        if len(self.samples) != 3:
+            return None
+        first, middle, last = self.samples
+        available = min(1., last[1] - first[1]) - (now - last[1])
+        return self.predict(now, min(.1, last[1] - middle[1], available))
+
     def predict(self, now, cycle_seconds):
         if len(self.samples) != 3 or not math.isfinite(cycle_seconds) or cycle_seconds <= 0:
             return None
@@ -62,6 +74,7 @@ class TargetMotion:
             return None
         return {"ray": (projected[0] / np.linalg.norm(projected[0])).tolist(),
             "comparison_ray": (projected[1] / np.linalg.norm(projected[1])).tolist(),
+            "observed_start_ray": first[2].tolist(), "observed_end_ray": last[2].tolist(),
             "horizon_seconds": horizon, "observation_age_seconds": age,
             "cycle_seconds": cycle_seconds, "sequence": last[0],
             "timing_basis": "source_publication", "physical_capture_verified": False}

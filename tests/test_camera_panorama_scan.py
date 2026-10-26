@@ -11044,14 +11044,15 @@ def test_following_window_requires_bounded_live_velocity_control(tmp_path, case)
     assert not camera.events
 
 
-@pytest.mark.parametrize("delay_frames", [0, 2, 4, 5])
-def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path, monkeypatch, delay_frames):
+@pytest.mark.parametrize("delay_frames,localization_seconds", [(0, 0), (2, 0), (4, 0), (5, 0), (4, .25)])
+def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path, monkeypatch, delay_frames, localization_seconds):
     from toposync_ext_cameras import panorama_navigation as navigation
     history, errors, updates = [], [], []
     class Camera(SimulatedCamera):
         def __init__(self):
             super().__init__()
             self.velocity, self.expires, self.started = 0., 0., None
+            self.mechanical_velocity = 0.
         async def move_velocity(self, *, pan=0., tilt=0., timeout_s=.5, dispatch_guard=None):
             if dispatch_guard is not None:
                 dispatch_guard()
@@ -11061,7 +11062,12 @@ def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path,
             if self.started is None: self.started = self.now
             return {"pulse_remaining_seconds": timeout_s}
         async def frame(self, **options):
-            self.pan += 2 * self.velocity * min(.1, max(0., self.expires - self.now))
+            if localization_seconds:
+                requested = self.velocity if self.now < self.expires else 0.
+                self.mechanical_velocity += np.clip(requested - self.mechanical_velocity, -.1 / 3, .1 / 3)
+                self.pan += 2 * self.mechanical_velocity * .1
+            else:
+                self.pan += 2 * self.velocity * min(.1, max(0., self.expires - self.now))
             result = await super().frame(**options)
             history.append((result["image"], self.pan, self.now))
             # A synthetic localized pose and target share the delayed video;
@@ -11082,16 +11088,33 @@ def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path,
     model = SimpleNamespace(lens=lens, coverage_mask=np.ones((20, 40)), target_reference=lambda _: {"id": "reference"})
     navigator = navigation.VisualNavigator(scanner, model)
     navigator.following_seconds, navigator.trace = 6., [{}]
-    navigator.response["pan"] = np.array([-.2, 0.])
+    # Acceleration makes a stopped finite-pulse gain smaller than cruise rate.
+    pulse_gain = .15 if localization_seconds else .2
+    navigator.response["pan"] = np.array([-pulse_gain, 0.])
     navigator.response_rotations["pan"] = np.eye(3)
+    navigator.direction_responses[("pan", 1)] = (.6, np.array([-.6 * pulse_gain, 0.]))
+    navigator.pulse_limits["pan"] = 1.2
     motion = navigation.TargetMotion()
     ray = [np.array([1., 0., 0.])]
     observer = SimpleNamespace(closed=False, latest=None, command=1)
     navigator.motion_feedback_target = lambda: (ray[0], 12.)
     navigator.motion_prediction = lambda geometry, seconds: navigator._predict_target(motion, geometry, 12., seconds)
+    published = []
+    pending = [None]
+    processing = [None]
+    def publish():
+        if processing[0] is not None and processing[0][0] <= camera.now:
+            observer.latest = processing[0][1]
+            published.append((camera.now - camera.started,
+                observer.latest["frame_received_monotonic"] - camera.started,
+                navigator._error(ray[0], observer.latest["frame_geometry"]).tolist()))
+            processing[0] = None
+        if processing[0] is None and pending[0] is not None:
+            processing[0], pending[0] = (camera.now + localization_seconds, pending[0]), None
+            if not localization_seconds: publish()
     def observe(frame):
         if camera.started is None: return
-        target_angle = .06 + .15 * max(0., frame["test_exposure"] - camera.started)
+        target_angle = (.26 if localization_seconds else .06) + (.05 if localization_seconds else .15) * max(0., frame["test_exposure"] - camera.started)
         ray[0] = np.array([np.cos(target_angle), np.sin(target_angle), 0.])
         capture = {"capture_instance": "test", "generation": 1, "sequence": frame["sequence"]}
         c, s = np.cos(frame["test_angle"]), np.sin(frame["test_angle"])
@@ -11100,23 +11123,35 @@ def test_following_window_tracks_a_moving_direction_with_delayed_video(tmp_path,
             "inlier_fraction": .9, "capture_evidence": capture}
         motion.observe({"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
             **capture, "observed_monotonic": camera.now}, ray[0], camera.now)
-        observer.latest = {"status": "localized", "command": 1, "frame_received_monotonic": camera.now,
+        pending[0] = {"status": "localized", "command": 1, "frame_received_monotonic": camera.now,
             "capture_evidence": capture, "frame_geometry": geometry}
+        publish()
         errors.append((camera.now - camera.started, abs(target_angle - frame["test_angle"])))
     async def scenario():
         return await scanner._pulse("pan", 1, 1.2, following_seconds=6., frame_observer=observe,
             observation_guard=lambda: None,
-            motion_stop_requested=lambda: navigator._motion_stop_reason(observer, "pan", 1),
+            motion_stop_requested=lambda: (publish(), navigator._motion_stop_reason(observer, "pan", 1))[1],
             motion_velocity_update=navigator._velocity_feedback(observer, "pan", 1, .1))
     result = asyncio.run(scenario())
-    assert len(updates) >= 2
+    assert len(updates) >= 2, {"stop": result.get("motion_feedback_stop"), "poses": published, "errors": errors}
     assert updates[-1] - camera.started > 1.2
+    assert len(updates) <= 8
+    if localization_seconds:
+        assert updates[-1] - camera.started >= 4.5, "Continue tracking beyond the acquisition transient"
     assert _event_names(camera).count("stop") == 1 and result["stable"] is True
-    following = [error for elapsed, error in errors if 2 <= elapsed <= 4]
+    following = [error for elapsed, error in errors if (3 if localization_seconds else 2) <= elapsed <= (5 if localization_seconds else 4)]
     assert len(following) >= 8
+    if np.percentile(following, 95) * 560 > 12:
+        print("FOLLOWING_DIAGNOSTIC", result.get("motion_feedback_stop"), result.get("stop_reason"),
+            [(round(t - camera.started, 3)) for t in updates], result["motion_velocity_updates"][-1].get("measurement"))
+        print("CONTROL_TIMELINE", [(round(t - camera.started, 3), entry["velocity"], entry.get("measurement"))
+            for t, entry in zip(updates, result["motion_velocity_updates"])])
     assert np.percentile(following, 95) * 560 <= 12, {
-        "stop": result.get("motion_feedback_stop"), "updates": updates, "errors": errors,
+        "stop": result.get("motion_feedback_stop"), "updates": updates,
+        "errors_sample": errors[::5], "poses_sample": published[::3],
         "velocities": [entry["velocity"] for entry in result["motion_velocity_updates"]]}
+
+    print("FOLLOWING_METRICS", {"delay_frames": delay_frames, "localization_seconds": localization_seconds, "p95_pixels": float(np.percentile(following, 95) * 560), "updates_seconds": [round(t-camera.started, 3) for t in updates], "feedback_stop": result.get("motion_feedback_stop")})
 
 
 @pytest.mark.parametrize("phase", ["before_transport", "during_motion", "after_stop"])

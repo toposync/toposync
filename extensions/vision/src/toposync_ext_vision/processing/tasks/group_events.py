@@ -375,7 +375,11 @@ class VisionGroupEventsRuntime(TransformOperatorRuntime):
             or _normalize_world_anchor(packet.payload.get("world_anchor"))
             or _normalize_world_anchor(packet.payload.get("world"))
         )
-        lifecycle = _active_lifecycle(subject.get("lifecycle"), packet.lifecycle)
+        # A derived condition may close before its tracked subject disappears.
+        lifecycle = (
+            Lifecycle.CLOSE if packet.lifecycle == Lifecycle.CLOSE
+            else _active_lifecycle(subject.get("lifecycle"), packet.lifecycle)
+        )
         try:
             confidence = float(subject.get("confidence", 0.0) or 0.0)
         except Exception:

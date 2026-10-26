@@ -1560,12 +1560,13 @@ class VisualNavigator:
 
     async def qualify_velocity(self, axis: str, direction: int, speed: float,
                                duration_seconds: float = DEFAULT_NAVIGATION_PROBE_SECONDS) -> dict[str, Any]:
-        """Measure one short probe without replacing the default-speed model."""
+        """Measure one bounded probe; only the default speed updates its model."""
         if (axis not in {"pan", "tilt"} or isinstance(direction, bool) or direction not in {-1, 1}
                 or not isinstance(speed, (int, float)) or isinstance(speed, bool)
-                or not DEFAULT_CONTINUOUS_PULSE_SPEED < speed <= .2
+                or not DEFAULT_CONTINUOUS_PULSE_SPEED <= speed <= .2
                 or not isinstance(duration_seconds, (int, float)) or isinstance(duration_seconds, bool)
-                or not DEFAULT_NAVIGATION_PROBE_SECONDS <= duration_seconds <= .24):
+                or not DEFAULT_NAVIGATION_PROBE_SECONDS <= duration_seconds <= (
+                    MAXIMUM_NAVIGATION_PULSE_SECONDS if speed == DEFAULT_CONTINUOUS_PULSE_SPEED else .24)):
             raise PanoramaCaptureError("invalid_velocity")
         if self.scanner.physical_state != "stopped":
             raise PanoramaCaptureError("stop_unconfirmed")
@@ -1595,10 +1596,21 @@ class VisualNavigator:
         self.trace[-1].update(result)
         if not qualified:
             self.trace[-1]["failure_code"] = "visual_response_unavailable"
+        elif speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
+            self._remember_axis_response(axis, amount, delta / amount, after, updated - before)
+            result["following_pulse_limit_seconds"] = self.pulse_limits[axis]
+            self.trace[-1]["following_pulse_limit_seconds"] = self.pulse_limits[axis]
         await self.scanner._persist()
         if not qualified:
             raise PanoramaCaptureError("visual_response_unavailable")
         return result
+
+    def _remember_axis_response(self, axis, amount, response, located, delta):
+        """Keep the same measured response and overlap budget for aiming and preparation."""
+        self.response[axis] = response
+        self.direction_responses[(axis, 1 if amount > 0 else -1)] = (abs(amount), delta)
+        self.response_rotations[axis] = np.asarray(located["rotation_matrix"])
+        self.pulse_limits[axis] = _qualified_navigation_pulse_limit(amount, self.last_pulse_match)
 
     async def _target_measurement(self, target: np.ndarray, located: dict[str, Any]) -> dict[str, Any] | None:
         started = time.monotonic()
@@ -2183,10 +2195,7 @@ class VisualNavigator:
                 raise PanoramaCaptureError("visual_response_unavailable")
             # A device need not scale motion linearly with requested velocity.
             if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
-                self.response[axis] = response
-                self.direction_responses[direction_key] = (abs(pulse_amount), updated - before)
-                self.response_rotations[axis] = np.asarray(after["rotation_matrix"])
-                self.pulse_limits[axis] = _qualified_navigation_pulse_limit(pulse_amount, self.last_pulse_match)
+                self._remember_axis_response(axis, pulse_amount, response, after, updated - before)
             magnitude = float(np.linalg.norm(updated))
             self.trace[-1].update(error_radians=magnitude, response=response.tolist(),
                                  response_qualified=pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED,

@@ -611,12 +611,22 @@ async def test_borrowed_camera_never_acquires_renews_or_releases_attention_lease
 
 
 @pytest.mark.parametrize("changes", [{"axis": "zoom"}, {"direction": 0}, {"direction": True},
-    {"speed": True}, {"speed": .1}, {"speed": .201}, {"speed": float("nan")},
+    {"speed": True}, {"speed": .099}, {"speed": .201}, {"speed": float("nan")},
     {"duration_seconds": .241}, {"duration_seconds": .119}, {"duration_seconds": True}])
 def test_velocity_probe_request_rejects_unsupported_axis_direction_and_speed(changes):
     with pytest.raises(ValueError):
         QualifyAttention(revision=2, home={"x": 0, "z": 0}, target={"x": 1, "z": 0},
             velocity_probe={"axis": "pan", "direction": -1, "speed": .2, **changes})
+
+
+@pytest.mark.parametrize("duration", [.12, .6, .601])
+def test_default_speed_preparation_keeps_the_existing_coarse_pulse_bound(duration):
+    body = dict(revision=2, home={"x": 0, "z": 0}, target={"x": 1, "z": 0},
+        velocity_probe={"axis": "pan", "direction": 1, "speed": .1, "duration_seconds": duration})
+    if duration > .6:
+        with pytest.raises(ValueError): QualifyAttention(**body)
+    else:
+        assert QualifyAttention(**body).velocity_probe.duration_seconds == duration
 
 
 @pytest.mark.anyio
@@ -1040,7 +1050,7 @@ async def test_return_route_admits_pending_cleanup_only_with_original_image(init
 @pytest.mark.anyio
 @pytest.mark.parametrize('outcome', ['native', 'visual', 'arrival_failure', 'restore_failure', 'cleanup_failure', 'visual_mismatch', 'cancel',
     'prepared_reference', 'reference_binding_failed', 'reference_arrival_failed', 'reference_not_selected',
-    'velocity', 'velocity_failure', 'pending_cleanup', 'pending_visual_mismatch', 'pending_cleanup_failure',
+    'velocity', 'velocity_failure', 'velocity_default', 'velocity_default_failure', 'pending_cleanup', 'pending_visual_mismatch', 'pending_cleanup_failure',
     'pending_cleanup_partial', 'pending_initial_missing'])
 async def test_qualification_preserves_starting_view_until_verified_recovery(monkeypatch, tmp_path, outcome):
     import asyncio
@@ -1108,9 +1118,18 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
 
     navigator.aim = AsyncMock(side_effect=aim)
     probe = {'axis': 'pan', 'direction': -1, 'speed': .2, 'duration_seconds': .24}
-    navigator.qualify_velocity = AsyncMock(return_value={**probe, 'response_qualified': True})
-    if outcome == 'velocity_failure':
-        navigator.qualify_velocity.side_effect = PanoramaCaptureError('visual_response_unavailable')
+    if outcome.startswith('velocity_default'):
+        probe.update(speed=.1, duration_seconds=.6)
+
+    async def qualify_velocity(**values):
+        assert values == probe
+        assert len(destinations) == (3 if probe['speed'] == .1 else 2)
+        scanner._restore.assert_not_awaited()
+        if outcome.endswith('_failure'):
+            raise PanoramaCaptureError('visual_response_unavailable')
+        return {**probe, 'response_qualified': True}
+
+    navigator.qualify_velocity = AsyncMock(side_effect=qualify_velocity)
     reference = {'destination': {'kind': 'preset', 'token': 'panorama-reference'}}
     reference_outcomes = {'prepared_reference', 'reference_binding_failed', 'reference_arrival_failed', 'reference_not_selected'}
     navigator.locate = AsyncMock(return_value={'rotation_matrix': np.eye(3).tolist()})
@@ -1172,13 +1191,13 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
     operation = service._visual_operation_with_pinned_reference(None, job,
         {'ray': [0, 0, 1]}, qualification_home={'ray': [0, 1, 0]},
         **({'velocity_probe': probe} if outcome.startswith('velocity') else {}))
-    if outcome in {'native', 'visual', 'prepared_reference', 'reference_not_selected', 'velocity'}:
+    if outcome in {'native', 'visual', 'prepared_reference', 'reference_not_selected', 'velocity', 'velocity_default'}:
         _, evidence = await operation
         assert [stage['stage'] for stage in evidence['stages']] == ['home', 'arrival', 'return']
         assert job['navigation']['physical_state'] == 'restored'
         assert not job['navigation']['can_return']
         assert not scanner.saved_return and 'initial_path' not in scanner.checkpoint
-        if outcome == 'velocity':
+        if outcome in {'velocity', 'velocity_default'}:
             navigator.qualify_velocity.assert_awaited_once_with(**probe)
             assert evidence['velocity_probe']['response_qualified'] is True
             assert job['_attention_trial']['velocity_probe'] == evidence['velocity_probe']

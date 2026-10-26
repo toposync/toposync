@@ -1,5 +1,21 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Preparação da resposta no ponto de monitoramento — 23/10/2026
+
+A qualificação de atenção aceita uma sondagem opcional na velocidade normal
+de 0,1, limitada a 0,6 segundo, depois da etapa de retorno. Ela reutiliza a
+medição visual e o cálculo de limite do navegador; somente deslocamento
+qualificado atualiza a resposta. O limite maior depende também de suporte
+geométrico distribuído e sobreposição suficiente. A restauração final permanece
+obrigatória. Sondagens mais rápidas conservam o limite de 0,24 segundo e não
+substituem o modelo da velocidade normal.
+
+Essa preparação evita depender de uma resposta medida em outra orientação;
+a invalidação por mudança de vista permanece. Ela não certifica seguimento:
+a entrada renovável, o enquadramento durante movimento e a lente Zoom ainda
+precisam de validação física conjunta. O produto continua usando o mesmo
+navegador, cache, autoridade e caminho de parada e recuperação.
+
 ## Validade do alvo durante sondagem e estabilização — 23/10/2026
 
 Uma atualização rejeitada invalida o destino vivo até chegar nova observação

@@ -208,13 +208,15 @@ class Aim(_Input):
 class VelocityProbe(_Input):
     axis: Literal["pan", "tilt"]
     direction: int = Field(strict=True, ge=-1, le=1)
-    speed: float = Field(strict=True, gt=.1, le=.2)
-    duration_seconds: float = Field(default=.12, strict=True, ge=.12, le=.24)
+    speed: float = Field(strict=True, ge=.1, le=.2)
+    duration_seconds: float = Field(default=.12, strict=True, ge=.12, le=.6)
 
     @model_validator(mode="after")
     def signed_direction(self):
         if self.direction == 0:
             raise ValueError("A probe direction must be -1 or 1")
+        if self.speed > .1 and self.duration_seconds > .24:
+            raise ValueError("A faster velocity probe must not exceed 0.24 seconds")
         return self
 
 
@@ -1776,7 +1778,11 @@ class PanoramaService:
                         if velocity_evidence is not None:
                             job["_attention_trial"]["velocity_probe"] = velocity_evidence
                         self._save(job)
-                        if label == "arrival" and velocity_probe is not None:
+                        # Prepare the normal-speed response at the monitoring
+                        # view, before the existing final restoration. A distant
+                        # arrival can invalidate that local model on the way home.
+                        probe_stage = "return" if velocity_probe is not None and velocity_probe["speed"] == .1 else "arrival"
+                        if label == probe_stage and velocity_probe is not None:
                             velocity_evidence = await navigator.qualify_velocity(**velocity_probe)
                             job["_attention_trial"]["velocity_probe"] = velocity_evidence
                             self._save(job)

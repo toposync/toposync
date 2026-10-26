@@ -450,8 +450,8 @@ def test_cancelled_navigation_pulse_records_interruption_without_claiming_transp
 
 
 @pytest.mark.parametrize("failure", [None, "small", "small_pose", "stationary", "support", "overlap", "nonfinite", "cancel"])
-@pytest.mark.parametrize("duration", [.12, .24])
-def test_velocity_qualification_measures_separate_model_and_preserves_default_gain(failure, duration):
+@pytest.mark.parametrize("speed,duration", [(.2, .12), (.2, .24), (.1, .6)])
+def test_velocity_qualification_updates_default_gain_only_after_observed_success(failure, speed, duration):
     import time
     lens = {"width": 960, "height": 540, "fx": 560, "fy": 560,
         "cx": 479.5, "cy": 269.5, "distortion": []}
@@ -478,17 +478,47 @@ def test_velocity_qualification_measures_separate_model_and_preserves_default_ga
         float("nan") if failure == "nonfinite" else .002 if failure == "small_pose" else .008, 0.])
     if failure:
         with pytest.raises(asyncio.CancelledError if failure == "cancel" else PanoramaCaptureError):
-            asyncio.run(navigator.qualify_velocity("pan", -1, .2, duration))
+            asyncio.run(navigator.qualify_velocity("pan", -1, speed, duration))
         assert navigator.trace[-1]["response_qualified"] is False
     else:
-        result = asyncio.run(navigator.qualify_velocity("pan", -1, .2, duration))
+        result = asyncio.run(navigator.qualify_velocity("pan", -1, speed, duration))
         assert result["response_qualified"] is True
         assert result["response"] == pytest.approx([-.008/duration, 0.])
         assert result["duration_seconds"] == duration
         assert result["capture_evidence"] == {"sequence": 2}
-        assert result["speed"] == .2 and result["direction"] == -1
-    assert calls == [("pan", -1, duration, {"speed": .2, "expected_frame": baseline})]
-    assert navigator.response["pan"] == pytest.approx([.1, .2])
+        assert result["speed"] == speed and result["direction"] == -1
+    assert calls == [("pan", -1, duration, {"speed": speed, "expected_frame": baseline} if speed > .1 else {})]
+    assert navigator.response["pan"] == pytest.approx([-.008 / duration, 0.] if speed == .1 and not failure else [.1, .2])
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+@pytest.mark.parametrize("distributed_support", [False, True])
+def test_default_velocity_preparation_reuses_measured_response_and_overlap_budget(direction, distributed_support):
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    match = {"verified": True, "support_scope": "distributed_scene", "overlap": .9,
+        "analysis_size": [960, 540], "homography": [[1., 0, -direction * 56.], [0, 1., 0], [0, 0, 1.]],
+        "inliers": 120 if distributed_support else 95, "source_features": 140, "target_features": 140,
+        "displacement": 56.}
+    calls = []
+    async def pulse(axis, sign, duration, **options):
+        calls.append((axis, sign, duration, options))
+        return {"frame": {"received_monotonic": time.monotonic(), "capture_evidence": {"sequence": 2}},
+            "stable": True, "match": match}
+    scanner = SimpleNamespace(last_frame={"received_monotonic": time.monotonic()}, checkpoint={},
+        _check=lambda: None, _persist=AsyncMock(), _pulse=pulse,
+        capabilities={"velocity_supported": True}, physical_state="stopped")
+    navigator = VisualNavigator(scanner, SimpleNamespace(lens=lens))
+    navigator.locate = AsyncMock(return_value={"rotation_matrix": np.eye(3)})
+    navigator._error = lambda *_: np.array([-direction * .1, 0.]) if calls else np.zeros(2)
+    result = asyncio.run(navigator.qualify_velocity("pan", direction, .1, .6))
+    assert calls == [("pan", direction, .6, {})]
+    assert result["response_qualified"] is True
+    assert navigator.response["pan"] == pytest.approx([-.1 / .6, 0.])
+    assert navigator.direction_responses[("pan", direction)][0] == .6
+    assert navigator.direction_responses[("pan", direction)][1] == pytest.approx([-direction * .1, 0.])
+    assert navigator.pulse_limits["pan"] == (1.2 if distributed_support else .6)
+    assert result["following_pulse_limit_seconds"] == navigator.pulse_limits["pan"]
 
 
 def test_navigation_consumes_confirmed_fresh_observation_without_renewing_ranked_frame():

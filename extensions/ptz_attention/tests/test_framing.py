@@ -570,9 +570,12 @@ async def test_following_refreshes_same_subject_without_new_approach_or_corrupti
     assert continuity["observed_span_seconds"] == pytest.approx(.8)
     await submit(fresh, "update")
     assert controller.status()[0].observed_framing["continuity"]["consecutive_observations"] == 0
+    with pytest.raises(RuntimeError, match="following_target_unqualified"):
+        calls[0]["target_provider"]()
     clock.advance(.1)
     fresh = fresh.model_copy(update={"sequence": 6, "published_at": clock()})
     await submit(fresh, "update")
+    assert calls[0]["target_provider"]()["framing"]["sequence"] == 6
     assert controller.status()[0].observed_framing["continuity"]["consecutive_observations"] == 1
     home = await controller._resolve_home(profile)
     assert home.panorama.framing is None and list(home.panorama.ray) == [0, 0, 1]

@@ -967,6 +967,7 @@ class VisualNavigator:
         self.response_rotations: dict[str, np.ndarray] = {}
         self.trace: list[dict[str, Any]] = []
         self.dispatch_guard: Callable[[], None] | None = None
+        self.observation_guard: Callable[[], None] | None = None
         self.motion_feedback_target: Callable[[], tuple[Any, float]] | None = None
         self.following_observer: Callable[[dict], None] | None = None
         self.following_capture = None
@@ -1356,6 +1357,8 @@ class VisualNavigator:
             capabilities = self.scanner.capabilities
             if capabilities.get("velocity_supported") or capabilities.get("relative_supported"):
                 options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
+                if self.observation_guard is not None:
+                    options["observation_guard"] = self.observation_guard
                 if motion_observations is not None:
                     options["frame_observer"] = motion_observations.offer
                     if self.motion_feedback_target is not None:
@@ -1383,7 +1386,8 @@ class VisualNavigator:
                 target[axis] = float(np.clip(target[axis] + 0.1 * amount, limits["min"], limits["max"]))
                 if abs(target[axis] - pose[axis]) < 1e-8:
                     raise PanoramaCaptureError("visual_target_unreachable")
-                result = await self.scanner._absolute(target, allow_stationary=True)
+                result = await self.scanner._absolute(target, allow_stationary=True,
+                    **({"observation_guard": self.observation_guard} if self.observation_guard else {}))
             else:
                 raise PanoramaCaptureError("visual_control_unavailable")
         except asyncio.CancelledError:
@@ -1877,6 +1881,8 @@ class VisualNavigator:
                                 return
                         raise _TargetDispatchChanged("target_shifted", frame_age, shift)
             self.dispatch_guard = guard_target_dispatch if target_provider is not None else None
+            # Independent of response qualification, transport and pulse speed.
+            self.observation_guard = (lambda: read_target()) if target_provider is not None else None
             self.motion_feedback_target = (lambda: (read_target(), maximum_error_pixels)) if (
                 target_provider is not None and final and not missing and not direction_probe
                 and pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED) else None
@@ -1901,6 +1907,7 @@ class VisualNavigator:
                 continue
             finally:
                 self.dispatch_guard = None
+                self.observation_guard = None
                 self.motion_feedback_target = None
             if self.last_pulse_feedback_stop:
                 # The command ended before its planned duration. Its endpoint

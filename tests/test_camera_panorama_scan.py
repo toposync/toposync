@@ -10966,3 +10966,56 @@ def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypa
     assert _event_names(camera).count("stop") == 1
     if case in {"reverse", "other_axis", "overspeed", "stale", "budget", "region_budget", "delayed_guard", "cancel"}:
         assert not updates
+
+
+@pytest.mark.parametrize("phase", ["before_transport", "during_motion", "after_stop"])
+def test_target_validity_guards_probes_and_settling_without_skipping_stop(tmp_path, monkeypatch, phase):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    checked = []
+    def guard():
+        names = _event_names(camera)
+        checked.append(tuple(names))
+        if (phase == "before_transport" or phase == "during_motion" and "velocity" in names
+                or phase == "after_stop" and "stop" in names):
+            raise PanoramaCaptureError("following_observation_expired")
+    async def scenario():
+        await scanner._move(lambda: camera.move_velocity(pan=.1, timeout_s=.12),
+            duration=.12, allow_stationary=True, observation_guard=guard)
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        asyncio.run(scenario())
+    assert checked
+    names = _event_names(camera)
+    if phase == "before_transport":
+        assert "velocity" not in names
+    else:
+        assert names.count("velocity") == 1 and names.count("stop") == 1
+        diagnostic = json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1]
+        assert diagnostic["outcome"] == "following_observation_expired"
+        assert diagnostic["stop_command_accepted"] is True
+
+
+@pytest.mark.parametrize("transport", ["velocity", "relative", "absolute"])
+def test_live_observation_guard_is_preserved_by_each_scanner_transport(tmp_path, transport):
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(axes={"pan": True, "tilt": True}, velocity_supported=transport == "velocity",
+        relative_supported=transport == "relative", absolute_supported=transport == "absolute")
+    calls = []
+    def guard():
+        calls.append("checked")
+        raise PanoramaCaptureError("following_observation_expired")
+    async def move(command, **options):
+        options["observation_guard"]()
+        pytest.fail("Expired target must not reach transport")
+    scanner._move = move
+    async def scenario():
+        if transport == "absolute":
+            await scanner._absolute({"pan": .1, "tilt": 0}, observation_guard=guard)
+        else:
+            await scanner._pulse("pan", 1, .12, observation_guard=guard)
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        asyncio.run(scenario())
+    assert calls == ["checked"]
+    assert not any(name in _event_names(camera) for name in ("velocity", "relative", "absolute"))

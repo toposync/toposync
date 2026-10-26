@@ -1,5 +1,19 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Validade do alvo durante sondagem e estabilização — 23/10/2026
+
+Uma atualização rejeitada invalida o destino vivo até chegar nova observação
+qualificada; não restaura a direção inicial mais antiga. A posição anterior
+continua disponível para a política de espera após perda, sem autorizar movimento.
+A navegação verifica o alvo durante toda a observação, incluindo sondagens de
+resposta ainda desconhecida e estabilização após Stop, pelos mesmos caminhos de
+velocidade, movimento relativo e absoluto. Expiração interrompe a tentativa,
+mas preserva o Stop em andamento e registra seu resultado efetivo.
+
+O ensaio real do candidato anterior confirmou movimento, mas reprovou seguimento
+e Zoom. Correções de validade não certificam cadência ou enquadramento; estes
+continuam pendentes de nova campanha física com hipótese e orçamento próprios.
+
 ## Progresso de enquadramento na atenção — 23/10/2026
 
 A navegação publica progresso visual vinculado ao comando, à concessão, à fonte

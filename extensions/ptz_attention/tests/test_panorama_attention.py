@@ -1133,3 +1133,48 @@ async def test_in_motion_progress_is_separate_from_stopped_arrival(case):
         assert controller.status()[0].state == "ACQUIRING"
     await controller.shutdown()
     store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejection", ["region", "sequence", "epoch", "expired"])
+async def test_following_rejection_never_restores_the_initial_target(rejection):
+    clock, camera, _, _, calls, _, store, controller = environment(
+        mode="live_panorama", qualified=True, blocked=True)
+    store.replace_profile(panorama_profile(mode="live_panorama", follow_view_updates=True,
+        candidate_confirm_seconds=.25, settle_timeout_seconds=10))
+
+    async def observe(sequence, x, lifecycle="update", **capture_changes):
+        capture = {"capture_instance": "decoder", "generation": 1,
+            "sequence": sequence, "published_at": clock(), **capture_changes}
+        await controller.submit_intent(event(clock, lifecycle=lifecycle, x=x)
+            .model_copy(update={"capture_evidence": capture}))
+
+    try:
+        await observe(1, .1, "open")
+        clock.advance(.3)
+        await controller.tick_once()
+        await asyncio.sleep(0)
+        clock.advance(.1)
+        await observe(2, .7)
+        provider = calls[0]["target_provider"]
+        assert provider()["ray"][0] == pytest.approx(.7 / math.sqrt(1.49))
+        clock.advance(.1)
+        if rejection == "region":
+            await observe(3, 3.)
+        elif rejection == "sequence":
+            await observe(2, .8)
+        elif rejection == "epoch":
+            await observe(3, .8, capture_instance="other")
+        else:
+            await observe(3, .8, published_at=clock() - 3)
+        # A rejected sample cannot resurrect the initial ray with an older frame.
+        with pytest.raises(RuntimeError, match="following_target_unqualified"):
+            provider()
+        assert len(calls) == 1 and camera.acquires == 1
+        clock.advance(.1)
+        await observe(4, .9)
+        assert provider()["ray"][0] == pytest.approx(.9 / math.sqrt(1.81))
+        assert len(calls) == 1 and camera.acquires == 1
+    finally:
+        await controller.shutdown()
+        store.close()

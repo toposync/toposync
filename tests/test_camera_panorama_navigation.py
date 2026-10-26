@@ -3620,3 +3620,36 @@ def test_feedback_shortened_pulse_remeasures_latest_target_without_learning_full
     assert navigator.trace[0]["response_qualified"] is False
     assert navigator.trace[0]["stationary_verified"] is False
     assert navigator.motion_feedback_target is None and navigator.dispatch_guard is None
+
+
+def test_unqualified_probe_keeps_live_target_guard_until_observation_finishes():
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped",
+        last_frame={"received_monotonic": time.monotonic(), "capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    expired = False
+    target = np.array([np.cos(.2), np.sin(.2), 0.])
+    def provider():
+        if expired:
+            raise PanoramaCaptureError("following_observation_expired")
+        return target
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+        async def _target_measurement(self, ray, located):
+            return localized_axis_measurement(ray, lens, located)
+        async def _pulse(self, axis, amount, **kwargs):
+            nonlocal expired
+            assert self.motion_feedback_target is None, "No response exists yet for a probe"
+            assert self.observation_guard is not None
+            self.observation_guard()
+            expired = True
+            self.observation_guard()
+    navigator = Navigator(scanner, localizer)
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        asyncio.run(navigator.aim(target, target_provider=provider))
+    assert navigator.observation_guard is None and navigator.dispatch_guard is None

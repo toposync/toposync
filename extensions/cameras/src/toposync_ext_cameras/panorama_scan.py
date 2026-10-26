@@ -3303,6 +3303,7 @@ class _Scan:
         transition_estimator: Callable | None = None,
         stable_frame_observer: Callable[[dict], None] | None = None,
         frame_observer: Callable[[dict], None] | None = None,
+        observation_guard: Callable[[], None] | None = None,
         motion_stop_requested: Callable[[], str | None] | None = None,
         motion_velocity_update: Callable[[dict], dict | None] | None = None,
         requested_velocity: dict[str, float] | None = None,
@@ -3314,6 +3315,8 @@ class _Scan:
     ) -> dict:
         """Observe the actual movement concurrently with its controller command."""
         self._check(budget=not self.returning)
+        if observation_guard is not None:
+            observation_guard()
         if motion_velocity_update is not None and (
             target is not None or requested_velocity is None or not 0 < duration <= 2
             or self.returning or self.checkpoint.get("continuous_cursor") is not None
@@ -3820,6 +3823,10 @@ class _Scan:
         try:
             while time.monotonic() < observation_deadline:
                 self._check(budget=not self.returning)
+                # Target validity outlives the motor pulse: probes and settling
+                # must not spend their remaining budget on an obsolete subject.
+                if observation_guard is not None:
+                    observation_guard()
                 if operation.done():
                     operation.result()
                     if velocity_deadline is None:
@@ -4324,7 +4331,8 @@ class _Scan:
             if stop_operation is not None:
                 # Do not abandon or duplicate an in-flight Stop on timeout,
                 # cancellation or observer failure. The executor bounds it.
-                await asyncio.shield(stop_operation)
+                stopped = await asyncio.shield(stop_operation)
+                diagnostic.value["stop_command_accepted"] = stopped
             elif not stopped:
                 await request_stop("attempt_cleanup")
             diagnostic.value["physical_state"] = self.physical_state
@@ -4718,11 +4726,14 @@ class _Scan:
         target: dict,
         *,
         allow_stationary: bool = False,
+        observation_guard: Callable[[], None] | None = None,
         expected_frame: dict | None = None,
         movement_intent: dict[str, Any] | None = None,
         connection_recovery_phase: str | None = None,
     ) -> dict:
         options = {"target": target, "allow_stationary": allow_stationary}
+        if observation_guard is not None:
+            options["observation_guard"] = observation_guard
         if expected_frame is not None:
             options["expected_frame"] = expected_frame
         if movement_intent is not None:
@@ -5460,6 +5471,7 @@ class _Scan:
         connection_recovery_phase: str | None = None,
         transition_estimator: Callable | None = None,
         frame_observer: Callable[[dict], None] | None = None,
+        observation_guard: Callable[[], None] | None = None,
         motion_stop_requested: Callable[[], str | None] | None = None,
         motion_velocity_update: Callable[[dict], dict | None] | None = None,
     ) -> dict:
@@ -5546,6 +5558,7 @@ class _Scan:
                 lambda: self.camera.move_relative(**delta),
                 allow_stationary=True,
                 **({"frame_observer": frame_observer} if frame_observer else {}),
+                **({"observation_guard": observation_guard} if observation_guard else {}),
                 **({"motion_stop_requested": motion_stop_requested} if motion_stop_requested else {}),
                 expected_frame=expected_frame,
                 **({"transition_estimator": transition_estimator} if transition_estimator is not None else {}),
@@ -5577,6 +5590,7 @@ class _Scan:
             requested_velocity=velocity,
             **({"motion_velocity_update": motion_velocity_update} if motion_velocity_update else {}),
             **({"frame_observer": frame_observer} if frame_observer else {}),
+            **({"observation_guard": observation_guard} if observation_guard else {}),
             **({"motion_stop_requested": motion_stop_requested} if motion_stop_requested else {}),
             expected_frame=expected_frame,
             **({"transition_estimator": transition_estimator} if transition_estimator is not None else {}),

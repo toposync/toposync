@@ -71,6 +71,7 @@ class _TrackedEvent:
     following_view: ResolvedTarget | None = None
     following_since: float | None = None
     following_confirmed: bool = False
+    following_invalid_reason: str = ""
     resolution_reason: str = ""
     observation_expired: bool = False
     expected_group_member_event_ids: tuple[str, ...] | None = None
@@ -80,6 +81,14 @@ class _TrackedEvent:
     def __post_init__(self) -> None:
         if self.expected_group_member_event_ids is None:
             self.expected_group_member_event_ids = self.intent.group_member_event_ids
+
+    def invalidate_following(self, reason: str) -> None:
+        # Keep the last qualified position for grace, never as a live fallback.
+        self.following_view = None
+        self.following_since = None
+        self.following_confirmed = False
+        self.following_invalid_reason = reason
+        self.framing_continuity.interrupt(reason)
 
     @property
     def open(self) -> bool:
@@ -498,9 +507,7 @@ class PtzAttentionController:
                     reason = "non_increasing_capture_timestamp"
                 if reason:
                     if existing:
-                        existing.following_view = None
-                        existing.following_confirmed = False
-                        existing.framing_continuity.interrupt(reason)
+                        existing.invalidate_following(reason)
                     self._record(profile, runtime, action="intent_ignored", reason=reason, intent=governed)
                     return
                 observation_age = max(observation_age, freshness.age_seconds)
@@ -509,11 +516,10 @@ class PtzAttentionController:
                 if profile.follow_view_updates and effective_mode(profile) == "live_panorama"
                 else profile.stale_timeout_seconds)
             if governed.lifecycle != "close" and observation_age >= observation_timeout:
-                if existing:
-                    existing.framing_continuity.interrupt("observation_expired")
                 if existing and profile.follow_view_updates:
-                    existing.following_view = None
-                    existing.following_confirmed = False
+                    existing.invalidate_following("observation_expired")
+                elif existing:
+                    existing.framing_continuity.interrupt("observation_expired")
                 elif profile.follow_view_updates and governed.lifecycle == "open":
                     self._prune_events(runtime, now=now, stale_timeout=profile.stale_timeout_seconds)
                     if len(runtime.events) < _MAX_EVENTS_PER_DEVICE:
@@ -544,9 +550,7 @@ class PtzAttentionController:
                     and (group_lost or (governed.group_framing is None
                         and (governed.framing_observation is None or governed.framing_observation.panorama is None)))):
                 # Keep the last complete intent through grace; a ground point cannot reacquire a framed subject.
-                existing.following_view = None
-                existing.following_confirmed = False
-                existing.framing_continuity.interrupt("following_framing_unavailable")
+                existing.invalidate_following("following_framing_unavailable")
                 if existing.open:
                     existing.closed_monotonic = now
                     existing.observation_expired = True
@@ -1422,13 +1426,12 @@ class PtzAttentionController:
             or resolved.confidence < profile.minimum_target_confidence
             or now - observed_monotonic >= profile.stale_timeout_seconds
         ):
-            tracked.following_view = None
-            tracked.following_confirmed = False
-            tracked.framing_continuity.interrupt("following_target_unqualified")
+            tracked.invalidate_following(resolution_reason or "following_target_unqualified")
             self._record(profile, runtime,
                          action="intent_rejected" if effective_mode(profile) == "live_panorama" else "shadow_blocked",
                          reason=resolution_reason or "following_target_unqualified", intent=intent)
             return
+        tracked.following_invalid_reason = ""
         tracked.last_seen_monotonic = (observed_monotonic if intent.group_framing
             else max(tracked.last_seen_monotonic, observed_monotonic))
         tracked.intent = intent
@@ -1613,6 +1616,8 @@ class PtzAttentionController:
                                 or self._monotonic_clock() - current.last_seen_monotonic
                                 > profile.follow_observation_timeout_seconds):
                             raise RuntimeError("following_observation_expired")
+                        if current.following_invalid_reason:
+                            raise RuntimeError("following_target_unqualified")
                         destination = current.following_view or current.resolved
                         if destination is None or destination.panorama is None:
                             raise RuntimeError("following_target_unqualified")

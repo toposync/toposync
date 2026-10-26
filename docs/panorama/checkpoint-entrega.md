@@ -1,5 +1,19 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Capacidade medida e suspensão com recuperação pendente — 23/10/2026
+
+Uma correção curta atualiza a resposta do eixo sem apagar a capacidade de pulso
+comprovada por uma sondagem completa. A capacidade conserva sua idade e orientação
+originais; expira em cinco minutos ou após mudança de vista de quinze graus.
+Resposta incompatível ou suporte visual insuficiente a invalidam. Resposta mais
+rápida reduz a duração para respeitar o deslocamento original; resposta mais lenta
+não aumenta esse limite. O traço registra origem e orçamento retido.
+
+Pausar durante uma falha suspende o perfil, para e libera o controle, mas conserva
+a falha e a obrigação de retorno. Retomada continua bloqueada até recuperação
+comprovada. Essa separação evita reinício automático após um retorno manual.
+Regressões de software aprovadas; seguimento físico sustentado ainda não aceito.
+
 ## Renovação local pelo ciclo de atenção — 23/10/2026
 
 O acompanhamento panorâmico pode renovar uma sondagem normal previamente

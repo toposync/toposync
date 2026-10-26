@@ -84,8 +84,9 @@ async def test_recovery_keeps_original_failure_until_return_is_verified(operatio
     if operation == "intent":
         await controller.submit_intent(event(clock))
     elif operation == "pause":
-        with pytest.raises(RuntimeError, match="return_home_required"):
-            await controller.pause(current.id)
+        paused = await controller.pause(current.id)
+        assert paused.mode == "paused" and paused.resume_mode == "live_panorama"
+        assert store.get_profile(current.id).mode == "paused"
     else:
         store.replace_profile(current.model_copy(update={"mode": "paused", "resume_mode": "live_panorama"}))
         if operation == "resume":
@@ -1228,5 +1229,35 @@ async def test_idle_local_preparation_owns_return_and_blocks_acquisition(case):
             if case == "success":
                 await controller.tick_once()
                 assert len(calls) == 1, "A current response does not repeat the probe"
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_pause_during_recovery_prevents_automatic_restart_after_verified_return():
+    clock, camera, services, _, calls, _, store, controller = environment(mode="live_panorama", qualified=True)
+    current = panorama_profile(mode="live_panorama", follow_view_updates=True, candidate_confirm_seconds=.2)
+    store.replace_profile(current)
+    runtime = controller._runtime_for(current)
+    runtime.state = "RETURNING"
+    await controller._fault(current, runtime, "visual_response_unavailable")
+    assert store.is_recovery_required(current.ptz_device_id)
+    async def requires_preparation(**kwargs):
+        return {"preparation_required": True}
+    services.register("cameras.panorama.attention_response_status", requires_preparation)
+    await controller.pause(current.id)
+    await controller.tick_once()
+    assert controller.status()[0].state == "FAULT" and not calls
+    with pytest.raises(RuntimeError, match="return_home_required"):
+        await controller.resume(current.id)
+    assert await controller.return_home(current.id)
+    await asyncio.sleep(0)
+    await controller.tick_once()
+    await controller.tick_once()
+    assert len(calls) == 1 and calls[0]["returning"] is True
+    assert "prepare_response" not in calls[0]
+    assert controller.status()[0].state == "MANUAL_OVERRIDE"
+    assert store.get_profile(current.id).mode == "paused"
+    assert not store.is_recovery_required(current.ptz_device_id)
     await controller.shutdown()
     store.close()

@@ -715,10 +715,6 @@ class PtzAttentionController:
             if runtime.state == "RETURNING" and (runtime.manual_return_deadline_monotonic is not None or runtime.campaign_finishing):
                 await self._fault(profile, runtime, "manual_return_cancelled")
                 return profile
-            if runtime.recovery_required:
-                runtime.fault = runtime.fault or _RECOVERY_FAULT
-                self._set_state(runtime, "FAULT", self._clock())
-                raise RuntimeError("return_home_required")
             paused = profile
             if profile.mode != "paused":
                 paused = profile.model_copy(update={"mode": "paused", "resume_mode": profile.mode})
@@ -733,10 +729,16 @@ class PtzAttentionController:
             runtime.grace_deadline_monotonic = None
             runtime.cooldown_deadline_monotonic = None
             if released:
-                runtime.fault = ""
                 self._clear_command(runtime)
-                self._set_state(runtime, "MANUAL_OVERRIDE", self._clock())
-                self._record(paused, runtime, action="paused", reason="manual_override_requested")
+                if runtime.recovery_required:
+                    # Suspension never certifies home or clears the durable recovery debt.
+                    runtime.fault = runtime.fault or _RECOVERY_FAULT
+                    self._set_state(runtime, "FAULT", self._clock())
+                    self._record(paused, runtime, action="paused", reason="return_home_required")
+                else:
+                    runtime.fault = ""
+                    self._set_state(runtime, "MANUAL_OVERRIDE", self._clock())
+                    self._record(paused, runtime, action="paused", reason="manual_override_requested")
             else:
                 runtime.fault = "pause_cleanup_failed"
                 self._set_state(runtime, "FAULT", self._clock())

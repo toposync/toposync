@@ -190,11 +190,10 @@ def reference_probe_direction(axis: str, target: np.ndarray, rotation: np.ndarra
     return next(iter(votes.values())) if len(votes) >= 2 and len(set(votes.values())) == 1 else None
 
 
-def _qualified_navigation_pulse_limit(amount: float, matching: dict[str, Any]) -> float:
-    """Reuse the scanner's overlap adaptation only after a full coarse pulse."""
+def _supported_navigation_pulse_limit(amount: float, matching: dict[str, Any]) -> float | None:
+    """Apply the scanner's distributed visual support and overlap bounds."""
     if (
-        abs(amount) < MAXIMUM_NAVIGATION_PULSE_SECONDS
-        or matching.get("verified") is not True
+        matching.get("verified") is not True
         or matching.get("support_scope") != "distributed_scene"
         or matching.get("inliers", 0) < FULL_PULSE_VISUAL_SUPPORT_INLIERS
         or matching.get("overlap", 0) < .75
@@ -202,19 +201,26 @@ def _qualified_navigation_pulse_limit(amount: float, matching: dict[str, Any]) -
         or not isinstance(matching.get("target_features"), int)
         or matching["source_features"] <= 0
     ):
-        return MAXIMUM_NAVIGATION_PULSE_SECONDS
+        return None
     size = matching.get("analysis_size", [])
     if len(size) != 2 or min(size) <= 0:
-        return MAXIMUM_NAVIGATION_PULSE_SECONDS
+        return None
     # Use total image displacement and the smaller dimension: diagonal motion
     # must not earn a larger pulse by hiding its cross-axis component.
     shift = matching.get("displacement", 0)
     if not np.isfinite(shift) or shift <= 2:
-        return MAXIMUM_NAVIGATION_PULSE_SECONDS
+        return None
     duration, reason = _next_continuous_seek_duration(
         abs(amount), image_extent=min(size), image_shift=shift, connection=matching,
     )
-    return duration if reason is None else MAXIMUM_NAVIGATION_PULSE_SECONDS
+    return duration if reason is None else None
+
+
+def _qualified_navigation_pulse_limit(amount: float, matching: dict[str, Any]) -> float:
+    """Reuse the scanner's overlap adaptation only after a full coarse pulse."""
+    if abs(amount) < MAXIMUM_NAVIGATION_PULSE_SECONDS:
+        return MAXIMUM_NAVIGATION_PULSE_SECONDS
+    return _supported_navigation_pulse_limit(amount, matching) or MAXIMUM_NAVIGATION_PULSE_SECONDS
 
 
 def _visual_measurement(value: dict) -> tuple[float, float, float, float] | None:
@@ -980,6 +986,7 @@ class VisualNavigator:
         self.probe_durations: dict[str, float] = {}
         self.last_pulse_stationary = False
         self.pulse_limits: dict[str, float] = {}
+        self.pulse_capacity: dict[str, dict] = {}
         self.last_pulse_match: dict[str, Any] = {}
         self.direction_responses: dict[tuple[str, int], tuple[float, np.ndarray]] = {}
         self.stationary_durations: dict[tuple[str, int], float] = {}
@@ -1099,6 +1106,7 @@ class VisualNavigator:
                 self.response.pop(axis, None)
                 self.response_rotations.pop(axis, None)
                 self.pulse_limits.pop(axis, None)
+                self.pulse_capacity.pop(axis, None)
                 for direction in (-1, 1):
                     self.direction_responses.pop((axis, direction), None)
                     self.stationary_durations.pop((axis, direction), None)
@@ -1108,6 +1116,8 @@ class VisualNavigator:
                     "reason": "view_rotation_exceeded",
                     "angle_degrees": float(np.degrees(angle)),
                 })
+        for axis in list(self.pulse_capacity):
+            self.pulse_limits[axis] = self._retained_pulse_limit(axis, result)
         return result
 
     def _error(self, ray: Any, located: dict) -> np.ndarray:
@@ -1157,6 +1167,7 @@ class VisualNavigator:
         self.direction_responses.clear()
         self.stationary_durations.clear()
         self.pulse_limits.clear()
+        self.pulse_capacity.clear()
         transition_estimator = getattr(self.localizer, "calibrated_transition", None)
         result = await self.scanner._move(
             lambda: self.scanner.camera.return_to(destination), allow_stationary=True,
@@ -1610,7 +1621,58 @@ class VisualNavigator:
         self.response[axis] = response
         self.direction_responses[(axis, 1 if amount > 0 else -1)] = (abs(amount), delta)
         self.response_rotations[axis] = np.asarray(located["rotation_matrix"])
-        self.pulse_limits[axis] = _qualified_navigation_pulse_limit(amount, self.last_pulse_match)
+        measured_limit = _supported_navigation_pulse_limit(amount, self.last_pulse_match)
+        if abs(amount) >= MAXIMUM_NAVIGATION_PULSE_SECONDS:
+            self.pulse_capacity.pop(axis, None)
+            if measured_limit is not None and measured_limit > MAXIMUM_NAVIGATION_PULSE_SECONDS:
+                self.pulse_capacity[axis] = {
+                    "limit_seconds": measured_limit, "observed_monotonic": time.monotonic(),
+                    "rotation_matrix": np.asarray(located["rotation_matrix"]).copy(),
+                    "response": np.asarray(response).copy(),
+                    "pixel_budget": self._response_pixel_delta(np.zeros(2), response * measured_limit),
+                }
+        elif measured_limit is None:
+            self.pulse_capacity.pop(axis, None)
+        self.pulse_limits[axis] = self._retained_pulse_limit(axis, located)
+        if self.trace:
+            origin = self.pulse_capacity.get(axis)
+            self.trace[-1]["pulse_capacity"] = None if origin is None else {
+                "origin_age_seconds": time.monotonic() - origin["observed_monotonic"],
+                "origin_limit_seconds": origin["limit_seconds"],
+                "pixel_budget": origin["pixel_budget"],
+                "retained_limit_seconds": self.pulse_limits[axis],
+                "origin_rotation_matrix": origin["rotation_matrix"].tolist(),
+            }
+
+    def _retained_pulse_limit(self, axis: str, located: dict) -> float:
+        origin = self.pulse_capacity.get(axis)
+        response = self.response.get(axis)
+        if origin is not None and response is not None:
+            rotation = np.asarray(located["rotation_matrix"])
+            view_angle = np.arccos(np.clip((np.trace(origin["rotation_matrix"].T @ rotation) - 1) / 2, -1, 1))
+            dot = float(origin["response"] @ response)
+            norm = float(np.linalg.norm(origin["response"]) * np.linalg.norm(response))
+            compatible = (np.isfinite(response).all() and np.isfinite([norm, dot]).all() and norm > 0
+                and dot / norm >= np.cos(np.radians(MAXIMUM_RESPONSE_VIEW_CHANGE_DEGREES)))
+            if (0 <= time.monotonic() - origin["observed_monotonic"] <= 300
+                    and np.isfinite([origin["pixel_budget"], origin["limit_seconds"]]).all()
+                    and origin["pixel_budget"] > 0
+                    and view_angle <= np.radians(MAXIMUM_RESPONSE_VIEW_CHANGE_DEGREES) and compatible):
+                maximum = origin["limit_seconds"]
+                # Faster measured motion consumes the original displacement budget sooner.
+                if self._response_pixel_delta(np.zeros(2), response * maximum) > origin["pixel_budget"]:
+                    minimum = 0.
+                    for _ in range(16):
+                        middle = (minimum + maximum) / 2
+                        if self._response_pixel_delta(np.zeros(2), response * middle) <= origin["pixel_budget"]:
+                            minimum = middle
+                        else:
+                            maximum = middle
+                    maximum = minimum
+                if maximum > MAXIMUM_NAVIGATION_PULSE_SECONDS:
+                    return maximum
+        self.pulse_capacity.pop(axis, None)
+        return MAXIMUM_NAVIGATION_PULSE_SECONDS
 
     async def _target_measurement(self, target: np.ndarray, located: dict[str, Any]) -> dict[str, Any] | None:
         started = time.monotonic()
@@ -2115,6 +2177,7 @@ class VisualNavigator:
                             self.response.pop(axis, None)
                             self.response_rotations.pop(axis, None)
                             self.pulse_limits.pop(axis, None)
+                            self.pulse_capacity.pop(axis, None)
                             for direction in (-1, 1):
                                 self.direction_responses.pop((axis, direction), None)
                                 self.stationary_durations.pop((axis, direction), None)

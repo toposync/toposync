@@ -3715,3 +3715,69 @@ def test_following_window_requires_an_existing_overlap_qualified_coarse_correcti
     with pytest.raises(ReachedPulse):
         asyncio.run(navigator.aim(target, **({"target_provider": lambda: target} if case != "static" else {})))
     assert navigator.following_seconds is None and navigator.motion_prediction is None
+
+
+def test_short_home_corrections_preserve_bounded_coarse_capacity():
+    """Reproduce a .6 s probe followed by the observed short return corrections."""
+    navigator = VisualNavigator(SimpleNamespace(), SimpleNamespace(lens={"fx": 573., "fy": 572., "width": 960}))
+    navigator.last_pulse_match = {"verified": True, "support_scope": "distributed_scene", "inliers": 405,
+        "overlap": .91, "source_features": 600, "target_features": 590,
+        "analysis_size": [960, 540], "displacement": 77.875}
+    located = {"rotation_matrix": np.eye(3).tolist()}
+    initial = np.array([-.16983251534855937, .002932089205352469])
+    navigator._remember_axis_response("pan", .6, initial, located, initial * .6)
+    assert navigator.pulse_limits["pan"] == 1.2
+    for duration, response, displacement in [
+        (-.5557976724075718, [-.13956320588577967, .004338722846112336], 45.),
+        (-.15, [-.1565893424897448, .002125883455891403], 15.003625679016114),
+    ]:
+        navigator.last_pulse_match.update(displacement=displacement, overlap=.97)
+        vector = np.array(response)
+        navigator._remember_axis_response("pan", duration, vector, located, vector * duration)
+        assert 1 <= navigator.pulse_limits["pan"] <= 1.2
+        assert navigator._response_pixel_delta(np.zeros(2), vector * navigator.pulse_limits["pan"]) <= (
+            navigator._response_pixel_delta(np.zeros(2), initial * 1.2) + 1e-6)
+
+
+@pytest.mark.parametrize("case", ["short_only", "expired", "future", "rotated", "direction",
+    "unsupported", "weak_full", "faster", "too_fast", "nan_budget", "nan_response", "compatible"])
+def test_coarse_capacity_keeps_its_original_time_view_and_displacement(monkeypatch, case):
+    import toposync_ext_cameras.panorama_navigation as module
+    clock = [10.]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    navigator = VisualNavigator(SimpleNamespace(), SimpleNamespace(lens={"fx": 573., "fy": 572., "width": 960}))
+    navigator.last_pulse_match = {"verified": True, "support_scope": "distributed_scene", "inliers": 405,
+        "overlap": .91, "source_features": 600, "target_features": 590,
+        "analysis_size": [960, 540], "displacement": 60.}
+    located = {"rotation_matrix": np.eye(3)}
+    response = np.array([-.15, 0.])
+    if case != "short_only":
+        navigator._remember_axis_response("pan", .6, response, located, response * .6)
+        assert navigator.pulse_limits["pan"] == 1.2
+    clock[0] = 311. if case == "expired" else 9. if case == "future" else 20.
+    if case == "rotated":
+        # Small successive corrections must not walk the origin past its 15 degree bound.
+        for degrees in (8, 16):
+            angle = np.radians(degrees)
+            located["rotation_matrix"] = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
+            navigator._remember_axis_response("pan", -.15, response, located, response * -.15)
+    if case == "direction": response = np.array([0., -.15])
+    if case == "faster": response *= 1.5
+    if case == "too_fast": response *= 3
+    if case == "nan_response": response[0] = float("nan")
+    if case in {"unsupported", "weak_full"}: navigator.last_pulse_match["support_scope"] = "banded_command_transition"
+    if case == "nan_budget": navigator.pulse_capacity["pan"]["pixel_budget"] = float("nan")
+    navigator.last_pulse_match["displacement"] = 15.
+    navigator.trace.append({})
+    duration = .6 if case == "weak_full" else -.15
+    navigator._remember_axis_response("pan", duration, response, located, response * duration)
+    if case in {"compatible", "faster"}:
+        assert navigator.pulse_capacity["pan"]["observed_monotonic"] == 10.
+        assert navigator.pulse_capacity["pan"]["rotation_matrix"] == pytest.approx(np.eye(3))
+        expected = .8 if case == "faster" else 1.2
+        assert navigator.pulse_limits["pan"] == pytest.approx(expected, abs=2e-5)
+        assert navigator.trace[-1]["pulse_capacity"]["origin_age_seconds"] == 10.
+    else:
+        assert navigator.pulse_limits["pan"] == .6
+        assert "pan" not in navigator.pulse_capacity
+        assert navigator.trace[-1]["pulse_capacity"] is None

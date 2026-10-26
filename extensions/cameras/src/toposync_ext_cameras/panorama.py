@@ -1629,7 +1629,7 @@ class PanoramaService:
         failure_code = None
         cleanup_cancellation = None
         navigator = None
-        response_fields = ("response", "response_rotations", "pulse_limits",
+        response_fields = ("response", "response_rotations", "pulse_limits", "pulse_capacity",
                            "direction_responses", "stationary_durations", "probe_durations")
         response_binding = None
         response_observed = None
@@ -1758,7 +1758,7 @@ class PanoramaService:
                     if (borrowed_control is not None and cached.get("binding") == response_binding
                             and 0 <= time.monotonic() - cached.get("observed_monotonic", 0) <= 300):
                         for name in response_fields:
-                            setattr(navigator, name, copy.deepcopy(cached["response"][name]))
+                            setattr(navigator, name, copy.deepcopy(cached["response"].get(name, {})))
                         response_observed = cached["observed_monotonic"]
                         prepared("response_reused")
                 if qualification_home is not None:
@@ -2398,7 +2398,9 @@ class PanoramaService:
         cached = getattr(self, "_attention_responses", {}).get(camera_id, {})
         age = time.monotonic() - cached.get("observed_monotonic", 0)
         response = cached.get("response", {})
+        capacity = response.get("pulse_capacity", {}).get(probe["axis"], {})
         ready = (cached.get("job_binding") == binding and 0 <= age <= 300
+            and bool(capacity) and 0 <= time.monotonic() - capacity.get("observed_monotonic", 0) <= 300
             and probe["axis"] in response.get("response", {})
             and response.get("pulse_limits", {}).get(probe["axis"], 0) >= 1)
         return {"supported": True, "preparation_required": not ready,

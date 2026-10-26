@@ -89,7 +89,7 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         locate=AsyncMock(return_value=arrival_location),
         _target_measurement=AsyncMock(return_value={"center_error_pixels": .3}),
         response={"pan": np.array([.2, 0])}, response_rotations={"pan": np.eye(3)},
-        pulse_limits={"pan": .3}, direction_responses={}, stationary_durations={},
+        pulse_limits={"pan": .3}, pulse_capacity={}, direction_responses={}, stationary_durations={},
         probe_durations={"tilt": .48}, commands=1)
     reuse_expected = reuse in {"current_arrival", "current_return"}
     tolerance = 3 if reuse in {"current_return", "return_needs_correction"} else 12
@@ -1293,7 +1293,7 @@ async def test_attention_progress_keeps_pinned_binding_and_does_not_replace_term
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("case", ["missing", "fresh", "expired", "future", "binding", "short", "axis", "home", "unqualified", "fast", "nan", "trial_failed"])
+@pytest.mark.parametrize("case", ["missing", "fresh", "expired", "future", "binding", "short", "axis", "home", "unqualified", "fast", "nan", "trial_failed", "capacity_expired", "capacity_missing"])
 async def test_response_readiness_is_passive_bound_and_never_renews_expiry(monkeypatch, case):
     from copy import deepcopy
     service, job, _ = framing_service(monkeypatch)
@@ -1304,8 +1304,13 @@ async def test_response_readiness_is_passive_bound_and_never_renews_expiry(monke
         "response_qualified": True, "following_pulse_limit_seconds": 1.2}}
     cached = {"job_binding": {key: deepcopy(job.get(key)) for key in
         ("id", "revision", "source_id", "_source_digest", "_composition_digest", "source_panorama")},
-        "observed_monotonic": 49., "response": {"response": {"pan": [.2, 0]}, "pulse_limits": {"pan": 1.2}}}
+        "observed_monotonic": 49., "response": {"response": {"pan": [.2, 0]}, "pulse_limits": {"pan": 1.2},
+            "pulse_capacity": {"pan": {"observed_monotonic": 49.}}}}
     service._attention_responses = {"camera": cached}
+    if case == "capacity_expired":
+        cached["response"]["pulse_capacity"]["pan"]["observed_monotonic"] = -251.
+    if case == "capacity_missing":
+        cached["response"].pop("pulse_capacity")
     if case == "missing":
         service._attention_responses.clear()
     if case == "expired":

@@ -3853,42 +3853,70 @@ class _Scan:
 
         async def issue_velocity_update(plan: dict, entry: dict) -> None:
             nonlocal velocity_deadline
-            # Persist the intent before transport; each update consumes the same
-            # navigation and regional budgets as a fresh command.
-            if self.region_policy is not None:
-                commands = self.checkpoint.setdefault("region_commands", [])
-                limit = self.region_policy["maximum_commands"] - self.region_policy["return_commands_reserved"]
-                if len(commands) >= limit:
-                    raise PanoramaCaptureError("region_budget_exhausted")
-                commands.append(entry)
-            plan["reserve"](entry)
-            await self._persist()
-            now = time.monotonic()
-            next_deadline = velocity_deadline
-            if "duration_seconds" in plan:
-                next_deadline = min(now + plan["duration_seconds"], window_deadline - .1)
-            remaining = min(2., next_deadline - now - .1)
-            if remaining < .05:
-                raise PanoramaCaptureError("visual_feedback_expired")
-            def guard():
-                self._check()
+            stage = "reservation"
+            entry["update_started_monotonic"] = time.monotonic()
+            try:
+                # Persist the intent before transport; each update consumes the same
+                # navigation and regional budgets as a fresh command.
+                if self.region_policy is not None:
+                    commands = self.checkpoint.setdefault("region_commands", [])
+                    limit = self.region_policy["maximum_commands"] - self.region_policy["return_commands_reserved"]
+                    if len(commands) >= limit:
+                        raise PanoramaCaptureError("region_budget_exhausted")
+                    commands.append(entry)
+                plan["reserve"](entry)
+                stage = "persistence"
+                persistence_started = time.monotonic()
+                await self._persist()
+                entry["persistence_seconds"] = time.monotonic() - persistence_started
+                stage = "pre_dispatch_guard"
                 now = time.monotonic()
-                if (stop_operation is not None or now >= velocity_deadline
-                        or next_deadline - now < remaining):
+                next_deadline = velocity_deadline
+                if "duration_seconds" in plan:
+                    next_deadline = min(now + plan["duration_seconds"], window_deadline - .1)
+                remaining = min(2., next_deadline - now - .1)
+                if remaining < .05:
+                    entry["failure_constraint"] = "insufficient_pulse_time"
                     raise PanoramaCaptureError("visual_feedback_expired")
-                if not 0 <= time.monotonic() - entry["frame_received_monotonic"] <= .35:
-                    raise PanoramaCaptureError("visual_feedback_expired")
-                plan["dispatch_guard"]()
-            guard()
-            receipt = await self.camera.move_velocity(**entry["velocity"], timeout_s=remaining, dispatch_guard=guard)
-            entry.update(state="accepted", accepted_monotonic=time.monotonic(),
-                command_id=receipt.get("command_id"), timeout_seconds=remaining)
-            if "duration_seconds" in plan:
-                # Acknowledgement never renews the outer window or hides transport time.
-                velocity_deadline = min(next_deadline, now + remaining,
-                    entry["accepted_monotonic"] + max(0., receipt.get("pulse_remaining_seconds", remaining)))
-                entry["deadline_monotonic"] = velocity_deadline
-            velocity_context.update(velocity=entry["velocity"], accepted_monotonic=entry["accepted_monotonic"])
+                def guard():
+                    nonlocal stage
+                    stage = "transport_dispatch_guard" if "transport_started_monotonic" in entry else "pre_dispatch_guard"
+                    entry.update(last_guard_monotonic=time.monotonic(),
+                        last_guard_frame_age_seconds=time.monotonic() - entry["frame_received_monotonic"],
+                        last_guard_remaining_seconds=velocity_deadline - time.monotonic())
+                    self._check()
+                    now = time.monotonic()
+                    if (stop_operation is not None or now >= velocity_deadline
+                            or next_deadline - now < remaining):
+                        entry["failure_constraint"] = ("stop_started" if stop_operation is not None else
+                            "pulse_deadline" if now >= velocity_deadline else "reserved_dispatch_time")
+                        raise PanoramaCaptureError("visual_feedback_expired")
+                    if not 0 <= time.monotonic() - entry["frame_received_monotonic"] <= .35:
+                        entry["failure_constraint"] = "frame_age"
+                        raise PanoramaCaptureError("visual_feedback_expired")
+                    plan["dispatch_guard"]()
+                    stage = "transport" if "transport_started_monotonic" in entry else "pre_dispatch_guard"
+                guard()
+                entry["transport_started_monotonic"] = time.monotonic()
+                stage = "transport"
+                receipt = await self.camera.move_velocity(**entry["velocity"], timeout_s=remaining, dispatch_guard=guard)
+                entry.update(state="accepted", acceptance_confirmed=True, accepted_monotonic=time.monotonic(),
+                    command_id=receipt.get("command_id"), timeout_seconds=remaining)
+                if "duration_seconds" in plan:
+                    # Acknowledgement never renews the outer window or hides transport time.
+                    velocity_deadline = min(next_deadline, now + remaining,
+                        entry["accepted_monotonic"] + max(0., receipt.get("pulse_remaining_seconds", remaining)))
+                    entry["deadline_monotonic"] = velocity_deadline
+                velocity_context.update(velocity=entry["velocity"], accepted_monotonic=entry["accepted_monotonic"])
+            except BaseException as error:
+                # A lost acknowledgement can hide a real command. Record the failed
+                # operation without claiming that the device never moved.
+                entry.update(state="cancelled" if isinstance(error, asyncio.CancelledError) else "failed",
+                    acceptance_confirmed=entry.get("acceptance_confirmed", False), failure_stage=stage,
+                    failure_code=error.code if isinstance(error, PanoramaCaptureError) else
+                        "cancelled" if isinstance(error, asyncio.CancelledError) else "internal_error",
+                    failed_monotonic=time.monotonic())
+                raise
 
         try:
             while time.monotonic() < observation_deadline:

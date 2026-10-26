@@ -10900,7 +10900,7 @@ def test_visual_feedback_failure_still_stops_the_shared_command(tmp_path, monkey
     assert len([event for event in camera.events if event[0] == "stop"]) == 1
 
 
-@pytest.mark.parametrize("case", ["success", "two_updates", "reverse", "other_axis", "overspeed", "stale", "reject", "budget", "region_budget", "stop_rejected", "delayed_guard", "cancel"])
+@pytest.mark.parametrize("case", ["success", "two_updates", "reverse", "other_axis", "overspeed", "stale", "reject", "budget", "region_budget", "stop_rejected", "delayed_guard", "slow_persistence", "slow_dispatch", "fresh_slow_dispatch", "cancel"])
 def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypatch, case):
     updates = []
     reserved = []
@@ -10909,6 +10909,7 @@ def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypa
         async def move_velocity(self, *, dispatch_guard=None, **kwargs):
             if dispatch_guard is not None:
                 if case == "delayed_guard": self.now += 1.2
+                if case in {"slow_dispatch", "fresh_slow_dispatch"}: self.now += .15
                 dispatch_guard()
                 if case == "cancel": raise asyncio.CancelledError()
                 updates.append((self.now, dict(kwargs)))
@@ -10926,6 +10927,12 @@ def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypa
     scanner.capabilities.update(velocity_supported=True, defaults={"continuous": "normalized"},
         spaces={"continuous": [{"uri": "normalized", "normalized": True,
             "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]})
+    if case == "slow_persistence":
+        persist = scanner._persist
+        async def delayed_persist():
+            camera.now += .15
+            await persist()
+        scanner._persist = delayed_persist
     if case == "region_budget":
         scanner.region_policy = {"maximum_active_seconds": 100, "return_seconds_reserved": 10,
             "maximum_captures": 10, "maximum_commands": 1, "return_commands_reserved": 0}
@@ -10940,7 +10947,7 @@ def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypa
             reserved.append(True)
         return {"velocity": {"pan": -.05 if case == "reverse" else .2 if case == "overspeed" else .05,
                              "tilt": .01 if case == "other_axis" else 0.},
-            "frame_received_monotonic": camera.now - (1. if case == "stale" else 0.),
+            "frame_received_monotonic": camera.now - (1. if case == "stale" else .275 if case in {"slow_persistence", "slow_dispatch"} else 0.),
             "capture_evidence": {"capture_instance": camera.capture_instance, "generation": 1, "sequence": camera.sequence},
             "dispatch_guard": lambda: None, "reserve": reserve}
     async def scenario():
@@ -10949,7 +10956,8 @@ def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypa
             frame_observer=offered.append, motion_velocity_update=feedback)
     expected = {"reverse": "invalid_visual_feedback", "other_axis": "invalid_visual_feedback", "overspeed": "invalid_visual_feedback",
         "stale": "visual_feedback_expired", "reject": "movement_unconfirmed", "budget": "visual_navigation_budget_exhausted",
-        "stop_rejected": "stop_unconfirmed", "delayed_guard": "visual_feedback_expired", "region_budget": "region_budget_exhausted"}
+        "stop_rejected": "stop_unconfirmed", "delayed_guard": "visual_feedback_expired", "region_budget": "region_budget_exhausted",
+        "slow_persistence": "visual_feedback_expired", "slow_dispatch": "visual_feedback_expired", "fresh_slow_dispatch": "visual_feedback_expired"}
     if case == "cancel":
         with pytest.raises(asyncio.CancelledError): asyncio.run(scenario())
     elif case in expected:
@@ -10964,7 +10972,24 @@ def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypa
             assert planned[1]["accepted_monotonic"] > planned[0]["accepted_monotonic"]
             assert planned[1]["deadline_monotonic"] == planned[0]["deadline_monotonic"]
     assert _event_names(camera).count("stop") == 1
-    if case in {"reverse", "other_axis", "overspeed", "stale", "budget", "region_budget", "delayed_guard", "cancel"}:
+    if case in {"slow_persistence", "slow_dispatch", "fresh_slow_dispatch", "reject", "delayed_guard", "cancel"}:
+        diagnostic = json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1]
+        update = diagnostic["motion_velocity_updates"][0]
+        assert update["state"] == ("cancelled" if case == "cancel" else "failed")
+        assert update["acceptance_confirmed"] is False
+        assert update["failure_code"] == ("cancelled" if case == "cancel" else expected[case])
+        if case in {"slow_persistence", "slow_dispatch", "fresh_slow_dispatch"}:
+            assert update["failure_stage"] == ("pre_dispatch_guard" if case == "slow_persistence" else "transport_dispatch_guard")
+            assert update["failure_constraint"] == ("frame_age" if case == "slow_persistence" else "reserved_dispatch_time")
+            assert update["last_guard_frame_age_seconds"] >= (.15 if case == "fresh_slow_dispatch" else .425) - 1e-6
+            if case == "fresh_slow_dispatch":
+                assert update["last_guard_frame_age_seconds"] < .35
+            if case == "slow_persistence":
+                assert update["persistence_seconds"] >= .15
+                assert "transport_started_monotonic" not in update
+            else:
+                assert update["transport_started_monotonic"] <= update["last_guard_monotonic"]
+    if case in {"reverse", "other_axis", "overspeed", "stale", "budget", "region_budget", "delayed_guard", "slow_persistence", "slow_dispatch", "fresh_slow_dispatch", "cancel"}:
         assert not updates
 
 

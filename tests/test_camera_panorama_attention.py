@@ -64,7 +64,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "prepared_reference", "dynamic_reference_ignored", "cancel_initial_localization",
     "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup", "external_cancel_cleanup",
     "response_cancelled", "response_expired", "response_empty", "response_stop_failure", "response_control_failure",
-    "local_preparation", "local_preparation_rejected", "local_preparation_cancelled", "local_preparation_return_failed", "local_preparation_degraded"])
+    "local_preparation", "local_preparation_rejected", "local_preparation_cancelled", "local_preparation_return_failed", "local_preparation_degraded",
+    "target_history", "target_history_changed", "target_history_expired"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -239,6 +240,26 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         if reuse == "lost_during_cleanup":
             raise HTTPException(409, detail={"code": "following_target_missing"})
         return current_direction[0]
+    target_options = {}
+    if reuse.startswith("target_history"):
+        observation = {}
+        observed_at = time.monotonic() - .3
+        def observed_target():
+            if reuse.endswith("expired") and observation.get("sequence") == 3:
+                raise PanoramaCaptureError("following_observation_expired")
+            return current_direction[0]
+        async def reference_with_target(*, observation_guard):
+            scanner._stop.assert_awaited()
+            for index in range(3):
+                observation.update(scope=["camera", "wide", "job", 2, "artifact", "geometry"],
+                    capture_instance="decoder", generation=2 if reuse.endswith("changed") and index == 2 else 1,
+                    sequence=index + 1, observed_monotonic=observed_at + index * .1)
+                current_direction[0] = [float(np.cos(index * .002)), float(np.sin(index * .002)), 0.]
+                observation_guard()
+                observation_guard()  # Polling the same target must not manufacture motion.
+            return frame
+        scanner._reference_window.side_effect = reference_with_target
+        target_options = {"target_provider": observed_target, "target_observation_provider": lambda: observation}
     if reuse == "moving_during_cleanup":
         async def measured_after_update(*args):
             current_direction[0] = [float(np.cos(.005)), float(np.sin(.005)), 0.]
@@ -266,8 +287,18 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
         **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}),
+        **target_options,
         **({"response_preparation": {"axis": "pan", "direction": 1, "speed": .1, "duration_seconds": .6}}
            if reuse.startswith("local_preparation") else {}))
+    if reuse == "target_history_expired":
+        with pytest.raises(HTTPException) as failure:
+            await operation
+        assert failure.value.detail["code"] == "following_observation_expired"
+        navigator.aim.assert_not_awaited()
+        scanner._confirm_stop.assert_awaited()
+        camera.close.assert_awaited_once()
+        assert not service._navigation_scanners
+        return
     if reuse.startswith("local_preparation"):
         if reuse == "local_preparation":
             _, evidence = await operation
@@ -416,6 +447,12 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         assert not images
         return
     _, evidence = await operation
+    if reuse.startswith("target_history"):
+        motion = navigator.aim.call_args.kwargs["target_motion"]
+        assert len(motion.samples) == (1 if reuse.endswith("changed") else 3)
+        assert motion.samples[-1][1] == observed_at + .2
+        assert motion.samples[-1][2] == pytest.approx(current_direction[0])
+        scanner._reference_window.side_effect = None
     if reuse == "continuous_preparation":
         camera.prepare_continuous_move.assert_awaited_once()
         assert preparation_finished.is_set()
@@ -558,6 +595,8 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
         assert "camera" not in service._attention_responses
     else:
         await operation
+        if reuse.startswith("target_history"):
+            assert "target_motion" not in navigator.aim.call_args.kwargs, "History cannot cross attention operations"
         assert bool(navigator.response) is (reuse not in {"revision_changed", "optics_changed", "expired"})
         assert navigator.probe_durations == (
             {} if reuse in {"revision_changed", "optics_changed", "expired"} else {"tilt": .48})

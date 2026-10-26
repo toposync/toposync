@@ -1800,12 +1800,13 @@ class VisualNavigator:
         target_provider: Callable[[], list[float]] | None = None,
         target_observation_provider: Callable[[], dict | None] | None = None,
         following_observer: Callable[[dict], None] | None = None,
+        target_motion: TargetMotion | None = None,
     ) -> dict[str, Any]:
         if type(maximum_error_pixels) not in (int, float) or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
             raise PanoramaCaptureError("invalid_arrival_limit")
         self.following_observer = following_observer
         self.following_capture = None
-        motion = TargetMotion()
+        motion = target_motion if target_motion is not None else TargetMotion()
 
         def read_target():
             updated = target_provider()

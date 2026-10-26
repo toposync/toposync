@@ -2590,7 +2590,8 @@ class _Scan:
         self._stop_failed = True
         return False
 
-    async def _reference_window(self, *, timeout: float = ATTEMPT_SECONDS) -> dict:
+    async def _reference_window(self, *, timeout: float = ATTEMPT_SECONDS,
+                                observation_guard: Callable[[], None] | None = None) -> dict:
         """Observe a stationary reference; never publish it as a qualified capture.
 
         The initial return reference has no prior causal movement. This weaker
@@ -2638,6 +2639,8 @@ class _Scan:
                     continue
                 now = time.monotonic()
                 self.last_frame = frame
+                if observation_guard is not None:
+                    observation_guard()
                 if observation_start is None:
                     observation_start = now
                     detector.reset(now=now)

@@ -1588,6 +1588,7 @@ class PanoramaService:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
         from .panorama_navigation import VisualNavigator, _arrival_stop_is_current, select_direct_native_reference
+        from .panorama_target_motion import TargetMotion
 
         if self.camera_factory is None:
             raise _error("visual_control_unavailable", "Visual camera control is unavailable")
@@ -1634,6 +1635,14 @@ class PanoramaService:
         response_binding = None
         response_observed = None
         continuous_preparation = None
+        target_motion = (TargetMotion() if target_provider is not None
+                         and target_observation_provider is not None else None)
+
+        def observe_target() -> None:
+            # Preserve source timestamps and identity while waiting for the same stopped reference.
+            ray = target_provider()
+            target_motion.observe(target_observation_provider(), ray, time.monotonic())
+
         job["stop_confirmed"] = False
         try:
             discovery_reused = bool(borrowed_control is not None and metadata
@@ -1660,7 +1669,8 @@ class PanoramaService:
             # Both observations follow the confirmed Stop and precede any movement.
             position_read = asyncio.create_task(camera.position())
             try:
-                scanner.last_frame = await scanner._reference_window()
+                scanner.last_frame = await scanner._reference_window(
+                    **({"observation_guard": observe_target} if target_motion is not None else {}))
                 prepared("reference")
                 scanner.last_pose = await position_read
                 prepared("position")
@@ -1822,6 +1832,7 @@ class PanoramaService:
                         **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}),
                         **({"target_provider": target_provider} if target_provider is not None else {}),
                         **({"target_observation_provider": target_observation_provider} if target_observation_provider is not None else {}),
+                        **({"target_motion": target_motion} if target_motion is not None else {}),
                         **({"following_observer": following_observer} if following_observer is not None else {}))
                     if response_preparation is not None:
                         # Reuse the qualified local probe and the same verified home path.

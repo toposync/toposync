@@ -3126,6 +3126,27 @@ def test_reference_window_starts_after_decoder_startup_within_total_budget(
     assert json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1] == attempt
 
 
+@pytest.mark.parametrize("expires", [False, True])
+def test_reference_window_observes_target_without_moving_or_weakening_stability(tmp_path, monkeypatch, expires):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    observations = []
+    def observe():
+        observations.append(scanner.last_frame["received_monotonic"])
+        if expires and len(observations) == 3:
+            raise PanoramaCaptureError("following_observation_expired")
+    if expires:
+        with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+            asyncio.run(scanner._reference_window(observation_guard=observe))
+        assert len(observations) == 3
+    else:
+        reference = asyncio.run(scanner._reference_window(observation_guard=observe))
+        assert len(observations) >= 5 and observations[-1] - observations[0] >= .8
+        assert reference["return_reference_evidence"]["provisional"] is True
+    assert not camera.events, "Collect target evidence while stopped, never issue a command"
+
+
 def test_reference_window_ignores_interleaved_duplicates_between_distinct_candidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

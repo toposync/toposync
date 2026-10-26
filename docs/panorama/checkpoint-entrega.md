@@ -1,5 +1,19 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Histórico do alvo durante a preparação — 23/10/2026
+
+A aquisição de atenção aproveita a espera pela referência estacionária para
+observar o alvo já associado. O mesmo preditor recebe esse histórico ao entrar
+no navegador, conservando os timestamps e vínculos de captura originais.
+Consultas repetidas não criam amostras; mudança de captura invalida o histórico.
+Perda do alvo durante a preparação interrompe a navegação antes do primeiro
+movimento, mantendo a parada e a limpeza da sessão.
+
+Não há outro coletor, cache entre operações ou alteração de velocidade,
+estabilidade, tolerância ou duração. O histórico pode estar disponível no
+primeiro feedback; isso não resolve sozinho a chegada estática nem constitui
+aceite de aquisição preditiva ou seguimento físico sustentado.
+
 ## Capacidade medida e suspensão com recuperação pendente — 23/10/2026
 
 Uma correção curta atualiza a resposta do eixo sem apagar a capacidade de pulso

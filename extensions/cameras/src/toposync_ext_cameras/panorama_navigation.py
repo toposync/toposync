@@ -1309,10 +1309,11 @@ class VisualNavigator:
             rate_origin, previous_rate_origin = previous_rate_origin, before["capture_evidence"]
             # Two agreeing intervals at the current commanded velocity qualify
             # a local rate estimate. Finite-pulse gains never stand in for it.
-            if (last_rate is None or rate @ last_rate < .9 * np.linalg.norm(rate) * np.linalg.norm(last_rate)
-                    or not .5 <= np.linalg.norm(rate) / max(np.linalg.norm(last_rate), 1e-8) <= 2):
-                return None
-            observer.qualified_rate = {"rate": rate.copy(), "observation": record}
+            qualified_rate = bool(last_rate is not None
+                and rate @ last_rate >= .9 * np.linalg.norm(rate) * np.linalg.norm(last_rate)
+                and .5 <= np.linalg.norm(rate) / max(np.linalg.norm(last_rate), 1e-8) <= 2)
+            if qualified_rate:
+                observer.qualified_rate = {"rate": rate.copy(), "observation": record}
             ray, maximum_error = self.motion_feedback_target()
             error = self._error(ray, geometry)
             remaining = context["deadline_monotonic"] - now
@@ -1322,20 +1323,36 @@ class VisualNavigator:
                 remaining = duration
             if remaining < .2:
                 return None
-            target_rate = np.zeros(2)
-            prediction = self.motion_prediction(geometry, interval) if renewal and self.motion_prediction else None
-            if prediction is not None:
-                forecast = prediction[0]
-                target_rate = (self._error(forecast["ray"], geometry) - error) / forecast["horizon_seconds"]
-            # Tracking responds on the observed feedback cadence, not on the
-            # duration of a stopped arrival. World-target motion is separate.
-            correction_seconds = max(.2, 2 * interval, 2 * context.get("observed_response_seconds", 0)) if renewal else remaining
-            desired_rate = -target_rate - .8 * error / correction_seconds
-            factor = float(desired_rate @ rate) / float(rate @ rate)
-            if factor <= 0:
-                return None
+            continuation = not qualified_rate
             current_speed = abs(context["velocity"][axis])
-            proposed = float(np.clip(current_speed * factor, .025, speed))
+            if continuation:
+                response = self.response.get(axis)
+                # Acceleration may consume the first pulse before a steady rate
+                # is measurable. Continue only its already-qualified direction
+                # and speed, with another full correction still ahead.
+                if (not renewal or self.following_seconds is None or current_speed != speed
+                        or (axis, direction) not in self.direction_responses or response is None
+                        or rate @ (direction * response) < .9 * np.linalg.norm(rate) * np.linalg.norm(response)
+                        or self._motion_stop_reason(observer, axis, direction) is not None):
+                    return None
+                _, amount = self._correction_plan([axis], error, False)
+                if direction * amount < duration or float(error @ rate) >= 0:
+                    return None
+                proposed = current_speed
+            else:
+                target_rate = np.zeros(2)
+                prediction = self.motion_prediction(geometry, interval) if renewal and self.motion_prediction else None
+                if prediction is not None:
+                    forecast = prediction[0]
+                    target_rate = (self._error(forecast["ray"], geometry) - error) / forecast["horizon_seconds"]
+                # Tracking responds on the observed feedback cadence, not on the
+                # duration of a stopped arrival. World-target motion is separate.
+                correction_seconds = max(.2, 2 * interval, 2 * context.get("observed_response_seconds", 0)) if renewal else remaining
+                desired_rate = -target_rate - .8 * error / correction_seconds
+                factor = float(desired_rate @ rate) / float(rate @ rate)
+                if factor <= 0:
+                    return None
+                proposed = float(np.clip(current_speed * factor, .025, speed))
             velocity = {"pan": 0., "tilt": 0., axis: direction * proposed}
             if abs(proposed - current_speed) < .01:
                 if (not renewal or context["deadline_monotonic"] - now > duration * .6
@@ -1355,6 +1372,10 @@ class VisualNavigator:
                 shift = self._response_pixel_delta(error, self._error(latest, geometry))
                 if shift > maximum_error / 2:
                     raise PanoramaCaptureError("visual_feedback_target_changed")
+                if continuation:
+                    _, amount = self._correction_plan([axis], self._error(latest, geometry), False)
+                    if direction * amount < duration:
+                        raise PanoramaCaptureError("visual_feedback_target_changed")
             def reserve(entry):
                 if self.commands >= self.maximum_commands:
                     raise PanoramaCaptureError("visual_navigation_budget_exhausted")
@@ -1363,11 +1384,14 @@ class VisualNavigator:
                 self.trace[-1].setdefault("velocity_updates", []).append(entry)
             return {"velocity": velocity,
                 **({"duration_seconds": duration} if renewal else {}),
-                "measurement": {"kind": "visual_rate_estimate", "timing_basis": "local_frame_receipt",
+                "measurement": ({"kind": "visual_direction_continuation", "timing_basis": "local_frame_receipt",
+                    "interval_seconds": interval, "displacement_pixels": self._response_pixel_delta(old_error, new_error),
+                    "planned_amount": amount, "capture_evidence": [deepcopy(before["capture_evidence"]), capture]}
+                    if continuation else {"kind": "visual_rate_estimate", "timing_basis": "local_frame_receipt",
                     "rate_radians_per_second": rate.tolist(), "comparison_rate_radians_per_second": last_rate.tolist(),
                     "target_rate_radians_per_second": target_rate.tolist(), "correction_seconds": correction_seconds,
                     "interval_seconds": interval, "capture_evidence": [deepcopy(rate_origin),
-                        deepcopy(before["capture_evidence"]), capture]},
+                        deepcopy(before["capture_evidence"]), capture]}),
                 "capture_evidence": capture, "frame_received_monotonic": record["frame_received_monotonic"],
                 "dispatch_guard": guard, "reserve": reserve}
         return plan

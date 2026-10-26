@@ -378,3 +378,59 @@ def test_following_matches_world_target_rate_instead_of_stopping_at_instantaneou
     observer.latest["status"] = "unlocalized"
     with pytest.raises(navigation.PanoramaCaptureError, match="visual_feedback_unavailable"):
         plan["dispatch_guard"]()
+
+
+@pytest.mark.parametrize("case", ["continue", "static", "near", "wrong_direction", "unknown_direction",
+    "unknown_response", "changed_speed", "stale", "view_changed", "too_early", "no_motion"])
+def test_following_can_continue_original_velocity_before_acceleration_settles(monkeypatch, case):
+    clock = [10.4]
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: clock[0])
+    model = localizer()
+    model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    capabilities = {"velocity_supported": True, "defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
+        {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
+    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator.following_seconds, navigator.trace = 6., [{}]
+    navigator.response["pan"] = np.array([-.2, 0.])
+    navigator.response_rotations["pan"] = np.eye(3)
+    navigator.direction_responses[("pan", 1)] = (.6, np.array([-.12, 0.]))
+    navigator.pulse_limits["pan"] = 1.2
+    if case == "unknown_direction": navigator.direction_responses.clear()
+    if case == "unknown_response": navigator.response.clear()
+    if case == "view_changed": navigator.response_rotations["pan"] = np.diag([-1., 1., -1.])
+    target = [.04 if case == "near" else .5]
+    navigator.motion_feedback_target = lambda: ([np.cos(target[0]), np.sin(target[0]), 0.], 12.)
+    observer = SimpleNamespace(closed=False, latest=None, command=1)
+    feedback = navigator._velocity_feedback(observer, "pan", 1, .1)
+    context = {"velocity": {"pan": .05 if case == "changed_speed" else .1, "tilt": 0.},
+        "accepted_monotonic": 10., "deadline_monotonic": 12. if case == "too_early" else 11.03,
+        "maximum_duration_seconds": 1.2, "window_deadline_monotonic": 16.}
+    if case == "static": context.pop("window_deadline_monotonic")
+    plans = []
+    for i in range(2):
+        received = 10.4 + .25 * i
+        clock[0] = received + .12
+        angle = i * .02 * (-1 if case == "wrong_direction" else 0 if case == "no_motion" else 1)
+        c, s = np.cos(angle), np.sin(angle)
+        capture = {"capture_instance": "test", "generation": 1, "sequence": i + 1}
+        geometry = {"rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]],
+            "analysis_width": 960, "validation_p95_pixels": 1., "validation_matches": 24,
+            "inlier_fraction": .9, "capture_evidence": capture}
+        observer.latest = {"status": "localized", "command": 1, "frame_received_monotonic": received,
+            "capture_evidence": capture, "frame_geometry": geometry}
+        if case == "stale" and i == 1: clock[0] += .3
+        plans.append(feedback(context))
+    assert plans[0] is None
+    if case != "continue":
+        assert plans[1] is None
+        return
+    plan = plans[1]
+    assert plan["velocity"] == context["velocity"]
+    assert plan["duration_seconds"] == 1.2
+    assert plan["measurement"]["kind"] == "visual_direction_continuation"
+    assert "rate_radians_per_second" not in plan["measurement"]
+    assert getattr(observer, "qualified_rate", None) is None
+    plan["dispatch_guard"]()
+    target[0] = .04
+    with pytest.raises(navigation.PanoramaCaptureError):
+        plan["dispatch_guard"]()

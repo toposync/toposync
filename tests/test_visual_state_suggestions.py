@@ -198,7 +198,8 @@ def test_global_history_limit_durability_and_version_one_upgrade(store, config, 
     store._connection.execute("PRAGMA user_version=1")
     migrated = VisualReferenceStore(store.directory.parent, scope=store.scope, clock=store._clock)
     try:
-        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert migrated.list_suggestions(draft.draft_id) == []
         assert migrated.get_draft(draft.draft_id) == draft
         assert migrated.read_image(suggestion.reference.reference_id)[0] == suggestion.reference
     finally:

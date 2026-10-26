@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import UTC, datetime
+from functools import partial
 import json
 import multiprocessing
 import os
@@ -64,7 +66,7 @@ def producer_process(connection, port, selected):
     asyncio.run(run())
 
 
-def consumer_process(connection, directory, url, token):
+def consumer_process(connection, directory, url, token, record_history=False):
     async def run():
         def state_changed(event):
             if event.data["entity_id"] in {"sensor.door", "binary_sensor.gate"}:
@@ -72,8 +74,9 @@ def consumer_process(connection, directory, url, token):
                 connection.send({"kind": "event", "entity": event.data["entity_id"],
                                  "state": state.state if state else None, "at": time.monotonic()})
 
-        hass = await boot_home_assistant(Path(directory), state_changed)
+        hass = await boot_home_assistant(Path(directory), state_changed, record_history=record_history)
         service_calls = []
+        recorded = {}
         unsubscribe = hass.bus.async_listen("call_service", lambda event: service_calls.append(event.data))
         try:
             entries = hass.config_entries.async_entries("toposync")
@@ -100,10 +103,21 @@ def consumer_process(connection, directory, url, token):
                     previous = current
                 await asyncio.sleep(.02)
             assert connection.recv() == "stop"
+            if record_history:
+                from homeassistant.components.recorder import get_instance, history
+                await hass.async_block_till_done()
+                recorder = get_instance(hass)
+                await recorder.async_block_till_done()
+                result = await recorder.async_add_executor_job(partial(history.get_significant_states,
+                    hass, datetime(2020, 1, 1, tzinfo=UTC), entity_ids=["sensor.door", "binary_sensor.gate"],
+                    significant_changes_only=False))
+                recorded = {identifier: [{"state": state.state, "last_updated": state.last_updated.isoformat(),
+                                          "attributes": dict(state.attributes)} for state in rows]
+                            for identifier, rows in result.items()}
         finally:
             unsubscribe()
             await hass.async_stop(force=True)
-            connection.send({"kind": "stopped", "service_calls": len(service_calls)})
+            connection.send({"kind": "stopped", "service_calls": len(service_calls), "history": recorded})
     asyncio.run(run())
 
 

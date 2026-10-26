@@ -57,14 +57,16 @@ def test_real_process_restarts_require_new_observations(tmp_path):
                 except urllib.error.URLError:
                     assert time.monotonic() < deadline, "producer did not start HTTP"
                     time.sleep(.1)
-        else:
+        elif action in {"kill", "stop"}:
             # Uvicorn re-raises SIGTERM after its graceful shutdown handlers finish.
             assert result["exitcode"] in ({-9} if action == "kill" else {0, -15})
+        else:
+            assert result["model_present"] is (action == "restore_model")
         return result
 
     def start_consumer(token):
         parent, child = context.Pipe()
-        process = context.Process(target=consumer_process, args=(child, str(tmp_path / "home-assistant"), base, token))
+        process = context.Process(target=consumer_process, args=(child, str(tmp_path / "home-assistant"), base, token, True))
         process.start()
         child.close()
         owned.append((process, parent))
@@ -89,9 +91,10 @@ def test_real_process_restarts_require_new_observations(tmp_path):
 
     def stop_consumer(worker):
         worker[1].send("stop")
-        receive(worker, lambda message: message["kind"] == "stopped")
+        result = receive(worker, lambda message: message["kind"] == "stopped")
         worker[0].join(5)
         assert worker[0].exitcode == 0
+        return result["history"]
 
     def no_restored_value(worker, after):
         receive(worker, lambda message: message["kind"] == "snapshot" and message["entry_state"] == "loaded"
@@ -118,11 +121,23 @@ def test_real_process_restarts_require_new_observations(tmp_path):
         consumer = start_consumer(credentials["token"])
         first = receive(consumer, states("blue", "off"))
         first_snapshot = request("GET", "/api/vision/visual-state/states")
+        saved_configuration = request("GET", "/api/pipelines/full_visual_fixture")
         first_stats = request("GET", "/fixture/stats")
         killed_at = time.monotonic()
         producer("kill")
         receive(consumer, states("unavailable", "unavailable"), timeout=5)
         invalidation_ms = (time.monotonic() - killed_at) * 1000
+        producer("withdraw_model")
+        missing_process = producer("start", resume=True)
+        missing_snapshot = request("GET", "/api/vision/visual-state/states")
+        assert len(missing_snapshot["states"]) == 2
+        assert all(row["state"]["status"] == "unavailable" and row["state"]["class_id"] is None
+                   for row in missing_snapshot["states"])
+        assert request("GET", "/api/pipelines/full_visual_fixture") == saved_configuration
+        missing_stats = request("GET", "/fixture/stats")
+        assert missing_stats["runtime_providers"] == [] and missing_stats["frames"] == 0
+        producer("kill")
+        producer("restore_model")
         marker = len(messages)
         second_process = producer("start", resume=True)
         assert second_process["pid"] != first_process["pid"]
@@ -132,7 +147,13 @@ def test_real_process_restarts_require_new_observations(tmp_path):
         recovered = receive(consumer, states("red", "on"))
         assert recovered["identities"] == first["identities"]
         second_stats = request("GET", "/fixture/stats")
-        stop_consumer(consumer)
+        assert request("GET", "/api/pipelines/full_visual_fixture") == saved_configuration
+        first_history = stop_consumer(consumer)
+        assert set(first_history) == {"sensor.door", "binary_sensor.gate"}
+        for identifier, initial, recovered_state in (("sensor.door", "blue", "red"), ("binary_sensor.gate", "off", "on")):
+            values = [row["state"] for row in first_history[identifier]]
+            assert values[0] == initial and values[-1] == recovered_state
+            assert "unavailable" in values and "unknown" in values
         producer("kill")
         restarted = start_consumer(credentials["token"])
         retry = receive(restarted, lambda message: message["kind"] == "snapshot" and message["entry_state"] == "setup_retry")
@@ -147,7 +168,18 @@ def test_real_process_restarts_require_new_observations(tmp_path):
         final = receive(restarted, states("blue", "off"))
         assert final["identities"] == first["identities"]
         final_stats = request("GET", "/fixture/stats")
-        stop_consumer(restarted)
+        final_history = stop_consumer(restarted)
+        for identifier, rows in first_history.items():
+            assert final_history[identifier][:len(rows)] == rows
+        for identifier, final_state in (("sensor.door", "blue"), ("binary_sensor.gate", "off")):
+            assert final_history[identifier][-1]["state"] == final_state
+            node_id = "door" if identifier == "sensor.door" else "gate"
+            configuration = next(node["config"] for node in saved_configuration["graph"]["nodes"] if node["id"] == node_id)
+            for row in final_history[identifier]:
+                if row["state"] in {"blue", "red", "on", "off"}:
+                    assert all(row["attributes"][key] == configuration[key]
+                               for key in ("model_revision", "reference_revision", "preparation_revision"))
+        assert (tmp_path / "home-assistant/home-assistant_v2.db").is_file()
         producer("stop")
         for stats in (first_stats, second_stats, final_stats):
             assert stats["frames"] > 0 and stats["outbound_attempts"] == 0
@@ -158,6 +190,12 @@ def test_real_process_restarts_require_new_observations(tmp_path):
             "synthetic_pixels_and_model": True, "physical_qualification": False,
             "invalidation_after_kill_ms": invalidation_ms, "measurement_is_single_sample": True,
             "persisted_configuration_and_credentials": True, "no_historical_current_state": True,
+            "model_withdrawal_unavailable": True, "model_return_preserved_configuration": True,
+            "recorder_history_survived_restart": True, "history": final_history,
+            "model_missing_process": missing_process, "model_missing_snapshot": missing_snapshot,
+            "configuration_revisions": {node["id"]: {key: node["config"][key] for key in
+                ("model_revision", "reference_revision", "preparation_revision")}
+                for node in saved_configuration["graph"]["nodes"] if node["operator"] == "vision.visual_state"},
             "service_calls": 0, "producer_actions": producer_actions, "messages": messages,
             "producer_stats": [first_stats, second_stats, final_stats],
             "server_epochs": [item["server_epoch"] for item in (first_snapshot, second_snapshot, final_snapshot)],

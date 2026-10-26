@@ -78,6 +78,25 @@ def test_missing_class_reference_cannot_create_false_margin(config, references) 
     assert compare(config, references, np.array([1.0, 0.0])).reason == "reference_missing"
 
 
+def test_class_without_reference_ids_cannot_confirm_the_other_class(config, references) -> None:
+    data = config.model_dump()
+    data["classes"][1]["reference_ids"] = []
+    result = compare(VisualStateConfig.model_validate(data), references, np.array([1.0, 0.0]))
+    assert result.class_id is None
+    assert result.reason == "class_without_references"
+
+
+def test_disabled_class_cannot_vote_from_cached_references(config, references) -> None:
+    data = config.model_dump()
+    data["classes"][1]["enabled"] = False
+    data["classes"] += ({"class_id": "c", "key": "other", "label": "Outro", "reference_ids": ["c1"]},)
+    references["c1"] = ReferenceEmbedding("c", "m1", "p1", np.array([-1.0, 0.0]))
+    result = compare(VisualStateConfig.model_validate(data), references, np.array([0.0, 1.0]))
+    assert result.class_id is None
+    assert result.reason == "ambiguous_classes"
+    assert "b1" not in result.reference_ids
+
+
 @pytest.mark.parametrize("changes", [
     {"model_revision": "old"}, {"preparation_revision": "old"}, {"class_id": "other"},
 ])

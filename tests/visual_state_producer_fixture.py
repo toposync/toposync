@@ -176,8 +176,17 @@ def supervise(directory, control):
                 continue
             command = json.loads(request.read_text())
             action = command["action"]
-            assert action in {"start", "kill", "stop"}
-            if action == "start":
+            assert action in {"start", "kill", "stop", "withdraw_model", "restore_model"}
+            if action in {"withdraw_model", "restore_model"}:
+                assert process is None
+                assert json.loads((directory / "synthetic-fixture.json").read_text()) == {
+                    "fixture": "visual_state_producer", "version": 1}
+                artifact, held = directory / "embedding.onnx", directory / "embedding.onnx.withdrawn"
+                source, target = (artifact, held) if action == "withdraw_model" else (held, artifact)
+                assert source.is_file() and not target.exists()
+                source.rename(target)
+                result = {"model_present": artifact.is_file()}
+            elif action == "start":
                 assert process is None
                 arguments = [sys.executable, str(Path(__file__).resolve()), "--data-dir", str(directory)]
                 if command.get("resume"):

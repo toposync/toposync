@@ -92,7 +92,14 @@ def test_compiled_editor_analysis_reaches_the_visual_sensor_with_upstream_contex
     assert pipeline.model_dump_json() == before
 
 
-def test_real_sensor_reconciles_without_motion_or_onvif_and_expires_after_input_stops(tmp_path, monkeypatch):
+@pytest.mark.parametrize("blue_start,blue_stop,expected_blue_samples,should_confirm", [
+    pytest.param(12, 13, 0, False, id="pulse-between-samples"),
+    pytest.param(13, 14, 1, False, id="pulse-with-one-sample"),
+    pytest.param(12, 25, 3, True, id="sustained-transition"),
+])
+def test_real_sensor_reconciles_without_motion_or_onvif_and_expires_after_input_stops(
+    tmp_path, monkeypatch, blue_start, blue_stop, expected_blue_samples, should_confirm,
+):
     import toposync_ext_cameras.pipelines.operators as camera_operators
     import toposync.runtime.pipelines.operators_core as core_operators
 
@@ -118,15 +125,16 @@ def test_real_sensor_reconciles_without_motion_or_onvif_and_expires_after_input_
         throttle = VelocityThrottleRuntime(settings["cadence"])
         await runtime.prepare(context)
         task = asyncio.create_task(runtime.run(context))
-        seen, observed_at = [], []
+        seen, observed_at, blue_samples = [], [], []
         changed_at = None
         confirmed_at = None
         try:
             for sequence in range(1, 25):
                 clock.now += 1 / settings["source"]["fps"]
-                if sequence == 12:
+                if sequence == blue_start:
                     changed_at = clock.now
-                packet = frame(clock, sequence, "red" if sequence < 12 else "blue").with_lifecycle(Lifecycle.UPDATE)
+                color = "blue" if blue_start <= sequence < blue_stop else "red"
+                packet = frame(clock, sequence, color).with_lifecycle(Lifecycle.UPDATE)
                 gated = await motion.process_packet(packet, None)
                 assert gated and gated[0].metadata["motion_gate_open"] is False
                 for accepted in await throttle.process_packet(gated[0], None):
@@ -135,11 +143,19 @@ def test_real_sensor_reconciles_without_motion_or_onvif_and_expires_after_input_
                                 and runtime._reducer._last_seen.sample.sequence == sequence)
                     seen.append(runtime._reducer.tick().class_id)
                     observed_at.append(clock.now)
+                    if color == "blue":
+                        blue_samples.append(sequence)
                     if seen[-1] == "blue" and confirmed_at is None:
                         confirmed_at = clock.now
             assert all(current - previous == .5 for previous, current in zip(observed_at, observed_at[1:]))
-            assert confirmed_at is not None and changed_at is not None and confirmed_at - changed_at <= 1
-            assert "red" in seen and seen[-1] == "blue"
+            assert len(blue_samples) == expected_blue_samples
+            assert changed_at is not None and "red" in seen
+            if should_confirm:
+                assert confirmed_at is not None and confirmed_at - changed_at == .625
+                assert seen[-1] == "blue"
+            else:
+                # A pulse between samples is invisible; one sample cannot confirm a transition.
+                assert confirmed_at is None and "blue" not in seen and seen[-1] == "red"
             assert not any(packet.payload.get("onvif") for packet in context.packets)
             clock.now += 2.1
             await until(lambda: context.packets[-1].payload["visual_state"]["reason"] == "observation_expired")

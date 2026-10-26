@@ -254,11 +254,18 @@ The reported nearest-rank percentiles describe these 24 samples; they do not qua
 capacity, representative visual accuracy, other hardware or physical safety.
 This transition test does not restart processes. The companion
 `tests/test_home_assistant_visual_state_full_restart.py` kills the real producer
-twice and restarts both applications with their persisted data. After each producer
+and restarts both applications with their persisted data. After each producer
 restart, generated frames remain paused: neither the producer nor the consumer may
 restore the historical class as current. New frames must recover both entities,
-with the same identities and credentials but a new server epoch. The supervisor
-accepts only start/kill/stop commands through an isolated shared directory, with
+with the same identities and credentials but a new server epoch. It also withdraws
+the generated model file while the producer is stopped, verifies activation is
+blocked without changing the saved configuration, then restores the same artifact.
+The real Recorder stores both entities in SQLite. History must survive the consumer
+restart, including unavailable/unknown intervals and the model, reference and
+preparation revisions on confirmed observations. These stable revision attributes
+record configuration changes without recording every frame or reconfirmation.
+The supervisor accepts only lifecycle and generated-model withdrawal/return commands
+through an isolated shared directory, with
 a 180-second command window and bounded child shutdown. No Docker socket is exposed.
 
 Prepare a local CPU runtime image with the repository's existing Dockerfile, or
@@ -296,8 +303,8 @@ Do not attach other containers to this dedicated internal network.
   visual_producer="toposync-visual-producer-$$"
   mkdir -p "$visual_run/producer" "$visual_run/consumer" "$visual_run/control"
   docker network create --internal "$visual_network"
-  trap 'docker logs "$visual_producer" > "$visual_run/producer.log" 2>&1 || true; docker stop "$visual_producer" >/dev/null 2>&1 || true; docker network rm "$visual_network" >/dev/null' EXIT
-  docker run -d --rm --name "$visual_producer" --network "$visual_network" \
+  trap 'docker stop "$visual_producer" >/dev/null 2>&1 || true; docker logs "$visual_producer" > "$visual_run/producer.log" 2>&1 || true; docker rm "$visual_producer" >/dev/null 2>&1 || true; docker network rm "$visual_network" >/dev/null' EXIT
+  docker run -d --name "$visual_producer" --network "$visual_network" \
     --network-alias visual-producer --read-only --tmpfs /tmp:rw,nosuid,nodev,size=256m \
     -v "$PWD/src:/workspace/src:ro" -v "$PWD/extensions:/workspace/extensions:ro" \
     -v "$PWD/tests:/workspace/tests:ro" -v "$visual_tools:/test-tools:ro" \

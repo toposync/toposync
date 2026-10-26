@@ -31,7 +31,7 @@ async def wait_for(predicate, timeout=10):
             await asyncio.sleep(.01)
 
 
-async def boot_home_assistant(directory, state_listener=None):
+async def boot_home_assistant(directory, state_listener=None, *, record_history=False):
     source = Path(__file__).resolve().parents[1] / "integrations/home_assistant/custom_components/toposync"
     target = directory / "custom_components/toposync"
     if not target.exists():
@@ -46,6 +46,8 @@ async def boot_home_assistant(directory, state_listener=None):
             "homeassistant": {"name": "Visual sensor laboratory", "latitude": 0, "longitude": 0,
                               "elevation": 0, "unit_system": "metric", "time_zone": "UTC"},
             "http": {"server_host": "127.0.0.1", "server_port": 8123}, "frontend": {},
+            **({"recorder": {"auto_purge": False, "auto_repack": False,
+                              "include": {"entities": ["sensor.door", "binary_sensor.gate"]}}} if record_history else {}),
         }, hass)
         assert configured is hass
         await hass.async_start()

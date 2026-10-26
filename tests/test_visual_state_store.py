@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -224,6 +225,62 @@ def test_pin_preserves_old_revision_even_if_new_pipeline_save_fails(store, confi
     assert store.collect() == 1
     with pytest.raises(ReferenceConflict, match="not found"):
         store.read_image(reference.reference_id)
+
+
+@pytest.mark.parametrize("first_operation", ["reserve", "collect"])
+def test_pipeline_reservation_and_collection_never_leave_a_dangling_reference(
+    store, config, evidence, monkeypatch, first_operation,
+):
+    draft, reference = capture(store, config, evidence)
+    store._clock.now += 86401
+    other = VisualReferenceStore(store.directory.parent, scope="authorized", clock=store._clock)
+    locked, release, contender_started = threading.Event(), threading.Event(), threading.Event()
+    first_hook = "_check_configuration" if first_operation == "reserve" else "_now"
+    original = getattr(store, first_hook)
+
+    def hold_transaction(*args, **kwargs):
+        locked.set()
+        assert release.wait(3)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(store, first_hook, hold_transaction)
+
+    def attempt(repository, operation, *, contender=False):
+        if contender:
+            contender_started.set()
+        if operation == "collect":
+            return repository.collect()
+        try:
+            repository.reserve_pipeline_configurations(
+                {"pipeline_sensor": draft.configuration.model_dump(mode="json")},
+                validate_owners={"pipeline_sensor"},
+            )
+            return "reserved"
+        except ReferenceConflict:
+            return "conflict"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(attempt, store, first_operation)
+            try:
+                assert locked.wait(3)
+                second_operation = "collect" if first_operation == "reserve" else "reserve"
+                second = executor.submit(attempt, other, second_operation, contender=True)
+                assert contender_started.wait(3)
+            finally:
+                release.set()
+            outcomes = {first_operation: first.result(), second_operation: second.result()}
+        if first_operation == "reserve":
+            assert outcomes == {"reserve": "reserved", "collect": 0}
+            assert other.read_image(reference.reference_id)[1]
+            assert other._connection.execute("SELECT count(*) FROM pinned_reference").fetchone()[0] == 1
+        else:
+            assert outcomes == {"reserve": "conflict", "collect": 1}
+            assert other._connection.execute("SELECT count(*) FROM configuration_pin").fetchone()[0] == 0
+            with pytest.raises(ReferenceConflict, match="not found"):
+                other.read_image(reference.reference_id)
+    finally:
+        other.close()
 
 
 def test_active_draft_tombstone_survives_collection_for_undo(store, config, evidence):

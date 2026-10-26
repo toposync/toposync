@@ -90,9 +90,10 @@ async def until(predicate):
             await asyncio.sleep(0.005)
 
 
-async def harness(tmp_path, backend_factory=build_embedding_backend, *, sensor_id="sensor", scheduler=None):
-    clock = Clock()
-    manifest = color_model(tmp_path)
+async def harness(tmp_path, backend_factory=build_embedding_backend, *, sensor_id="sensor", scheduler=None,
+                  clock=None, manifest=None, comparison=None):
+    clock = Clock() if clock is None else clock
+    manifest = color_model(tmp_path) if manifest is None else manifest
     probe = build_embedding_backend(manifest)
     revision = probe.revision
     probe.close()
@@ -102,7 +103,8 @@ async def harness(tmp_path, backend_factory=build_embedding_backend, *, sensor_i
         sensor_id=sensor_id, source_identity="camera:synthetic", use_full_image=True,
         preparation_revision="pending", reference_revision="references", model_revision=revision, model_id=manifest.model_id,
         classes=[{"class_id": key, "key": key, "label": key} for key in ("red", "blue")],
-        comparison={"enter_threshold": .9, "enter_margin": .2, "hold_threshold": .8, "hold_margin": .1},
+        comparison=comparison if comparison is not None else {
+            "enter_threshold": .9, "enter_margin": .2, "hold_threshold": .8, "hold_margin": .1},
     )
     saved = pipeline(configuration.model_dump(mode="json"))
     saved.graph = build_pipeline_graph_v2(graph_uid="sensor", nodes=[

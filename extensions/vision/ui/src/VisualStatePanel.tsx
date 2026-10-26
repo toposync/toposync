@@ -72,7 +72,12 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
   const context = JSON.stringify(config);
   useLayoutEffect(() => {
     setBusy(null); setPending(null);
-    return () => { active.current?.abort(); active.current = null; };
+    return () => {
+      if (active.current) {
+        active.current.abort(); active.current = null;
+        restoreOperationFocus.current?.();
+      }
+    };
   }, [context, captureCallback, pipelineContext]);
   useEffect(() => {
     if (!readonly && unconfigured) replaceConfig(value);
@@ -239,7 +244,7 @@ export function VisualStatePanel({ i18n, config, replaceConfig, referenceCapture
       {publicationClassSide(publication, category.class_id) !== "unknown" && <p className="identityMuted">{t("publication_class_in_use")}</p>}
       <label className="identityField"><span>{t("description")}</span><textarea className="input" rows={2} maxLength={1000}
         value={category.description ?? ""} onChange={event => updateClass(category.class_id, { description: event.target.value })} placeholder={t("description_hint")} /></label>
-      <div className="visualStatePhotos" aria-label={`${t("references")} ${category.label}`}>
+      <div className="visualStatePhotos" role="group" aria-label={`${t("references")} ${category.label}`}>
         {(Array.isArray(category.reference_ids) ? category.reference_ids : []).map((reference, photoIndex) => <div className="visualStatePhoto" key={reference}>
           <button type="button" className="identityPhotoButton" disabled={!draft} aria-label={`${t("enlarge")} ${category.label}, ${photoIndex + 1}`}
             onClick={() => { if (draft) setPhoto({ url: visualReferenceUrl(draft.draft_id, reference, false), label: `${category.label}, ${photoIndex + 1}` }); }}>

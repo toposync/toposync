@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { applyVisualDecisionValues, visualComparisonFields, visualDecisionValues, visualTemporalDefaults, type VisualConfiguration } from "./visualState";
+import { applyVisualDecisionValues, visualComparisonFields, visualDecisionBounds, visualDecisionValues, visualTemporalDefaults, type VisualConfiguration } from "./visualState";
 
 export function VisualStateDecisionSettings({ value, change, disabled, editing, t }: {
   value: VisualConfiguration; change: (next: VisualConfiguration) => void; disabled: boolean;
@@ -12,7 +12,8 @@ export function VisualStateDecisionSettings({ value, change, disabled, editing, 
   useEffect(() => { editing(dirty); }, [dirty]);
   let next: VisualConfiguration | null = null;
   try { next = applyVisualDecisionValues(value, fields); } catch { /* Incomplete fields stay local until applied. */ }
-  function input(key: string, minimum: number, maximum: number, step: number | "any" = 1) {
+  function input(key: string) {
+    const [minimum, maximum, step] = visualDecisionBounds(key);
     return <label key={key} className="identityField"><span>{t(key)}</span><input type="number" min={minimum} max={maximum} step={step}
       value={fields[key] ?? ""} onChange={event => setFields({ ...fields, [key]: event.target.value })} /></label>;
   }
@@ -21,13 +22,12 @@ export function VisualStateDecisionSettings({ value, change, disabled, editing, 
     {value.strategy !== "direct" && <><p className="identityMuted">{t("comparison_help")}</p>
     <details open={!value.comparison || undefined}>
       <summary>{t("comparison_settings")}</summary>
-      <div className="visualDecisionFields">{visualComparisonFields.map(key => input(key, key.endsWith("margin") ? 0 : -1, key.endsWith("margin") ? 2 : 1, "any"))}</div>
+      <div className="visualDecisionFields">{visualComparisonFields.map(input)}</div>
     </details></>}
     <details><summary>{t("temporal_settings")}</summary><p className="identityMuted">{t("temporal_help")}</p>
       <div className="visualDecisionFields">
-        {input("evaluation_interval_ms", 50, 60000)}
-        {Object.keys(visualTemporalDefaults).map(key => input(key, key === "confirmations" ? 2 : key === "pending_hold_ms" ? 0 : 1,
-          key === "confirmations" ? 30 : key === "minimum_separation_ms" ? 60000 : 3600000))}
+        {input("evaluation_interval_ms")}
+        {Object.keys(visualTemporalDefaults).map(input)}
       </div>
     </details>
     {dirty && <p role="status">{t(next ? "settings_pending" : "decision_invalid")}</p>}

@@ -117,6 +117,7 @@ def _replay(sequence, frames, timestamps, config, references, backend):
         durations.append(elapsed_ms)
         now_ms += max(1, math.ceil(elapsed_ms))
         if now_ms >= sequence.duration_ms:
+            discarded += len(frames) - index - 1
             break
         state = reducer.observe(Observation(
             sensor_id=config.sensor_id, runtime_epoch="offline", source_identity=sequence.source_id,
@@ -138,7 +139,8 @@ def _replay(sequence, frames, timestamps, config, references, backend):
     for interval in sequence.truth:
         if interval.class_id is not None:
             observable_by_class[interval.class_id] = observable_by_class.get(interval.class_id, 0) + interval.end_ms - interval.start_ms
-    metrics.update(source_id=sequence.source_id, discarded_frames=discarded,
+    metrics.update(source_id=sequence.source_id, input_frames=len(frames), discarded_frames=discarded,
+                   observations=len(decisions), late_results=len(durations) - len(decisions),
                    inference_samples=len(durations), processing_ms=durations, observable_by_class_ms=observable_by_class)
     return metrics
 
@@ -167,6 +169,9 @@ def aggregate_results(results: list[dict]) -> dict:
         "coverage": conclusive / observable if observable else None,
         "error_fraction_of_conclusive_time": wrong / conclusive if conclusive else None,
         "expected_transitions": expected, "matched_transitions": matched, "false_transitions": false,
+        "missed_transitions": expected - matched,
+        **{key: sum(item[key] for item in results) for key in
+           ("input_frames", "discarded_frames", "inference_samples", "observations", "late_results")},
         "transition_recall": matched / expected if expected else None,
         "transition_precision": matched / (matched + false) if matched + false else None,
         "false_transitions_per_hour": false * 3_600_000 / observable if observable else None,

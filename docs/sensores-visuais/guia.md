@@ -139,6 +139,12 @@ quando configurada, exige observações cobrindo o período; esperar sem imagens
 confirma. Meça a menor duração de evento observável e os atrasos do equipamento.
 Não aumente validade para esconder um provedor que não acompanha a cena.
 
+A receita limita a passagem sem movimento a uma imagem a cada 500 milissegundos,
+mesmo com intervalo de análise de 250 milissegundos no sensor. Uma mudança que
+começa e termina entre essas imagens pode não ser observada; uma única imagem
+da nova classe também não satisfaz as duas confirmações. Reduzir somente o
+intervalo do sensor não aumenta a cadência entregue pelos operadores anteriores.
+
 **Desconhecido** significa que não há classe confirmada atual. **Indisponível**
 significa que a observação ou execução não está disponível. Nenhum dos dois equivale
 a “fechada”, “desligada”, “vazio” ou “livre”. Candidato ainda não é confirmação.

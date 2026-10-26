@@ -1,4 +1,4 @@
-const { test, expect, captureFirst } = require("./fixtures/visual-state");
+const { test, expect, captureFirst, saveVisualPipeline } = require("./fixtures/visual-state");
 
 test("create a visual sensor from an empty graph using the operator panels", async ({ page, visual }) => {
   await page.route("**/api/cameras/index", route => route.fulfill({ json: {
@@ -71,6 +71,50 @@ test("create a visual sensor from an empty graph using the operator panels", asy
   await expect(panel.getByRole("textbox", { name: "Nome", exact: true }).first()).toHaveValue("Porta aberta");
   await panel.getByRole("button", { name: "Carregar fotos salvas", exact: true }).click();
   await expect(panel.locator(".visualStatePhoto img")).toBeVisible();
+});
+
+test("form and advanced JSON share structured invalid configuration diagnostics", async ({ page, visual }) => {
+  const { panel } = visual;
+  const name = panel.getByRole("textbox", { name: "Nome", exact: true }).first();
+  await page.locator(".pipelineTopologyJsonDetails summary").click();
+  const editor = page.getByRole("textbox", { name: "JSON avançado", exact: true });
+  const original = JSON.parse(await editor.inputValue());
+  async function diagnostic(label, edit) {
+    const completion = page.waitForResponse(response => {
+      if (response.request().method() !== "POST" || !new URL(response.url()).pathname.endsWith("/pipelines/compile")) return false;
+      const nodes = response.request().postDataJSON()?.pipeline?.graph?.nodes;
+      return nodes?.find(node => node.id === "sensor")?.config?.classes?.[0]?.label === label;
+    });
+    await edit();
+    const response = await completion;
+    expect(response.status()).toBe(label ? 200 : 400);
+    return response.json();
+  }
+  const form = await diagnostic("", () => name.fill(""));
+  expect(form.detail).toContain("Invalid config for operator");
+  expect(form.validation_errors).toContainEqual(expect.objectContaining({
+    node_id: "sensor", operator_id: "vision.visual_state", loc: ["classes", 0, "label"], type: "string_too_short",
+  }));
+  expect(form.validation_errors.every(error => !("input" in error) && !("ctx" in error))).toBe(true);
+  await expect(panel.getByRole("alert").filter({ hasText: "Revise os campos vazios ou inválidos" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Capturar", exact: true }).first()).toBeDisabled();
+  const restoredForm = await diagnostic(original.classes[0].label, () => name.fill(original.classes[0].label));
+  const invalid = structuredClone(original);
+  invalid.classes[0].label = "";
+  const textual = await diagnostic("", async () => {
+    await editor.fill(JSON.stringify(invalid));
+    await page.getByRole("button", { name: "Aplicar configuração", exact: true }).click();
+  });
+  expect(textual.validation_errors).toEqual(form.validation_errors);
+  await expect(name).toHaveValue("");
+  await expect(panel.getByRole("button", { name: "Capturar", exact: true }).first()).toBeDisabled();
+  const restored = await diagnostic(original.classes[0].label, () => name.fill(original.classes[0].label));
+  expect(restored.alerts).toEqual(restoredForm.alerts);
+  await expect(panel.getByRole("alert").filter({ hasText: "Revise os campos vazios ou inválidos" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Capturar", exact: true }).first()).toBeEnabled();
+  const saved = await saveVisualPipeline(page, visual);
+  expect(saved.graph.nodes.find(node => node.id === "sensor").config.classes)
+    .toEqual(original.classes.map(category => ({ enabled: true, reference_ids: [], ...category })));
 });
 
 test("form and advanced JSON preserve class identities and references in both directions", async ({ page, visual }) => {
@@ -164,6 +208,38 @@ test("free classes and advanced settings retain their values when collapsed", as
   await expect(panel.getByRole("button", { name: "Remover classe Aberta", exact: true })).toBeDisabled();
 });
 
+test("decision controls reject invalid boundaries and save valid timing", async ({ page, visual }) => {
+  const { panel } = visual;
+  await page.getByRole("button", { name: "Avançado", exact: true }).click();
+  await panel.locator("summary").filter({ hasText: /^Tempo e estabilidade$/ }).click();
+  const decision = panel.getByRole("group", { name: "Configuração da decisão", exact: true });
+  const apply = decision.getByRole("button", { name: "Aplicar ajustes", exact: true });
+  const interval = decision.getByRole("spinbutton", { name: "Intervalo de análise (milissegundos)", exact: true });
+  await expect(interval).toHaveAttribute("min", "50");
+  await expect(interval).toHaveAttribute("max", "60000");
+  await interval.fill("49");
+  await expect(apply).toBeDisabled();
+  await interval.fill("50");
+  await expect(apply).toBeEnabled();
+  const confirmations = decision.getByRole("spinbutton", { name: "Observações exigidas para confirmar", exact: true });
+  await confirmations.fill("2.5");
+  await expect(apply).toBeDisabled();
+  await confirmations.fill("3");
+  await expect(apply).toBeEnabled();
+  const separation = decision.getByRole("spinbutton", { name: "Separação mínima entre observações (milissegundos)", exact: true });
+  await separation.fill("751");
+  await expect(apply).toBeDisabled();
+  await separation.fill("150");
+  await expect(apply).toBeEnabled();
+  await apply.click();
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect.poll(async () => {
+    const saved = await (await visual.request.get(`${visual.prefix}/api/pipelines/${visual.pipeline.name}`)).json();
+    const configuration = saved.graph.nodes.find(node => node.id === "sensor").config;
+    return [configuration.evaluation_interval_ms, configuration.temporal?.confirmations, configuration.temporal?.minimum_separation_ms];
+  }).toEqual([50, 3, 150]);
+});
+
 test("capture, undo, test, save and reopen through ingress", async ({ page, visual }) => {
   const { panel, pipeline } = visual;
   await captureFirst(panel);
@@ -228,6 +304,123 @@ test("cancel discards a late completed preview and returns keyboard focus", asyn
   } finally { release(); }
   await expect(panel.locator(".visualPreviewResult")).toHaveCount(0);
   await expect(preview).toBeEnabled();
+});
+
+test("ambiguous and incompatible source previews stay conservative and recover", async ({ page, visual }) => {
+  const { panel, request } = visual;
+  await captureFirst(panel);
+  const budgets = panel.locator("details").filter({ has: page.locator("summary", { hasText: "Prazos, referências e orçamentos da IA" }) });
+  await budgets.locator("summary").click();
+  await budgets.getByRole("spinbutton", { name: "Consultas do sensor por minuto", exact: true }).fill("120");
+  await budgets.getByRole("button", { name: "Aplicar ajustes", exact: true }).click();
+  await panel.getByRole("button", { name: "Atualizar perfis e limites", exact: true }).click();
+  const preview = panel.getByRole("button", { name: "Testar agora", exact: true });
+  await expect(preview).toBeEnabled();
+  expect((await request.post("/fixture/condition/invalid")).status()).toBe(422);
+  try {
+    for (const [condition, status, label] of [
+      ["normal", "confirmed", "Aberta"], ["ambiguous", "unknown", "Desconhecido"],
+      ["wrong_source", "unavailable", "Indisponível"], ["normal", "confirmed", "Aberta"],
+    ]) {
+      expect((await request.post(`/fixture/condition/${condition}`)).ok()).toBe(true);
+      const before = (await (await request.get("/fixture/stats")).json()).simulated_inferences;
+      const completion = page.waitForResponse(response => response.request().method() === "POST"
+        && new URL(response.url()).pathname.endsWith("/preview"));
+      await preview.click();
+      const response = await completion;
+      expect(response.ok()).toBe(true);
+      const result = await response.json();
+      expect(result.state.status, `${condition}: ${result.state.reason}`).toBe(status);
+      if (condition === "ambiguous") expect(result.state.last_analysis.reason).toBe("multimodal_ambiguous");
+      expect(result.state.class_id).toBe(status === "confirmed" ? "open" : null);
+      await expect(panel.locator(".visualPreviewResult > strong")).toHaveText(`Resultado do teste: ${label}`);
+      if (condition === "wrong_source") {
+        expect((await (await request.get("/fixture/stats")).json()).simulated_inferences).toBe(before);
+      } else if (status === "confirmed") {
+        expect(result.states.some(state => state.status === "pending" && state.class_id === null)).toBe(true);
+        expect(result.state.last_analysis.sample.sequence).toBeGreaterThanOrEqual(2);
+      }
+    }
+  } finally { expect((await request.post("/fixture/condition/normal")).ok()).toBe(true); }
+});
+
+test("suggestions require review, preserve provenance and support correction rejection and undo", async ({ page, visual }) => {
+  const { panel, request, pipeline, prefix } = visual;
+  await captureFirst(panel);
+  await saveVisualPipeline(page, visual);
+  const seeded = await request.post("/fixture/seed-suggestions", { data: { pipeline_name: pipeline.name } });
+  expect(seeded.ok()).toBe(true);
+  const identifiers = (await seeded.json()).suggestions;
+  expect(identifiers).toHaveLength(3);
+  expect(identifiers.every(Boolean)).toBe(true);
+  const review = panel.getByRole("group", { name: "Sugestões de aprendizado", exact: true });
+  const refresh = review.getByRole("button", { name: "Atualizar sugestões", exact: true });
+  await refresh.click();
+  const cards = review.locator(".visualSuggestionCard");
+  await expect(cards).toHaveCount(3);
+  const classes = panel.locator(".visualStateClass");
+  await expect(classes.first().locator(".visualStatePhoto")).toHaveCount(1);
+  await expect(classes.nth(1).locator(".visualStatePhoto")).toHaveCount(0);
+  const first = cards.first();
+  await first.getByText("Origem e histórico de revisão", { exact: true }).click();
+  await expect(first.getByText("fixture-original-epoch", { exact: true })).toBeVisible();
+  await expect(first.getByText("Esta é uma evidência histórica", { exact: false })).toBeVisible();
+  await first.getByRole("button", { name: /^Ampliar/ }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await first.getByRole("combobox", { name: "Confirmar ou corrigir classe", exact: true }).selectOption("closed");
+  await first.getByRole("button", { name: "Aprovar foto", exact: true }).click();
+  await expect(classes.nth(1).locator(".visualStatePhoto")).toHaveCount(1);
+  const original = await (await request.get(`${prefix}/api/pipelines/${pipeline.name}`)).json();
+  expect(original.graph.nodes.find(node => node.id === "sensor").config.classes[1].reference_ids).toHaveLength(0);
+  const approved = await saveVisualPipeline(page, visual);
+  expect(approved.graph.nodes.find(node => node.id === "sensor").config.classes[1].reference_ids).toHaveLength(1);
+  await refresh.click();
+  const pending = cards.filter({ has: page.getByRole("button", { name: "Aprovar foto", exact: true }) });
+  await expect(pending).toHaveCount(2);
+  await pending.first().getByRole("button", { name: "Rejeitar foto", exact: true }).click();
+  await refresh.click();
+  await expect(cards.filter({ hasText: "Rejeitada" })).toHaveCount(1);
+  const accepted = cards.filter({ hasText: "Classe aprovada: Fechada" });
+  await expect(accepted).toHaveCount(1);
+  await accepted.getByRole("button", { name: "Desfazer revisão", exact: true }).click();
+  await expect(classes.nth(1).locator(".visualStatePhoto")).toHaveCount(0);
+  await expect(classes.first().locator(".visualStatePhoto")).toHaveCount(1);
+  const undone = await saveVisualPipeline(page, visual);
+  expect(undone.graph.nodes.find(node => node.id === "sensor").config.classes.map(category => category.reference_ids.length)).toEqual([1, 0]);
+});
+
+test("native publication mapping preserves unknown states and survives reopening", async ({ page, visual }) => {
+  const { panel } = visual;
+  await captureFirst(panel);
+  await panel.getByRole("button", { name: "Adicionar classe", exact: true }).click();
+  await panel.locator(".visualStateClass").nth(2).getByRole("textbox", { name: "Nome", exact: true }).fill("Entreaberta");
+  await panel.locator(".visualStateClass").nth(2).getByRole("textbox", { name: "O que identifica este estado", exact: true })
+    .fill("A folha ocupa uma posição intermediária visível.");
+  const publication = panel.getByRole("group", { name: "Publicação no Home Assistant", exact: true });
+  await publication.getByText("Prévia e mapeamento", { exact: true }).click();
+  await publication.getByRole("combobox", { name: "Tipo de entidade", exact: true }).selectOption("binary");
+  await publication.getByRole("checkbox", { name: "Publicar este sensor", exact: true }).check();
+  const apply = publication.getByRole("button", { name: "Aplicar publicação", exact: true });
+  await expect(apply).toBeDisabled();
+  await publication.getByRole("combobox", { name: "Aberta", exact: true }).selectOption("on");
+  await publication.getByRole("combobox", { name: "Fechada", exact: true }).selectOption("off");
+  await expect(publication.getByRole("combobox", { name: "Entreaberta", exact: true })).toHaveValue("unknown");
+  const rows = publication.locator(".visualPublicationRow");
+  await expect(rows.filter({ hasText: "Observação vencida" }).getByText("Desconhecido (unknown)", { exact: true })).toBeVisible();
+  await expect(rows.filter({ hasText: "Observação indisponível" }).getByText("Indisponível (unavailable)", { exact: true })).toBeVisible();
+  await apply.click();
+  await expect(panel.getByRole("button", { name: "Remover classe Aberta", exact: true })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "Remover classe Entreaberta", exact: true })).toBeEnabled();
+  const saved = await saveVisualPipeline(page, visual);
+  const configuration = saved.graph.nodes.find(node => node.id === "sensor").config;
+  expect(configuration.home_assistant).toMatchObject({ enabled: true, kind: "binary", on_class_ids: ["open"], off_class_ids: ["closed"] });
+  await page.reload();
+  await page.locator('.react-flow__node[data-id="sensor"]').focus();
+  await page.keyboard.press("Enter");
+  await expect(publication.getByRole("combobox", { name: "Aberta", exact: true })).toHaveValue("on");
+  await expect(publication.getByRole("combobox", { name: "Fechada", exact: true })).toHaveValue("off");
+  await expect(publication.getByRole("combobox", { name: "Entreaberta", exact: true })).toHaveValue("unknown");
 });
 
 test("validation records show saved evidence, paginate and become stale after editing", async ({ page, visual }) => {

@@ -1,4 +1,5 @@
 const { test: base, expect } = require("@playwright/test");
+const fs = require("node:fs");
 const prefix = "/fixture-ingress";
 
 const test = base.extend({
@@ -40,4 +41,47 @@ async function captureFirst(panel) {
   return capture;
 }
 
-module.exports = { test, expect, prefix, captureFirst };
+async function saveVisualPipeline(page, visual) {
+  const route = `${visual.prefix}/api/pipelines/${visual.pipeline.name}`;
+  const saving = page.waitForResponse(response => response.request().method() === "PUT"
+    && new URL(response.url()).pathname === route);
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  expect((await saving).ok()).toBe(true);
+  const response = await visual.request.get(route);
+  expect(response.ok()).toBe(true);
+  const saved = await response.json();
+  expect(saved.enabled).toBe(false);
+  return saved;
+}
+
+const nativeZoomTest = test.extend({
+  context: async ({ playwright }, use, testInfo) => {
+    const extension = testInfo.outputPath("native-zoom-extension");
+    fs.mkdirSync(extension, { recursive: true });
+    fs.writeFileSync(`${extension}/manifest.json`, JSON.stringify({
+      manifest_version: 3, name: "Isolated native zoom test", version: "1.0",
+      permissions: ["tabs"], background: { service_worker: "background.js" },
+    }));
+    fs.writeFileSync(`${extension}/background.js`, "chrome.runtime.onInstalled.addListener(() => {});\n");
+    const context = await playwright.chromium.launchPersistentContext(testInfo.outputPath("native-zoom-profile"), {
+      channel: "chromium", headless: true, viewport: { width: 1440, height: 1000 }, locale: "pt-BR",
+      args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
+    });
+    try { await use(context); } finally { await context.close(); }
+  },
+  setNativeZoom: async ({ context }, use) => {
+    const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+    await use(async (page, factor) => {
+      const actual = await worker.evaluate(async ({ url, factor }) => {
+        const tabs = (await chrome.tabs.query({})).filter(tab => tab.url === url);
+        if (tabs.length !== 1) throw new Error("Expected one matching tab in the isolated test profile");
+        await chrome.tabs.setZoomSettings(tabs[0].id, { mode: "automatic", scope: "per-tab" });
+        await chrome.tabs.setZoom(tabs[0].id, factor);
+        return chrome.tabs.getZoom(tabs[0].id);
+      }, { url: page.url(), factor });
+      expect(actual).toBe(factor);
+    });
+  },
+});
+
+module.exports = { test, nativeZoomTest, expect, prefix, captureFirst, saveVisualPipeline };

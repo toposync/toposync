@@ -6,6 +6,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from pydantic import ValidationError
+
 from toposync.runtime.config_store import Pipeline
 
 from .graph_schema_v2 import PipelineGraphV2Spec
@@ -14,7 +16,9 @@ from .runtime import DropPolicy
 
 
 class GraphCompileError(ValueError):
-    pass
+    def __init__(self, message: str, *, validation_errors: list[dict[str, Any]] | None = None):
+        super().__init__(message)
+        self.validation_errors = validation_errors or []
 
 
 CancelCheck = Callable[[], None]
@@ -250,8 +254,11 @@ class PipelineGraphCompiler:
                     node.operator_id, node.config
                 )
             except Exception as exc:  # noqa: BLE001
+                cause = exc if isinstance(exc, ValidationError) else exc.__cause__
+                errors = cause.errors(include_input=False, include_context=False, include_url=False) if isinstance(cause, ValidationError) else []
                 raise GraphCompileError(
                     f"Invalid config for operator '{node.operator_id}' in node '{node.node_id}': {exc}",
+                    validation_errors=[{"node_id": node.node_id, "operator_id": node.operator_id, **error} for error in errors],
                 ) from exc
             share_strategy_by_node[node.node_id] = operator.definition.share_strategy
             input_ports_by_node[node.node_id] = {port.name for port in operator.definition.inputs}

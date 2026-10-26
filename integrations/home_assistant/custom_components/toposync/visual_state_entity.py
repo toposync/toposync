@@ -66,6 +66,9 @@ class ToposyncVisualEntity(CoordinatorEntity):
         return {"sensor_id": self.sensor_id, "status": state.get("status", "unavailable"),
                 "reason": state.get("reason", "not_published"),
                 "class_id": self.current_class_id,
+                "model_revision": state.get("model_revision"),
+                "reference_revision": state.get("reference_revision"),
+                "preparation_revision": state.get("preparation_revision"),
                 "class_labels": {item["key"]: item["label"] for item in self.row.get("classes", []) if item["enabled"]}}
 
     @callback

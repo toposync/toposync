@@ -156,6 +156,7 @@ def test_aggregation_weights_time_instead_of_averaging_sequence_percentages():
         "conclusive_ms": 100, "wrong_state_ms": 0, "expected_transitions": 1, "matched_transitions": 1,
         "false_transitions": 0, "unobservable_claim_ms": 0, "confusion_ms": {"a": {"a": 100}},
         "observable_by_class_ms": {"a": 100},
+        "input_frames": 1, "discarded_frames": 0, "inference_samples": 1, "observations": 1, "late_results": 0,
         "latency_intervals": [{"minimum_ms": 10, "maximum_ms": 50}], "processing_ms": [10]}
     second = {**base, "session_id": "two", "observable_ms": 900, "conclusive_ms": 0,
         "expected_transitions": 0, "matched_transitions": 0, "confusion_ms": {}, "latency_intervals": [],
@@ -200,6 +201,9 @@ def test_slow_inference_discards_backlog_instead_of_replaying_every_old_frame(ex
                                config, references, ControlledBackend())
     assert result["discarded_frames"] == 2
     assert result["inference_samples"] == 3
+    assert result["input_frames"] == 5
+    assert result["observations"] == 2
+    assert result["late_results"] == 1
 
 
 def test_silence_expires_confirmed_evidence_in_time_metrics(experiment, monkeypatch):
@@ -214,3 +218,27 @@ def test_silence_expires_confirmed_evidence_in_time_metrics(experiment, monkeypa
     result = benchmark._replay(sequence, frames[:2], np.array([0, 200]), config, references, ControlledBackend())
     assert result["conclusive_ms"] == 299
     assert result["abstention_ms"] == 701
+
+
+@pytest.mark.parametrize("inference_seconds", [1.0, 1.2])
+def test_inference_reaching_replay_end_accounts_for_every_frame(experiment, monkeypatch, inference_seconds):
+    config, sequence, frames, timestamps, references = replay_fixture(experiment)
+    ticks = iter([0.0, inference_seconds])
+    monkeypatch.setattr(benchmark, "time", SimpleNamespace(perf_counter=lambda: next(ticks)))
+    result = benchmark._replay(sequence, frames, timestamps, config, references, ControlledBackend())
+    assert result["discarded_frames"] == 4
+    assert result["input_frames"] == 5
+    assert result["inference_samples"] == 1
+    assert result["late_results"] == 1
+    assert result["observations"] == 0
+    assert result["input_frames"] == result["inference_samples"] + result["discarded_frames"]
+    assert result["inference_samples"] == result["observations"] + result["late_results"]
+    aggregate = benchmark.aggregate_results([result, {**result, "session_id": "other"}])
+    assert aggregate["input_frames"] == 10
+    assert aggregate["discarded_frames"] == 8
+    assert aggregate["inference_samples"] == 2
+    assert aggregate["late_results"] == 2
+    assert aggregate["observations"] == 0
+    assert aggregate["missed_transitions"] == 2
+    assert aggregate["transition_latency_upper_p95_ms"] is None
+    assert aggregate["processing_p95_ms"] == inference_seconds * 1000

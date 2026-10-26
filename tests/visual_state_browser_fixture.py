@@ -20,6 +20,7 @@ def make_app(directory: Path):
     from dataclasses import replace
     import time
     import uuid
+    from typing import Literal
 
     import httpx
     import numpy as np
@@ -38,7 +39,8 @@ def make_app(directory: Path):
     from toposync_ext_ai.visual_state import VisualStateResponse
     import toposync_ext_ai.router as ai_module
 
-    stats = {"generated_frames": 0, "simulated_inferences": 0, "outbound_attempts": 0, "synthetic": True}
+    stats = {"generated_frames": 0, "simulated_inferences": 0, "outbound_attempts": 0, "synthetic": True,
+             "condition": "normal"}
 
     async def forbid_http(*args, **kwargs):
         stats["outbound_attempts"] += 1
@@ -65,7 +67,8 @@ def make_app(directory: Path):
         async def classify_prepared_visual_state(self, *, request, encoded):
             stats["simulated_inferences"] += 1
             await asyncio.sleep(.015)
-            return VisualStateResponse(observable=True, class_id=request.classes[0].class_id,
+            return VisualStateResponse(observable=True,
+                class_id=None if stats["condition"] == "ambiguous" else request.classes[0].class_id,
                 reason="Synthetic fixture response", declared_confidence=None, reference_ids=[])
 
     ai_module.build_provider = lambda *_: Provider()
@@ -87,7 +90,8 @@ def make_app(directory: Path):
                 pixels = np.zeros((128, 256, 3), dtype=np.uint8)
                 pixels[:, :, 2] = 220
                 pixels[20:110, 80:180, 0] = 100
-                await context.emit(Packet.create(stream_id="camera:synthetic:video", payload={"capture_evidence": evidence},
+                identity = "camera:incompatible:video" if stats["condition"] == "wrong_source" else "camera:synthetic:video"
+                await context.emit(Packet.create(stream_id=identity, payload={"capture_evidence": evidence},
                     artifacts={"main": Artifact(name="main", data=pixels,
                         metadata={"image_geometry": image_geometry(256, 128, evidence)})}))
                 await context.sleep(.1)
@@ -136,7 +140,7 @@ def make_app(directory: Path):
             @app.post("/fixture/seed-suggestions")
             async def seed_suggestions(request: Request):
                 body = await request.json()
-                pipeline = await app.state.config_store.get_pipeline("visual_fixture")
+                pipeline = await app.state.config_store.get_pipeline(body.get("pipeline_name", "visual_fixture"))
                 configuration = VisualStateConfig.model_validate(next(node for node in pipeline.graph["nodes"] if node["id"] == "sensor")["config"])
                 store = await kwargs["services"].call("vision.visual_references")
                 results = []
@@ -164,6 +168,11 @@ def make_app(directory: Path):
 
     manager._iter_entry_points = lambda _: [Entry("cameras", FixtureCameras), Entry("vision", FixtureVision), Entry("ai", FixtureAi), Entry("home_assistant", HomeAssistantExtension)]
     app = create_app()
+
+    @app.post("/fixture/condition/{condition}")
+    def fixture_condition(condition: Literal["normal", "ambiguous", "wrong_source"]):
+        stats["condition"] = condition
+        return {"condition": condition, "synthetic": True}
 
     @app.get("/fixture/stats")
     def fixture_stats():

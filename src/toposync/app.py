@@ -1703,9 +1703,14 @@ class _NotificationStreamingResponse(StreamingResponse):
 def create_app() -> FastAPI:
     app = FastAPI(title="Toposync", version="0.1.0", lifespan=_lifespan)
 
+    @app.exception_handler(GraphCompileError)
     @app.exception_handler(PipelineValidationError)
-    async def pipeline_validation_error(_request: Request, exc: PipelineValidationError):
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    async def pipeline_validation_error(_request: Request, exc: PipelineValidationError | GraphCompileError):
+        content: dict[str, Any] = {"detail": str(exc)}
+        compilation = exc if isinstance(exc, GraphCompileError) else exc.__cause__
+        if isinstance(compilation, GraphCompileError) and compilation.validation_errors:
+            content["validation_errors"] = compilation.validation_errors
+        return JSONResponse(status_code=400, content=content)
 
     def _auth_context(request: Request) -> AuthContext:
         context = getattr(request.state, "auth_context", None)
@@ -3649,7 +3654,7 @@ def create_app() -> FastAPI:
                     cancel_check=check_cancelled,
                 )
             except GraphCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise PipelineValidationError(str(exc)) from exc
             check_cancelled()
             if not compiled.pipelines:
                 return PipelineCompileResponse(pipeline={}, shared_signatures={})
@@ -3727,7 +3732,7 @@ def create_app() -> FastAPI:
                     cancel_check=check_cancelled,
                 )
             except GraphCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise PipelineValidationError(str(exc)) from exc
 
             check_cancelled()
             if not compiled.pipelines:
@@ -3807,7 +3812,7 @@ def create_app() -> FastAPI:
             try:
                 compiled = compiler.compile_pipeline(preview_pipeline)
             except GraphCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise PipelineValidationError(str(exc)) from exc
 
             check_cancelled()
             loop = asyncio.get_running_loop()
@@ -4039,7 +4044,7 @@ def create_app() -> FastAPI:
             try:
                 compiler.compile_pipeline(instance)
             except GraphCompileError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise PipelineValidationError(str(exc)) from exc
 
             if body.dry_run:
                 created.append(instance_name) if not exists else updated.append(instance_name)
@@ -4247,7 +4252,7 @@ def create_app() -> FastAPI:
                     pass
             return PipelineRead.from_pipeline(saved)
         except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise PipelineValidationError(str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -4306,7 +4311,7 @@ def create_app() -> FastAPI:
             )
             saved = await _reload_pipeline_after_lifecycle_handlers(config_store, saved)
         except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise PipelineValidationError(str(exc)) from exc
         except PipelineAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -4749,7 +4754,7 @@ def create_app() -> FastAPI:
         except PipelineRevisionConflictError as exc:
             raise HTTPException(409, detail="pipeline_revision_conflict") from exc
         except GraphCompileError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise PipelineValidationError(str(exc)) from exc
         except PipelineValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PipelineAlreadyExistsError as exc:

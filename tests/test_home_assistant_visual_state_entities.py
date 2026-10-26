@@ -197,6 +197,37 @@ def test_opt_in_discovery_keeps_polling_with_empty_inventory_and_kind_changes_do
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("kind", ["enum", "binary"])
+def test_revision_change_is_recorded_without_reconfirmation_noise(tmp_path, kind):
+    async def run():
+        async with platform_harness(tmp_path, published(kind)) as (hass, client, coordinator, components, _):
+            component = components["sensor" if kind == "enum" else "binary_sensor"]
+            entity, = component.entities
+            before = hass.states.get(entity.entity_id)
+            revisions = ("model_revision", "reference_revision", "preparation_revision")
+            assert {key: before.attributes[key] for key in revisions} == {
+                "model_revision": "model", "reference_revision": "references", "preparation_revision": "preparation"}
+            events = []
+            unsubscribe = hass.bus.async_listen("state_changed", lambda event: events.append(event))
+            try:
+                state = client.payload["states"][0]["state"]
+                state.update(runtime_epoch="revised", **{key: "new-" + state[key] for key in revisions})
+                await coordinator.async_refresh()
+                await hass.async_block_till_done()
+                after = hass.states.get(entity.entity_id)
+                assert after.state == before.state and len(events) == 1
+                assert all(after.attributes[key] == "new-" + before.attributes[key] for key in revisions)
+                for sequence in (2, 3):
+                    state.update(state_version=sequence, observed_at=1000 + sequence, confirmed_at=1000 + sequence)
+                    state["sample"]["sequence"] = sequence
+                    await coordinator.async_refresh()
+                await hass.async_block_till_done()
+                assert len(events) == 1
+            finally:
+                unsubscribe()
+    asyncio.run(run())
+
+
 def test_reconfirmations_do_not_create_recorder_state_changes_and_restart_does_not_restore_value(tmp_path):
     async def run():
         async with platform_harness(tmp_path, published()) as (hass, client, coordinator, components, _):

@@ -1,5 +1,22 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Progresso de enquadramento na atenção — 23/10/2026
+
+A navegação publica progresso visual vinculado ao comando, à concessão, à fonte
+e à revisão da panorâmica. A atenção conserva somente a observação mais recente,
+rejeita regressões de sequência e exige captura válida com no máximo um segundo.
+O estado `FOLLOWING` informa que a direção do alvo foi projetada perto do centro
+enquanto o comando ainda está em execução. A interface distingue essa estimativa
+da visibilidade do objeto e da chegada parada; ambas permanecem não confirmadas
+nesse progresso. O diagnóstico mede o tempo até o processamento do progresso,
+incluindo a espera do controlador; não o apresenta como latência física de exposição.
+
+Perda de observação, encerramento e prioridade maior continuam interrompendo a
+navegação. O prazo de aquisição não é prolongado, e o retorno mantém seus gates.
+`FOCUSED` ainda exige a resposta terminal e a confirmação de Stop existentes.
+O novo estado não certifica seguimento físico, lente Zoom nem visibilidade por
+mera projeção. Esses resultados precisam de imagens e telemetria em nova campanha.
+
 ## Atualizações de velocidade dentro da correção — 23/10/2026
 
 Na atenção com alvo dinâmico, o mesmo scanner pode atualizar a velocidade sem

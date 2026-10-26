@@ -5,6 +5,7 @@ export type AttentionRuntimeState =
   | "IDLE"
   | "CANDIDATE"
   | "ACQUIRING"
+  | "FOLLOWING"
   | "FOCUSED"
   | "GRACE"
   | "RETURNING"
@@ -164,6 +165,16 @@ export type AttentionSession = {
   active_event_key: string;
   active_view_id: string;
   active_target?: { ray: number[]; revision: number; source_id: string } | null;
+  following_framing?: {
+    kind: "projected_framing_during_command";
+    source_id: string;
+    center_error_pixels: number;
+    within_center_tolerance: boolean;
+    observation_age_seconds: number;
+    arrival_verified: false;
+    stop_confirmed: false;
+    subject_visibility_verified: false;
+  } | null;
   observed_framing?: {
     observed_after_arrival?: boolean;
     publication_age_seconds?: number | null;

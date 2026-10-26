@@ -1579,6 +1579,7 @@ class PanoramaService:
         velocity_probe: dict[str, Any] | None = None,
         target_provider: Callable[[], list[float]] | None = None,
         target_observation_provider: Callable[[], dict | None] | None = None,
+        following_observer: Callable[[dict], None] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
@@ -1808,7 +1809,8 @@ class PanoramaService:
                     evidence = await navigator.aim(target["ray"],
                         **({"maximum_error_pixels": maximum_error_pixels} if borrowed_control is not None else {}),
                         **({"target_provider": target_provider} if target_provider is not None else {}),
-                        **({"target_observation_provider": target_observation_provider} if target_observation_provider is not None else {}))
+                        **({"target_observation_provider": target_observation_provider} if target_observation_provider is not None else {}),
+                        **({"following_observer": following_observer} if following_observer is not None else {}))
                 evidence["lens"] = localizer.lens
             await self._current(job, request)
         except (PanoramaCaptureError, _Stopped) as error:
@@ -2539,7 +2541,8 @@ class PanoramaService:
     async def navigate_attention(self, *, destination: dict, lease_id: str, fence: int,
                                  command_id: str, returning: bool = False,
                                  target_provider: Callable[[], dict] | None = None,
-                                 observation_timeout_seconds: float = 2.0) -> dict:
+                                 observation_timeout_seconds: float = 2.0,
+                                 progress_observer: Callable[[dict], None] | None = None) -> dict:
         if (not isinstance(destination, dict) or not isinstance(lease_id, str) or not lease_id.strip()
                 or type(fence) is not int or fence < 1 or not isinstance(command_id, str) or not command_id.strip()
                 or type(returning) is not bool
@@ -2574,6 +2577,8 @@ class PanoramaService:
                 raise _error("attention_physical_qualification_required", "Physical attention qualification is required")
             if returning and (target_provider is not None or destination.get("framing") is not None or destination.get("group_framing") is not None):
                 raise _error("invalid_target", "Return navigation cannot inherit subject framing", 422)
+            if progress_observer is not None and (not callable(progress_observer) or returning or target_provider is None):
+                raise _error("invalid_target", "Following progress requires a live target", 422)
             if target_provider is not None and not callable(target_provider):
                 raise _error("invalid_target", "The target provider is invalid", 422)
             localizer = None
@@ -2670,9 +2675,20 @@ class PanoramaService:
             entry_stage("control_checked")
             ray = current_ray()
             entry_stage("target_refreshed")
+            def following_progress(evidence: dict) -> None:
+                # Only this pinned source and live command may publish progress.
+                # It is a projection during motion, never a stopped arrival.
+                if (evidence.get("kind") != "visual_following_progress"
+                        or evidence.get("arrival_verified") is not False
+                        or not np.allclose(destination_ray(reached), evidence.get("target_ray"), atol=1e-7, rtol=0)):
+                    return
+                progress_observer({"command_id": command_id, "lease_id": lease_id, "fence": fence,
+                    "destination": copy.deepcopy(reached), "evidence": copy.deepcopy(evidence)})
+
             _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray},
                 borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
-                **({"target_provider": current_ray, "target_observation_provider": current_observation} if follows_observation else {}))
+                **({"target_provider": current_ray, "target_observation_provider": current_observation} if follows_observation else {}),
+                **({"following_observer": following_progress} if progress_observer is not None else {}))
             final = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)
             owned = final.get("active_lease") or {}

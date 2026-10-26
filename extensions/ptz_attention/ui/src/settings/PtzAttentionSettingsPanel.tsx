@@ -658,6 +658,7 @@ function SessionCockpit({
         </div>
 
         {profile.mode === "shadow" ? <SessionNotice tone="info">{t("ext.ptz_attention.session.shadow_notice", {}, "Shadow review active.")}</SessionNotice> : null}
+        {state === "FOLLOWING" && !stale ? <SessionNotice tone="info">{t("ext.ptz_attention.session.following_notice")}</SessionNotice> : null}
         {profile.mode !== "shadow" && (state === "FOCUSED" || state === "GRACE") ? <ObservedFramingNotice
           observation={!stale && state === "FOCUSED" ? session?.observed_framing : null} statusAge={statusAge} t={t} /> : null}
         {!bindingReady ? <SessionNotice tone="warning">{t("ext.ptz_attention.session.binding_notice", {}, "No enabled pipeline binding is ready for this profile.")}</SessionNotice> : null}
@@ -913,7 +914,7 @@ function Metric({ label, value }: { label: string; value: string }): React.React
 
 function timelineIndex(state: AttentionRuntimeState): number {
   if (state === "CANDIDATE" || state === "ACQUIRING") return 1;
-  if (state === "FOCUSED" || state === "GRACE") return 2;
+  if (state === "FOCUSED" || state === "FOLLOWING" || state === "GRACE") return 2;
   if (state === "RETURNING") return 3;
   if (state === "IDLE") return 0;
   return -1;
@@ -930,7 +931,7 @@ function modeLabel(mode: AttentionExecutionMode, t: Translate): string {
 function stateTone(state: AttentionRuntimeState): Tone {
   if (state === "FAULT") return "danger";
   if (state === "MANUAL_OVERRIDE" || state === "GRACE") return "warning";
-  if (state === "FOCUSED") return "info";
+  if (state === "FOCUSED" || state === "FOLLOWING") return "info";
   if (state === "ACQUIRING" || state === "RETURNING" || state === "CANDIDATE") return "info";
   return "neutral";
 }

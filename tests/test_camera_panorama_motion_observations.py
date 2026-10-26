@@ -286,3 +286,22 @@ def test_velocity_feedback_uses_measured_in_motion_rate_and_fresh_dispatch(monke
         assert navigator.commands == 2
         assert navigator.trace[-1]["velocity_updates"] == [{"state": "pending", "navigation_command": 2}]
         assert navigator.trace[-1]["velocity_updates"][0] is entry
+
+
+def test_following_progress_emits_once_per_frame_without_arrival_or_visibility_claim(monkeypatch):
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
+    model = localizer()
+    navigator = navigation.VisualNavigator(SimpleNamespace(), model)
+    navigator.commands = 1
+    navigator.motion_feedback_target = lambda: ([1., 0., 0.], 12.)
+    events = []
+    navigator.following_observer = events.append
+    observed = frame()
+    geometry = navigation.arrival_frame_geometry(observed, model.locate(observed["image"], observed["capture_evidence"]), model.lens, [1, 0, 0])
+    observer = SimpleNamespace(closed=False, command=1, latest={"command": 1, "status": "localized", "frame_received_monotonic": 10.,
+        "capture_evidence": observed["capture_evidence"], "frame_geometry": geometry})
+    for _ in range(2):
+        assert navigator._motion_stop_reason(observer, "pan", 1) == "visual_feedback_target_reached"
+    assert len(events) == 1
+    assert events[0]["arrival_verified"] is events[0]["stop_confirmed"] is events[0]["subject_visibility_verified"] is False
+    assert events[0]["frame_geometry"]["capture_evidence"] == events[0]["capture_evidence"]

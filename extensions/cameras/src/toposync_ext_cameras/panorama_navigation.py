@@ -968,6 +968,8 @@ class VisualNavigator:
         self.trace: list[dict[str, Any]] = []
         self.dispatch_guard: Callable[[], None] | None = None
         self.motion_feedback_target: Callable[[], tuple[Any, float]] | None = None
+        self.following_observer: Callable[[dict], None] | None = None
+        self.following_capture = None
         self.last_pulse_feedback_stop = None
         self.localization_replay = LocalizationReplay()
         self.probe_durations: dict[str, float] = {}
@@ -1219,6 +1221,13 @@ class VisualNavigator:
         measured = localized_axis_measurement(ray, self.localizer.lens, geometry)
         if measured is None:
             return "visual_feedback_target_unavailable"
+        if self.following_observer is not None and record["capture_evidence"] != self.following_capture:
+            self.following_capture = deepcopy(record["capture_evidence"])
+            self.following_observer({"kind": "visual_following_progress", "arrival_verified": False,
+                "subject_visibility_verified": False, "stop_confirmed": False,
+                "capture_evidence": deepcopy(record["capture_evidence"]), "frame_geometry": deepcopy(geometry),
+                "target_ray": np.asarray(ray).tolist(), "measurement": measured,
+                "frame_received_monotonic": record["frame_received_monotonic"]})
         if measured["center_error_pixels"] <= maximum_error:
             return "visual_feedback_target_reached"
         response_rotation = self.response_rotations.get(axis)
@@ -1550,9 +1559,12 @@ class VisualNavigator:
         self, ray: Any, *, maximum_error_pixels: float = MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
         target_provider: Callable[[], list[float]] | None = None,
         target_observation_provider: Callable[[], dict | None] | None = None,
+        following_observer: Callable[[dict], None] | None = None,
     ) -> dict[str, Any]:
         if type(maximum_error_pixels) not in (int, float) or not 0 < maximum_error_pixels <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS:
             raise PanoramaCaptureError("invalid_arrival_limit")
+        self.following_observer = following_observer
+        self.following_capture = None
         motion = TargetMotion()
 
         def read_target():

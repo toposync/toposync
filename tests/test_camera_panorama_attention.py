@@ -1179,3 +1179,24 @@ async def test_qualification_preserves_starting_view_until_verified_recovery(mon
         service.invalidate_native_reference.assert_called_once_with(reference, 'visual_native_reference_unconfirmed')
     else:
         service.invalidate_native_reference.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_attention_progress_keeps_pinned_binding_and_does_not_replace_terminal_result(monkeypatch):
+    service, job, _ = framing_service(monkeypatch)
+    destination = group_destination(job)
+    events = []
+    async def aim(request, current, target, **options):
+        evidence = {"kind": "visual_following_progress", "arrival_verified": False,
+            "stop_confirmed": False, "subject_visibility_verified": False,
+            "target_ray": options["target_provider"](), "measurement": {"center_error_pixels": 2.}}
+        options["following_observer"](evidence)
+        assert len(events) == 1
+        return {}, {"target_ray": evidence["target_ray"], "verified": True}
+    service._visual_operation_with_pinned_reference.side_effect = aim
+    result = await service.navigate_attention(destination=destination, lease_id="attention", fence=7,
+        command_id="command", target_provider=lambda: destination, progress_observer=events.append)
+    assert events[0]["command_id"] == "command" and events[0]["lease_id"] == "attention" and events[0]["fence"] == 7
+    assert events[0]["destination"] == destination
+    assert events[0]["evidence"]["arrival_verified"] is False
+    assert result["stop_confirmed"] is True

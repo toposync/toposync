@@ -15,6 +15,7 @@ ControllerState = Literal[
     "IDLE",
     "CANDIDATE",
     "ACQUIRING",
+    "FOLLOWING",
     "FOCUSED",
     "GRACE",
     "RETURNING",
@@ -558,6 +559,7 @@ class DeviceStatus(StrictModel):
     active_view_id: str = ""
     active_target: dict[str, Any] | None = None
     observed_framing: dict[str, Any] | None = None
+    following_framing: dict[str, Any] | None = None
     estimated_group_framing: dict[str, Any] | None = None
     active_priority: int | None = None
     candidate_event_key: str = ""

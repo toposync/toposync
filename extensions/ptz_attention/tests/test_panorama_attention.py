@@ -102,7 +102,8 @@ async def test_recovery_keeps_original_failure_until_return_is_verified(operatio
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish", ["arrival", "expired", "closed", "preempt"])
-async def test_live_follow_uses_latest_target_and_stops_on_loss(finish):
+@pytest.mark.parametrize("during_progress", [False, True])
+async def test_live_follow_uses_latest_target_and_stops_on_loss(finish, during_progress):
     clock, camera, services, _, calls, cancelled, store, controller = environment(
         mode="live_panorama", qualified=True, blocked=True)
     store.replace_profile(panorama_profile(mode="live_panorama", follow_view_updates=True,
@@ -138,6 +139,15 @@ async def test_live_follow_uses_latest_target_and_stops_on_loss(finish):
     await observe(2, .7)
     assert calls[0]["target_provider"]()["ray"][0] == pytest.approx(.7 / math.sqrt(1.49))
     assert camera.acquires == 1, "The controller must retain its own lease while following"
+    if during_progress:
+        capture = {"capture_instance": "progress", "generation": 1, "sequence": 1, "published_at": clock()}
+        calls[0]["progress_observer"]({**{key: calls[0][key] for key in ("command_id", "lease_id", "fence")},
+            "destination": calls[0]["target_provider"](), "evidence": {"kind": "visual_following_progress",
+                "arrival_verified": False, "stop_confirmed": False, "subject_visibility_verified": False,
+                "measurement": {"center_error_pixels": 2.}, "capture_evidence": capture,
+                "frame_geometry": {"capture_evidence": dict(capture)}}})
+        await controller.tick_once()
+        assert controller.status()[0].state == "FOLLOWING"
     if finish == "arrival":
         release.set()
         await asyncio.sleep(0)
@@ -1065,5 +1075,61 @@ async def test_same_panorama_destination_coalesces_without_extra_movement():
     assert controller.status()[0].active_event_key.endswith(":second")
     assert any(item.reason == "same_target" for item in store.list_decisions()[0])
     assert not calls and not camera.commands
+    await controller.shutdown()
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["valid", "expired", "wrong_command", "wrong_lease", "wrong_reference", "missing_geometry", "arrival_claim", "visibility_claim", "outside", "malformed"])
+async def test_in_motion_progress_is_separate_from_stopped_arrival(case):
+    from copy import deepcopy
+    clock, camera, services, _, calls, cancelled, store, controller = environment(
+        mode="live_panorama", qualified=True, blocked=True)
+    current = panorama_profile(mode="live_panorama", follow_view_updates=True, candidate_confirm_seconds=.25)
+    store.replace_profile(current)
+    await controller.submit_intent(event(clock).model_copy(update={"capture_evidence": {
+        "capture_instance": "decoder", "generation": 1, "sequence": 1, "published_at": clock()}}))
+    clock.advance(.3)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    runtime = controller._runtime_for(current)
+    deadline = runtime.settle_deadline
+    capture = {"capture_instance": "decoder", "generation": 1, "sequence": 10, "published_at": clock()}
+    value = {key: deepcopy(calls[0][key]) for key in ("destination", "command_id", "lease_id", "fence")}
+    value["evidence"] = {"kind": "visual_following_progress", "arrival_verified": False,
+        "stop_confirmed": False, "subject_visibility_verified": False,
+        "capture_evidence": capture, "frame_geometry": {"capture_evidence": deepcopy(capture)},
+        "measurement": {"center_error_pixels": 2.}}
+    if case == "expired": capture["published_at"] -= 2
+    if case == "wrong_command": value["command_id"] = "previous"
+    if case == "wrong_lease": value["fence"] = 999
+    if case == "wrong_reference": value["destination"]["revision"] = 999
+    if case == "missing_geometry": value["evidence"].pop("frame_geometry")
+    if case == "arrival_claim": value["evidence"]["arrival_verified"] = True
+    if case == "visibility_claim": value["evidence"]["subject_visibility_verified"] = True
+    if case == "outside": value["evidence"]["measurement"]["center_error_pixels"] = 20.
+    if case == "malformed": value["evidence"] = None
+    calls[0]["progress_observer"](value)
+    await controller.tick_once()
+    status = controller.status()[0]
+    assert status.state == ("FOLLOWING" if case == "valid" else "ACQUIRING")
+    assert runtime.settle_deadline == deadline and not runtime.navigation_task.done()
+    assert runtime.events[runtime.active_key].arrival_geometry is None
+    assert not any(decision.action == "focus_acquired" for decision in store.list_decisions()[0])
+    if case in {"valid", "outside"}:
+        assert status.following_framing["arrival_verified"] is False
+        assert status.following_framing["subject_visibility_verified"] is False
+    else:
+        assert status.following_framing is None
+    if case == "valid":
+        older = deepcopy(value)
+        older["evidence"]["capture_evidence"]["sequence"] -= 1
+        older["evidence"]["frame_geometry"]["capture_evidence"] = deepcopy(older["evidence"]["capture_evidence"])
+        calls[0]["progress_observer"](older)
+        assert runtime.navigation_progress["evidence"]["capture_evidence"]["sequence"] == 10
+        clock.advance(1.1)
+        await controller.tick_once()
+        assert controller.status()[0].following_framing is None
+        assert controller.status()[0].state == "ACQUIRING"
     await controller.shutdown()
     store.close()

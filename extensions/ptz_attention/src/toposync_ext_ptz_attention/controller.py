@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import re
 import time
 import uuid
@@ -104,6 +105,7 @@ class _DeviceRuntime:
     command_target_key: str = ""
     command_started_monotonic: float | None = None
     navigation_task: asyncio.Task | None = None
+    navigation_progress: dict | None = None
     capture_owner_id: str = ""
     capture_open_task: asyncio.Task | None = None
     motion_epoch: int | str | None = None
@@ -855,6 +857,7 @@ class PtzAttentionController:
                             and (active.expected_group_member_event_ids is None or (
                                 active.intent.framing_observation is not None
                                 and active.expected_group_member_event_ids == active.intent.framing_observation.member_event_ids))) else None),
+                    following_framing=self._following_framing(runtime, wall_now),
                     estimated_group_framing=group_framing_status(active.intent.group_framing if active else None, wall_now),
                     active_priority=(active.intent.priority if active else None),
                     candidate_event_key=runtime.candidate_key,
@@ -1135,7 +1138,7 @@ class PtzAttentionController:
                      "remaining_seconds": self._campaign_remaining(profile, runtime)})
         if runtime.state == "RETURNING":
             return True
-        if runtime.session_id or runtime.state in {"ACQUIRING", "FOCUSED", "GRACE"}:
+        if runtime.session_id or runtime.state in {"ACQUIRING", "FOLLOWING", "FOCUSED", "GRACE"}:
             await self._begin_return(paused, runtime, self._monotonic_clock(), reason="campaign_return_window")
         else:
             released = await self._stop_and_release(runtime, profile=paused, emergency=True)
@@ -1212,8 +1215,8 @@ class PtzAttentionController:
             await self._renew_if_due(profile, runtime, now)
             if runtime.state == "FAULT":
                 return
-        if runtime.state in {"ACQUIRING", "RETURNING"}:
-            if runtime.state == "ACQUIRING" and profile.follow_view_updates and effective_mode(profile) == "live_panorama":
+        if runtime.state in {"ACQUIRING", "FOLLOWING", "RETURNING"}:
+            if runtime.state in {"ACQUIRING", "FOLLOWING"} and profile.follow_view_updates and effective_mode(profile) == "live_panorama":
                 active = runtime.events.get(runtime.active_key)
                 best = self._best_event(runtime)
                 expired = active is None or not active.open or (
@@ -1466,6 +1469,7 @@ class PtzAttentionController:
 
     async def _stop_following_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> bool:
         task, runtime.navigation_task = runtime.navigation_task, None
+        runtime.navigation_progress = None
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -1595,6 +1599,7 @@ class PtzAttentionController:
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
             runtime.command_event_key = tracked.intent.key
             runtime.command_started_monotonic = None
+            runtime.navigation_progress = None
             self._start_session(profile, runtime, tracked.resolved, tracked=tracked)
             runtime.command_started_monotonic = self._monotonic_clock()
             if tracked.resolved.panorama is not None:
@@ -1613,6 +1618,19 @@ class PtzAttentionController:
                             raise RuntimeError("following_target_unqualified")
                         return destination.panorama.model_dump(mode="json")
                     options["target_provider"] = latest_target
+                    submitted_command = runtime.command_id
+                    def progress_observer(value):
+                        if runtime.command_id == submitted_command and runtime.command_event_key == tracked.intent.key:
+                            if not isinstance(value, dict) or self._following_framing(runtime, self._clock(), value) is None:
+                                return
+                            previous = (runtime.navigation_progress or {}).get("evidence", {}).get("capture_evidence")
+                            capture = value["evidence"]["capture_evidence"]
+                            if previous and (any(capture.get(key) != previous.get(key) for key in ("capture_instance", "generation"))
+                                    or capture.get("sequence", 0) <= previous.get("sequence", 0)):
+                                return
+                            runtime.navigation_progress = deepcopy(value)
+                            self._navigation_finished.set()
+                    options["progress_observer"] = progress_observer
                 runtime.navigation_task = asyncio.create_task(self.services.call(
                     "cameras.panorama.navigate_attention", destination=tracked.resolved.panorama.model_dump(mode="json"),
                     lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, **options))
@@ -1950,6 +1968,53 @@ class PtzAttentionController:
             },
         )
 
+    def _following_framing(self, runtime: _DeviceRuntime, wall_now: float, value: dict | None = None) -> dict | None:
+        value = runtime.navigation_progress if value is None else value
+        if (runtime.state not in {"ACQUIRING", "FOLLOWING"} or runtime.navigation_task is None
+                or not isinstance(value, dict) or value.get("command_id") != runtime.command_id
+                or value.get("lease_id") != runtime.lease_id or value.get("fence") != runtime.fence):
+            return None
+        evidence = value.get("evidence", {})
+        if not isinstance(evidence, dict) or not isinstance(evidence.get("measurement"), dict):
+            return None
+        capture = evidence.get("capture_evidence")
+        freshness = resolve_frame_freshness(Packet.create(stream_id=runtime.command_id,
+            payload={"capture_evidence": capture}), now_unix=wall_now)
+        error = evidence.get("measurement", {}).get("center_error_pixels")
+        geometry = evidence.get("frame_geometry")
+        if (evidence.get("kind") != "visual_following_progress" or evidence.get("arrival_verified") is not False
+                or evidence.get("stop_confirmed") is not False or evidence.get("subject_visibility_verified") is not False
+                or freshness.age_seconds is None or not 0 <= freshness.age_seconds <= 1
+                or not isinstance(geometry, dict) or not capture or geometry.get("capture_evidence") != capture
+                or type(error) not in (float, int) or not math.isfinite(error) or error < 0):
+            return None
+        tracked = runtime.events.get(runtime.active_key)
+        if tracked is None or not tracked.open or tracked.resolved is None or tracked.resolved.panorama is None:
+            return None
+        destination = value.get("destination", {})
+        if not isinstance(destination, dict):
+            return None
+        expected = tracked.resolved.panorama.model_dump(exclude={"ray", "framing", "group_framing"})
+        if any(destination.get(key) != val for key, val in expected.items()):
+            return None
+        return {"kind": "projected_framing_during_command", "source_id": destination.get("source_id"),
+            "center_error_pixels": error, "within_center_tolerance": error <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
+            "observation_age_seconds": freshness.age_seconds, "capture_evidence": deepcopy(capture),
+            "arrival_verified": False, "stop_confirmed": False, "subject_visibility_verified": False}
+
+    def _observe_following_progress(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
+        progress = self._following_framing(runtime, self._clock())
+        framed = progress is not None and progress["within_center_tolerance"]
+        if framed and runtime.state != "FOLLOWING":
+            # The original acquisition deadline remains in force. This does not
+            # renew a physical window or replace terminal Stop/arrival checks.
+            self._set_state(runtime, "FOLLOWING", now)
+            self._record(profile, runtime, action="following_framed", reason="projected_during_command",
+                details={**progress, "command_to_progress_ms": max(0., now - runtime.command_started_monotonic) * 1000
+                    if runtime.command_started_monotonic is not None else None})
+        elif not framed and runtime.state == "FOLLOWING":
+            self._set_state(runtime, "ACQUIRING", now)
+
     async def _observe_panorama_move(self, profile: AttentionProfile, runtime: _DeviceRuntime, now: float) -> None:
         task = runtime.navigation_task
         if task is None:
@@ -1966,6 +2031,8 @@ class PtzAttentionController:
                     await self._enter_manual_override(profile, runtime, "lease_lost", now=now)
                 elif not self._snapshot_owns_lease(runtime, snapshot) or snapshot.get("automation_ready") is not True:
                     await self._fault(profile, runtime, "panorama_control_lost")
+                elif runtime.state != "RETURNING":
+                    self._observe_following_progress(profile, runtime, now)
             except Exception:
                 await self._fault(profile, runtime, "control_snapshot_unavailable")
             return
@@ -2015,7 +2082,7 @@ class PtzAttentionController:
             detail = getattr(failure, "detail", None)
             code = detail.get("code") if isinstance(detail, dict) else getattr(failure, "code", None)
             if (code == "following_observation_expired"
-                    and profile.follow_view_updates and runtime.state == "ACQUIRING"):
+                    and profile.follow_view_updates and runtime.state in {"ACQUIRING", "FOLLOWING"}):
                 # The navigator can observe expiry between controller ticks.
                 if await self._stop_following_move(profile, runtime, now):
                     await self._expire_following_observation(profile, runtime, now)
@@ -2649,7 +2716,7 @@ class PtzAttentionController:
         if profile is not None and effective_mode(profile) not in {"live_preset", "live_panorama"}:
             return False
         return bool(
-            runtime.session_id or runtime.state in {"ACQUIRING", "FOCUSED", "GRACE", "RETURNING"}
+            runtime.session_id or runtime.state in {"ACQUIRING", "FOLLOWING", "FOCUSED", "GRACE", "RETURNING"}
         )
 
     @staticmethod
@@ -2846,6 +2913,7 @@ class PtzAttentionController:
         if runtime.navigation_task is not None:
             runtime.navigation_task.cancel()
             runtime.navigation_task = None
+        runtime.navigation_progress = None
         runtime.command_id = ""
         runtime.command_event_key = ""
         runtime.command_preset = ""

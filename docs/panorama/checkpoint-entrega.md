@@ -1,5 +1,25 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Atualizações de velocidade dentro da correção — 23/10/2026
+
+Na atenção com alvo dinâmico, o mesmo scanner pode atualizar a velocidade sem
+aguardar uma parada entre esses comandos. A estimativa usa dois intervalos
+concordantes de orientação visual, com três imagens e vínculo de captura.
+O tempo é o recebimento local dos quadros; não certifica o instante físico de
+exposição nem a resposta da câmera fora do intervalo observado.
+
+Cada atualização usa guarda própria de alvo e imagem, consome orçamento e
+permanece no eixo, sentido, velocidade máxima e prazo da correção original.
+Velocidades fora do espaço ONVIF normalizado descoberto não são presumidas.
+O watchdog e a parada continuam no controlador existente. Comandos alterados
+não produzem calibração de pulso completo. Reversões exigem parada e novo cálculo.
+
+O mecanismo ainda termina cada correção com a prova de parada existente. Não
+constitui aceite de seguimento contínuo de uma ocorrência: é preciso distinguir
+o enquadramento durante movimento da chegada terminal, integrar essa evolução
+no ciclo de atenção e comprovar cadência, Wide, Zoom, rastro e recuperação em
+nova janela física. Os ensaios móveis anteriormente reprovados permanecem válidos.
+
 ## Parada antecipada por observação visual — 23/10/2026
 
 Nas correções de atenção com alvo dinâmico e resposta já conhecida, a navegação

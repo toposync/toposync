@@ -10898,3 +10898,71 @@ def test_visual_feedback_failure_still_stops_the_shared_command(tmp_path, monkey
         asyncio.run(scenario())
     assert len([event for event in camera.events if event[0] == "velocity"]) == 1
     assert len([event for event in camera.events if event[0] == "stop"]) == 1
+
+
+@pytest.mark.parametrize("case", ["success", "two_updates", "reverse", "other_axis", "overspeed", "stale", "reject", "budget", "region_budget", "stop_rejected", "delayed_guard", "cancel"])
+def test_visual_velocity_update_is_serial_bounded_and_stopped(tmp_path, monkeypatch, case):
+    updates = []
+    reserved = []
+    offered = []
+    class Camera(SimulatedCamera):
+        async def move_velocity(self, *, dispatch_guard=None, **kwargs):
+            if dispatch_guard is not None:
+                if case == "delayed_guard": self.now += 1.2
+                dispatch_guard()
+                if case == "cancel": raise asyncio.CancelledError()
+                updates.append((self.now, dict(kwargs)))
+                if case == "reject":
+                    raise PanoramaCaptureError("movement_unconfirmed")
+            return await super().move_velocity(**kwargs)
+        async def stop(self):
+            value = await super().stop()
+            if case == "stop_rejected":
+                raise PanoramaCaptureError("stop_unconfirmed")
+            return value
+    camera = Camera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.capabilities.update(velocity_supported=True, defaults={"continuous": "normalized"},
+        spaces={"continuous": [{"uri": "normalized", "normalized": True,
+            "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]})
+    if case == "region_budget":
+        scanner.region_policy = {"maximum_active_seconds": 100, "return_seconds_reserved": 10,
+            "maximum_captures": 10, "maximum_commands": 1, "return_commands_reserved": 0}
+    planned = []
+    def feedback(context):
+        limit = 2 if case == "two_updates" else 1
+        if len(planned) >= limit or len(offered) < 2 * (len(planned) + 1): return None
+        planned.append(context)
+        def reserve(entry):
+            assert entry["state"] == "pending"
+            if case == "budget": raise PanoramaCaptureError("visual_navigation_budget_exhausted")
+            reserved.append(True)
+        return {"velocity": {"pan": -.05 if case == "reverse" else .2 if case == "overspeed" else .05,
+                             "tilt": .01 if case == "other_axis" else 0.},
+            "frame_received_monotonic": camera.now - (1. if case == "stale" else 0.),
+            "capture_evidence": {"capture_instance": camera.capture_instance, "generation": 1, "sequence": camera.sequence},
+            "dispatch_guard": lambda: None, "reserve": reserve}
+    async def scenario():
+        return await scanner._move(lambda: camera.move_velocity(pan=.1, timeout_s=1.2),
+            duration=1.2, allow_stationary=True, requested_velocity={"pan": .1, "tilt": 0.},
+            frame_observer=offered.append, motion_velocity_update=feedback)
+    expected = {"reverse": "invalid_visual_feedback", "other_axis": "invalid_visual_feedback", "overspeed": "invalid_visual_feedback",
+        "stale": "visual_feedback_expired", "reject": "movement_unconfirmed", "budget": "visual_navigation_budget_exhausted",
+        "stop_rejected": "stop_unconfirmed", "delayed_guard": "visual_feedback_expired", "region_budget": "region_budget_exhausted"}
+    if case == "cancel":
+        with pytest.raises(asyncio.CancelledError): asyncio.run(scenario())
+    elif case in expected:
+        with pytest.raises(PanoramaCaptureError, match=expected[case]): asyncio.run(scenario())
+    else:
+        result = asyncio.run(scenario())
+        assert result["stable"] is True and result["motion_velocity_updates"][0]["state"] == "accepted"
+        count = 2 if case == "two_updates" else 1
+        assert len(reserved) == len(updates) == count
+        assert all(at + command["timeout_s"] <= planned[0]["deadline_monotonic"] for at, command in updates)
+        if count == 2:
+            assert planned[1]["accepted_monotonic"] > planned[0]["accepted_monotonic"]
+            assert planned[1]["deadline_monotonic"] == planned[0]["deadline_monotonic"]
+    assert _event_names(camera).count("stop") == 1
+    if case in {"reverse", "other_axis", "overspeed", "stale", "budget", "region_budget", "delayed_guard", "cancel"}:
+        assert not updates

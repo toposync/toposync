@@ -1849,3 +1849,21 @@ def test_all_motion_acquisitions_require_current_automation_qualification(observ
         finally:
             await camera.close()
     asyncio.run(run())
+
+
+def test_velocity_update_uses_its_fresh_guard_without_replacing_initial_guard():
+    async def scenario():
+        camera, _, _, services, _ = environment()
+        await camera.acquire()
+        try:
+            initial, fresh = lambda: None, lambda: None
+            camera.dispatch_guard = initial
+            await camera.move_velocity(pan=.05, dispatch_guard=fresh)
+            submit = [kwargs for name, kwargs in services.calls if name == "cameras.control.submit"][-1]
+            assert submit["dispatch_guard"] is fresh and camera.dispatch_guard is initial
+            await camera.move_velocity(pan=.1)
+            submit = [kwargs for name, kwargs in services.calls if name == "cameras.control.submit"][-1]
+            assert submit["dispatch_guard"] is initial
+        finally:
+            await camera.close()
+    asyncio.run(scenario())

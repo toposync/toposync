@@ -210,7 +210,7 @@ def test_motion_feedback_stops_only_from_current_operation_evidence(monkeypatch,
     if case == "failed": record["status"] = "unlocalized"
     if case == "binding": record["capture_evidence"] = {}
     if case == "previous_command": record["command"] = 0
-    observer = SimpleNamespace(closed=case == "epoch", latest=record)
+    observer = SimpleNamespace(closed=case == "epoch", latest=record, command=1)
     assert navigator._motion_stop_reason(observer, "pan", 1) == expected
     # An old entry in persistent history cannot stop a new operation.
     observer.latest = None
@@ -226,3 +226,63 @@ def test_motion_feedback_checks_target_validity_before_first_pose():
     navigator.motion_feedback_target = expired
     with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
         navigator._motion_stop_reason(SimpleNamespace(closed=False, latest=None), "pan", 1)
+
+
+@pytest.mark.parametrize("case", ["valid", "one_interval", "stale", "new_segment", "wrong_direction", "target_changed", "budget", "unsupported_space"])
+def test_velocity_feedback_uses_measured_in_motion_rate_and_fresh_dispatch(monkeypatch, case):
+    clock = [10.]
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: clock[0])
+    model = localizer()
+    model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    capabilities = {"defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
+        {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
+    if case == "unsupported_space": capabilities["spaces"] = {}
+    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator.commands = 1
+    navigator.trace = [{}]
+    navigator.response["pan"] = np.array([-999., 0.])  # A pulse gain must not drive this rate calculation.
+    target = [.28]
+    navigator.motion_feedback_target = lambda: ([np.cos(target[0]), np.sin(target[0]), 0.], 12.)
+    observer = SimpleNamespace(closed=False, latest=None, command=1)
+    feedback = navigator._velocity_feedback(observer, "pan", 1, .1)
+    context = {"velocity": {"pan": .1, "tilt": 0.}, "accepted_monotonic": 10., "deadline_monotonic": 11.}
+    plans = []
+    for i in range(2 if case == "one_interval" else 3):
+        clock[0] = 10.1 + i * .1
+        angle = i * .1 * (-1 if case == "wrong_direction" else 1)
+        c, t = np.cos(angle), np.sin(angle)
+        capture = {"capture_instance": "decoder", "generation": 1, "sequence": i+1}
+        geometry = {"rotation_matrix": [[c, 0, t], [0, 1, 0], [-t, 0, c]],
+            "analysis_width": 960, "validation_p95_pixels": 1., "validation_matches": 24, "inlier_fraction": .9,
+            "capture_evidence": capture}
+        observer.latest = {"status": "localized", "command": 1, "frame_received_monotonic": clock[0],
+            "capture_evidence": capture, "frame_geometry": geometry}
+        if case == "new_segment" and i == 2: context["accepted_monotonic"] = clock[0]
+        if case == "stale" and i == 2: clock[0] += 1.
+        plans.append(feedback(context))
+    if case in {"one_interval", "stale", "new_segment", "wrong_direction", "unsupported_space"}:
+        assert all(plan is None for plan in plans)
+        return
+    assert plans[:-1] == [None, None]
+    plan = plans[-1]
+    assert plan["velocity"] == {"pan": .025, "tilt": 0.}
+    assert plan["measurement"]["timing_basis"] == "local_frame_receipt"
+    assert [capture["sequence"] for capture in plan["measurement"]["capture_evidence"]] == [1, 2, 3]
+    if case == "target_changed":
+        target[0] += .1
+        with pytest.raises(navigation.PanoramaCaptureError, match="visual_feedback_target_changed"):
+            plan["dispatch_guard"]()
+    else:
+        plan["dispatch_guard"]()
+    if case == "budget":
+        navigator.commands = navigator.maximum_commands
+        with pytest.raises(navigation.PanoramaCaptureError, match="visual_navigation_budget_exhausted"):
+            plan["reserve"]({"state": "pending"})
+        assert navigator.commands == navigator.maximum_commands
+        assert navigator.trace == [{}]
+    else:
+        entry = {"state": "pending"}
+        plan["reserve"](entry)
+        assert navigator.commands == 2
+        assert navigator.trace[-1]["velocity_updates"] == [{"state": "pending", "navigation_command": 2}]
+        assert navigator.trace[-1]["velocity_updates"][0] is entry

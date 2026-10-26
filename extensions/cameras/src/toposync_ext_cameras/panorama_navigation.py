@@ -22,6 +22,7 @@ from .panorama_scan import (
     MAXIMUM_RETURN_CORRECTIONS,
     MINIMUM_CONTINUOUS_PULSE_SECONDS,
     _Scan,
+    _exact_velocity_supported,
     _append_return_correction_command,
     _match,
     _next_continuous_seek_duration,
@@ -1206,7 +1207,7 @@ class VisualNavigator:
         # Validate the live target even while the first pose is still processing.
         ray, maximum_error = self.motion_feedback_target()
         record = observer.latest
-        if record is None or record.get("command") != self.commands:
+        if record is None or record.get("command") != observer.command:
             return None
         if not 0 <= time.monotonic() - record.get("frame_received_monotonic", 0) <= 1:
             return "visual_feedback_expired"
@@ -1230,6 +1231,84 @@ class VisualNavigator:
         if response is not None and float(self._error(ray, geometry) @ (direction * response)) >= 0:
             return "visual_feedback_direction_changed"
         return None
+
+    def _velocity_feedback(self, observer: MotionFrameObservations, axis: str, direction: int, speed: float):
+        previous = None
+        previous_rate = None
+        previous_rate_origin = None
+        segment = None
+
+        def plan(context):
+            nonlocal previous, previous_rate, previous_rate_origin, segment
+            if segment != context["accepted_monotonic"]:
+                previous = previous_rate = None
+                segment = context["accepted_monotonic"]
+            record = observer.latest
+            now = time.monotonic()
+            if (record is None or observer.closed or record.get("status") != "localized"
+                    or record["frame_received_monotonic"] < segment
+                    or not 0 <= now - record["frame_received_monotonic"] <= .35
+                    or record is previous):
+                return None
+            geometry = record.get("frame_geometry")
+            if not isinstance(geometry, dict) or geometry.get("capture_evidence") != record.get("capture_evidence"):
+                return None
+            before, previous = previous, record
+            if before is None:
+                return None
+            interval = record["frame_received_monotonic"] - before["frame_received_monotonic"]
+            if not .08 <= interval <= .5:
+                previous_rate = None
+                return None
+            origin = before["frame_geometry"]
+            fixed_ray = _rotation_basis(origin["rotation_matrix"])[:, 2]
+            old_error, new_error = self._error(fixed_ray, origin), self._error(fixed_ray, geometry)
+            rate = (new_error - old_error) / interval
+            noise = max(4., 2 * max(item["validation_p95_pixels"] * ANALYSIS_WIDTH / item["analysis_width"]
+                for item in (origin, geometry)))
+            if self._response_pixel_delta(old_error, new_error) < noise:
+                previous_rate = None
+                return None
+            last_rate, previous_rate = previous_rate, rate
+            rate_origin, previous_rate_origin = previous_rate_origin, before["capture_evidence"]
+            # Two agreeing intervals at the current commanded velocity qualify
+            # a local rate estimate. Finite-pulse gains never stand in for it.
+            if (last_rate is None or rate @ last_rate < .9 * np.linalg.norm(rate) * np.linalg.norm(last_rate)
+                    or not .5 <= np.linalg.norm(rate) / max(np.linalg.norm(last_rate), 1e-8) <= 2):
+                return None
+            ray, maximum_error = self.motion_feedback_target()
+            error = self._error(ray, geometry)
+            remaining = context["deadline_monotonic"] - now
+            if remaining < .2 or float(error @ rate) >= 0:
+                return None
+            factor = -.8 * float(error @ rate) / (float(rate @ rate) * remaining)
+            current_speed = abs(context["velocity"][axis])
+            proposed = float(np.clip(current_speed * factor, .025, speed))
+            velocity = {"pan": 0., "tilt": 0., axis: direction * proposed}
+            if abs(proposed - current_speed) < .01 or not _exact_velocity_supported(self.scanner.capabilities, velocity):
+                return None
+            capture = deepcopy(record["capture_evidence"])
+            def guard():
+                if observer.closed or not 0 <= time.monotonic() - record["frame_received_monotonic"] <= .35:
+                    raise PanoramaCaptureError("visual_feedback_expired")
+                latest, _ = self.motion_feedback_target()
+                shift = self._response_pixel_delta(error, self._error(latest, geometry))
+                if shift > maximum_error / 2:
+                    raise PanoramaCaptureError("visual_feedback_target_changed")
+            def reserve(entry):
+                if self.commands >= self.maximum_commands:
+                    raise PanoramaCaptureError("visual_navigation_budget_exhausted")
+                self.commands += 1
+                entry["navigation_command"] = self.commands
+                self.trace[-1].setdefault("velocity_updates", []).append(entry)
+            return {"velocity": velocity,
+                "measurement": {"kind": "visual_rate_estimate", "timing_basis": "local_frame_receipt",
+                    "rate_radians_per_second": rate.tolist(), "comparison_rate_radians_per_second": last_rate.tolist(),
+                    "interval_seconds": interval, "capture_evidence": [deepcopy(rate_origin),
+                        deepcopy(before["capture_evidence"]), capture]},
+                "capture_evidence": capture, "frame_received_monotonic": record["frame_received_monotonic"],
+                "dispatch_guard": guard, "reserve": reserve}
+        return plan
 
     async def _pulse(self, axis: str, amount: float, *, speed: float = DEFAULT_CONTINUOUS_PULSE_SPEED) -> None:
         started = time.monotonic()
@@ -1273,6 +1352,9 @@ class VisualNavigator:
                     if self.motion_feedback_target is not None:
                         options["motion_stop_requested"] = lambda: self._motion_stop_reason(
                             motion_observations, axis, 1 if amount > 0 else -1)
+                        if capabilities.get("velocity_supported"):
+                            options["motion_velocity_update"] = self._velocity_feedback(
+                                motion_observations, axis, 1 if amount > 0 else -1, speed)
                 transition_estimator = getattr(self.localizer, "calibrated_transition", None)
                 if callable(transition_estimator):
                     options["transition_estimator"] = transition_estimator
@@ -1311,7 +1393,10 @@ class VisualNavigator:
                 await motion_observations.close()
         self.scanner.last_frame = result.get("observation_frame", result["frame"])
         self.scanner.last_pose = result.get("pose", {})
-        self.last_pulse_feedback_stop = result.get("motion_feedback_stop")
+        updates = result.get("motion_velocity_updates", [])
+        self.trace[-1]["velocity_updates"] = updates
+        self.last_pulse_feedback_stop = result.get("motion_feedback_stop") or (
+            "visual_feedback_velocity_updated" if updates else None)
         self.trace[-1]["motion_feedback_stop"] = self.last_pulse_feedback_stop
         if (result.get("stable") is True and self.scanner.physical_state == "stopped"
                 and speed >= DEFAULT_CONTINUOUS_PULSE_SPEED):

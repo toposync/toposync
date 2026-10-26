@@ -543,8 +543,9 @@ class PanoramaCamera:
         except Exception:
             raise PanoramaCaptureError("position_unavailable") from None
 
-    async def _submit(self, command: dict[str, Any]) -> dict[str, Any]:
+    async def _submit(self, command: dict[str, Any], *, dispatch_guard: Callable[[], None] | None = None) -> dict[str, Any]:
         stopping = command.get("kind") == "stop"
+        guard = dispatch_guard if dispatch_guard is not None else self.dispatch_guard
         await self._guard(stopping=stopping)
         if not stopping:
             await self.renew()
@@ -554,7 +555,7 @@ class PanoramaCamera:
             receipt = await self.services.call(
                 "cameras.control.submit", lease_id=lease["lease_id"], fence=lease["fence"],
                 command_id=command_id, command=command,
-                **({"dispatch_guard": self.dispatch_guard} if not stopping and self.dispatch_guard is not None else {}),
+                **({"dispatch_guard": guard} if not stopping and guard is not None else {}),
             )
         except PanoramaCaptureError:
             raise
@@ -607,7 +608,8 @@ class PanoramaCamera:
         return await self._submit(command)
 
     async def move_velocity(
-        self, *, pan: float = 0.0, tilt: float = 0.0, timeout_s: float = 0.5
+        self, *, pan: float = 0.0, tilt: float = 0.0, timeout_s: float = 0.5,
+        dispatch_guard: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         if not self._capabilities or not self._capabilities.get("velocity_supported"):
             raise PanoramaCaptureError("normalized_motion_unavailable")
@@ -623,7 +625,8 @@ class PanoramaCamera:
         pan, tilt = self._motion_coordinates("continuous", pan, tilt)
         return await self._submit(
             {"kind": "continuous_move", "pan": pan, "tilt": tilt, "zoom": 0.0,
-             "timeout_s": timeout_s, "allow_relative_fallback": False}
+             "timeout_s": timeout_s, "allow_relative_fallback": False},
+            **({"dispatch_guard": dispatch_guard} if dispatch_guard is not None else {}),
         )
 
     async def move_relative(self, *, pan: float = 0.0, tilt: float = 0.0) -> dict:

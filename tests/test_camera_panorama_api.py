@@ -1623,3 +1623,36 @@ def test_single_frame_reference_maps_activates_and_reopens_without_motor(environ
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "source_panorama_geometry_incompatible"
     client.portal.call(source_service.shutdown)
+
+
+def test_optional_replay_cannot_consume_required_navigation_image_capacity(tmp_path, monkeypatch):
+    from toposync_ext_cameras.panorama_storage import storage_capacity
+    from types import SimpleNamespace
+    from toposync_ext_cameras import panorama_scan
+
+    monkeypatch.setattr(panorama_module, '_MAX_STORAGE', 2_000_000)
+    job = {'id': 'mapping'}
+    directory = tmp_path / job['id']
+    directory.mkdir()
+    service = object.__new__(panorama_module.PanoramaService)
+    service.root = tmp_path
+    scanner = panorama_scan._Scan(SimpleNamespace(), directory, None, lambda: False, None)
+
+    scanner.replay_storage_guard = lambda: storage_capacity(tmp_path, 2_000_000, reserved_bytes=5_000)
+    attempt = panorama_scan._AttemptDiagnostic('movement')
+    for sequence in range(16):
+        attempt.frame({'image': np.zeros((64, 96, 3), dtype=np.uint8),
+            'sequence': sequence, 'received_monotonic': time.monotonic()}, {'code': 'moving'})
+    attempt.value['outcome'] = 'capture_stable'
+    asyncio.run(scanner._preserve_replay(attempt))
+    # Real mandatory writer must still accept all five reserved images.
+    for index in range(5):
+        service._image_write(job, f'check-{index}.jpg', b'x' * 1_000)
+    assert sum(path.stat().st_size for path in tmp_path.rglob('*') if path.is_file()) <= 2_000_000
+    records = list(directory.glob('replay-*.json'))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text())
+    assert record['complete'] is False
+    assert 0 < len(record['frames']) < 16
+    with np.load(records[0].with_suffix('.npz'), allow_pickle=False) as frames:
+        assert len(frames.files) == len(record['frames'])

@@ -1,5 +1,20 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Capacidade reservada para confirmação e recuperação — 23/10/2026
+
+Os replays opcionais da navegação compartilham a cota existente com as imagens
+operacionais, reservando capacidade para as três etapas da qualificação, sua
+imagem final e uma recuperação. O orçamento considera os bytes descomprimidos
+gravados no arquivo, os metadados e os cabeçalhos; o tamanho PNG em memória
+não é usado como estimativa do tamanho final. A gravação compartilha a mesma
+exclusão com as imagens obrigatórias.
+
+Quando o espaço disponível termina, o replay conserva somente os quadros que
+couberam e declara que está incompleto; sem capacidade, registra indisponibilidade.
+Falhas de gravação do diagnóstico não substituem o resultado do movimento nem
+interrompem a recuperação. Replays anteriores são preservados. A cota total
+não aumentou; esta correção de armazenamento não constitui aceite físico móvel.
+
 ## Preparação da resposta no ponto de monitoramento — 23/10/2026
 
 A qualificação de atenção aceita uma sondagem opcional na velocidade normal

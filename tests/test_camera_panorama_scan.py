@@ -11205,3 +11205,33 @@ def test_live_observation_guard_is_preserved_by_each_scanner_transport(tmp_path,
         asyncio.run(scenario())
     assert calls == ["checked"]
     assert not any(name in _event_names(camera) for name in ("velocity", "relative", "absolute"))
+
+
+@pytest.mark.parametrize('failure', ['no_capacity', 'write', 'rename'])
+def test_optional_replay_storage_failure_preserves_motion_outcome_and_existing_evidence(tmp_path, monkeypatch, failure):
+    from contextlib import nullcontext
+    camera = SimulatedCamera()
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    scanner.replay_storage_guard = lambda: nullcontext(0 if failure == 'no_capacity' else 4 * 1024**2)
+    old = tmp_path / 'replay-rejected-existing.json'
+    old.write_text('preserved evidence')
+    old_pixels = old.with_suffix('.npz')
+    old_pixels.write_bytes(b'preserved pixels')
+    attempt = scan._AttemptDiagnostic('movement')
+    attempt.frame(asyncio.run(camera.frame()), {'code': 'moving'})
+    attempt.value['outcome'] = 'motion_not_observed'
+    if failure == 'write':
+        monkeypatch.setattr(np.lib.format, 'write_array', lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('disk unavailable')))
+    elif failure == 'rename':
+        original = Path.replace
+        def replace(path, target):
+            if path.name.endswith('.json.tmp'):
+                raise OSError('metadata publication failed')
+            return original(path, target)
+        monkeypatch.setattr(Path, 'replace', replace)
+    asyncio.run(scanner._preserve_replay(attempt))
+    assert attempt.value['outcome'] == 'motion_not_observed'
+    assert attempt.value['replay_unavailable'] == ('storage_budget' if failure == 'no_capacity' else 'storage_write_failed')
+    assert 'replay_id' not in attempt.value
+    assert old.read_text() == 'preserved evidence' and old_pixels.read_bytes() == b'preserved pixels'
+    assert set(tmp_path.iterdir()) == {old, old_pixels}

@@ -18,6 +18,7 @@ import time
 import uuid
 import zipfile
 from collections import deque
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -2328,6 +2329,7 @@ class _Scan:
         self.directory = Path(output_dir).resolve()
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.progress, self.cancelled = progress, cancelled
+        self.replay_storage_guard = lambda: nullcontext(None)
         self.checkpoint = dict(checkpoint or {})
         recorded_policy = self.checkpoint.get("acquisition_policy")
         self.region_policy = region_policy(recorded_policy if recorded_policy is not None else acquisition_policy)
@@ -2388,29 +2390,73 @@ class _Scan:
             return
         identifier = f"replay-{outcome}-{uuid.uuid4().hex}"
 
-        def write() -> None:
-            # Decode one lossless diagnostic at a time, keeping the same NPZ
-            # replay format without a second uncompressed frame collection.
-            # Store without a second compression pass: serialization runs after
-            # the final observation, whose original freshness must be preserved.
-            # Frame count and the encoded in-memory evidence remain bounded.
-            with zipfile.ZipFile(self.directory / f"{identifier}.npz", "w", compression=zipfile.ZIP_STORED) as archive:
-                for index, (encoded, _) in enumerate(attempt.replay):
-                    frame = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
-                    with archive.open(f"frame_{index}.npy", "w") as member:
-                        np.lib.format.write_array(member, frame, allow_pickle=False)
-            _write_json(self.directory / f"{identifier}.json", {
-                "version": 1,
-                "analysis_width": ANALYSIS_WIDTH,
+        def write() -> bool:
+            destination = self.directory / f"{identifier}.npz"
+            temporary = destination.with_suffix(".partial")
+            metadata_path = destination.with_suffix(".json")
+            metadata_temporary = metadata_path.with_suffix(".json.tmp")
+            def discard(path: Path) -> None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass  # A residual file remains counted against the storage budget.
+
+            records = [record for _, record in attempt.replay]
+            metadata = {
+                "version": 1, "analysis_width": ANALYSIS_WIDTH,
                 "started_monotonic": attempt.start,
                 "complete": not attempt.value.get("replay_truncated", False),
                 "scope": "consumed_frames_not_all_decoder_frames",
-                "attempt": attempt.finish(),
-                "frames": [record for _, record in attempt.replay],
-            })
+                "attempt": attempt.finish(), "frames": records,
+            }
+            # PNG bytes in memory do not bound the decoded ZIP_STORED output.
+            # Include metadata, NPY headers and ZIP directory overhead before
+            # admitting each frame; retain only records whose pixels were saved.
+            metadata_reserve = len(json.dumps(metadata, allow_nan=False).encode()) + 4096
+            retained = []
+            try:
+                with self.replay_storage_guard() as available:
+                    # Decode one lossless diagnostic at a time, keeping the same NPZ
+                    # replay format without a second uncompressed frame collection.
+                    # Store without a second compression pass: serialization runs after
+                    # the final observation, whose original freshness must be preserved.
+                    # Frame count and the encoded in-memory evidence remain bounded.
+                    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as archive:
+                        for index, (encoded, record) in enumerate(attempt.replay):
+                            frame = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
+                            required = archive.fp.tell() + frame.nbytes + 1024 + len(retained) * 256 + metadata_reserve
+                            if available is not None and required > available:
+                                attempt.value["replay_storage_truncated"] = True
+                                break
+                            with archive.open(f"frame_{index}.npy", "w") as member:
+                                np.lib.format.write_array(member, frame, allow_pickle=False)
+                            retained.append(record)
+                    if not retained:
+                        attempt.value["replay_unavailable"] = "storage_budget"
+                        return False
+                    metadata.update(frames=retained, attempt=attempt.finish(),
+                        complete=metadata["complete"] and len(retained) == len(records))
+                    payload = json.dumps(metadata, allow_nan=False).encode()
+                    if available is not None and temporary.stat().st_size + len(payload) > available:
+                        attempt.value["replay_unavailable"] = "storage_budget"
+                        return False
+                    metadata_temporary.write_bytes(payload)
+                    temporary.replace(destination)
+                    metadata_temporary.replace(metadata_path)
+                return True
+            except OSError:
+                # Optional diagnostics cannot replace the movement outcome or
+                # interrupt Stop/recovery. Existing replays are never removed.
+                discard(destination)
+                discard(metadata_path)
+                attempt.value["replay_unavailable"] = "storage_write_failed"
+                return False
+            finally:
+                discard(temporary)
+                discard(metadata_temporary)
 
-        await asyncio.to_thread(write)
-        attempt.value["return_failure_replay_id" if correction_failed else "replay_id"] = identifier
+        if await asyncio.to_thread(write):
+            attempt.value["return_failure_replay_id" if correction_failed else "replay_id"] = identifier
 
     def _active_elapsed(self) -> float:
         now = self.active_finished if self.active_finished is not None and self.region_policy is None else time.monotonic()

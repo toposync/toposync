@@ -44,6 +44,7 @@ from .processing.panorama_mapping import (
 )
 from .panorama_navigation import MAXIMUM_LIVE_CENTER_ERROR_PIXELS
 from .panorama_reference import PanoramaReferenceCoordinator
+from .panorama_storage import storage_capacity
 from .settings import camera_source_has_ptz, get_camera_device, get_camera_source, iter_camera_sources
 from .source_panorama import (
     SourcePanoramaService, _identity as source_panorama_identity,
@@ -1037,15 +1038,15 @@ class PanoramaService:
         *,
         maximum_bytes: int = _MAX_IMAGE_BYTES,
     ) -> None:
-        used = sum(path.stat().st_size for path in self.root.rglob("*") if path.is_file())
-        if len(payload) > maximum_bytes or used + len(payload) > _MAX_STORAGE:
-            raise _error(
-                "storage_limit", "The calibration image storage limit has been reached", 507
-            )
-        destination = self.root / job["id"] / filename
-        temporary = destination.with_name(filename + ".tmp")
-        temporary.write_bytes(payload)
-        temporary.replace(destination)
+        with storage_capacity(self.root, _MAX_STORAGE) as available:
+            if len(payload) > maximum_bytes or len(payload) > available:
+                raise _error(
+                    "storage_limit", "The calibration image storage limit has been reached", 507
+                )
+            destination = self.root / job["id"] / filename
+            temporary = destination.with_name(filename + ".tmp")
+            temporary.write_bytes(payload)
+            temporary.replace(destination)
 
     async def _reserve(self, camera_id: str, job_id: str) -> None:
         async with self.lock:
@@ -1612,6 +1613,10 @@ class PanoramaService:
             self._save(job)
 
         scanner = _Scan(camera, directory, progress, lambda: job["id"] in self.cancelled, checkpoint)
+        # Three qualification stages, its final image and one recovery image.
+        # Optional replays cannot spend the capacity reserved for this evidence.
+        scanner.replay_storage_guard = lambda: storage_capacity(
+            self.root, _MAX_STORAGE, reserved_bytes=5 * _MAX_IMAGE_BYTES)
         await self._reserve(job["camera_id"], job["id"])
         prepared("reserved")
         self._navigation_scanners[job["id"]] = scanner

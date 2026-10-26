@@ -1260,6 +1260,25 @@ class PtzAttentionController:
             await self._begin_return(profile, runtime, now, reason="max_focus_seconds_elapsed")
             return
 
+        if (profile.mode == "live_panorama" and profile.follow_view_updates
+                and runtime.state in {"IDLE", "CANDIDATE"}
+                and self.has_service("cameras.panorama.attention_response_status")):
+            try:
+                response = await self.services.call("cameras.panorama.attention_response_status",
+                    camera_id=profile.camera_id, source_id=profile.source_id,
+                    composition_id=profile.composition_id, element_id=profile.panorama_element_id,
+                    home_target=profile.home_target.model_dump())
+                if response.get("preparation_required") is True:
+                    self._trim_movements(runtime, now)
+                    if len(runtime.movement_times) < profile.max_movements_per_minute:
+                        runtime.movement_times.append(now)
+                        await self._begin_return(profile, runtime, now,
+                            reason="tracking_response_preparation", prepare_response=True)
+                    return
+            except Exception:
+                await self._fault(profile, runtime, "response_preparation_unavailable")
+                return
+
         for tracked in runtime.events.values():
             timeout = (min(profile.stale_timeout_seconds, profile.follow_observation_timeout_seconds)
                        if profile.follow_view_updates and effective_mode(profile) == "live_panorama"
@@ -1700,6 +1719,7 @@ class PtzAttentionController:
         *,
         reason: str,
         manual_recovery: bool = False,
+        prepare_response: bool = False,
     ) -> bool:
         if not manual_recovery and await self._expire_campaign(profile, runtime):
             return False
@@ -1766,7 +1786,7 @@ class PtzAttentionController:
         try:
             await self._ensure_lease(profile, runtime, now, manual_recovery=manual_recovery)
             runtime.command_id = f"ptz_attention_{uuid.uuid4().hex}"
-            runtime.command_event_key = "__return_home__"
+            runtime.command_event_key = "__prepare_response__" if prepare_response else "__return_home__"
             runtime.command_started_monotonic = None
             if not runtime.session_id:
                 self._start_session(profile, runtime, resolved)
@@ -1776,7 +1796,8 @@ class PtzAttentionController:
             if resolved.panorama is not None:
                 runtime.navigation_task = asyncio.create_task(self.services.call(
                     "cameras.panorama.navigate_attention", destination=resolved.panorama.model_dump(mode="json"),
-                    lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, returning=True))
+                    lease_id=runtime.lease_id, fence=runtime.fence, command_id=runtime.command_id, returning=True,
+                    **({"prepare_response": True} if prepare_response else {})))
                 runtime.navigation_task.add_done_callback(lambda _: self._navigation_finished.set())
                 runtime.settle_deadline = now + profile.settle_timeout_seconds
                 self._set_state(runtime, "RETURNING", now)
@@ -1929,6 +1950,11 @@ class PtzAttentionController:
                 return
             if runtime.session_id:
                 self.store.update_session(runtime.session_id, details={"return_verified": True})
+            if runtime.command_event_key == "__prepare_response__":
+                self._record(profile, runtime, action="response_prepared", reason="local_probe_and_return_verified",
+                    details={"response": visual_evidence.get("response_preparation"),
+                             "return_measurement": visual_evidence.get("measurement"),
+                             "image_url": visual_evidence.get("image_url")})
             self._end_session(runtime, outcome="returned_home")
             self._clear_command(runtime)
             self._set_cooldown(runtime, now=now, seconds=profile.cooldown_seconds)
@@ -2061,6 +2087,11 @@ class PtzAttentionController:
                     or evidence.get("verified") is not True or evidence.get("kind") != "visual_aim_verified"
                     or type(error) not in (int, float) or not 0 <= error <= MAXIMUM_LIVE_CENTER_ERROR_PIXELS):
                 raise ValueError("unconfirmed visual arrival")
+            if runtime.command_event_key == "__prepare_response__":
+                prepared = evidence.get("response_preparation", {})
+                if (prepared.get("response_qualified") is not True
+                        or not 1 <= prepared.get("following_pulse_limit_seconds", 0) <= 1.2):
+                    raise ValueError("response_preparation_unconfirmed")
             snapshot = await self.services.call("cameras.control.snapshot", camera_id=profile.camera_id,
                 source_id=profile.source_id, ptz_device_id=profile.ptz_device_id, refresh_physical=False)
             if self._snapshot_confirms_other_owner(runtime, snapshot):

@@ -1178,3 +1178,55 @@ async def test_following_rejection_never_restores_the_initial_target(rejection):
     finally:
         await controller.shutdown()
         store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["success", "missing_proof", "return_failure", "pause", "expiry", "budget", "shadow", "disabled", "status_failure"])
+async def test_idle_local_preparation_owns_return_and_blocks_acquisition(case):
+    clock, camera, services, state, calls, _, store, controller = environment(
+        mode="shadow" if case == "shadow" else "live_panorama", qualified=True,
+        failure="return" if case == "return_failure" else None, blocked=case == "pause")
+    current = store.list_profiles()[0].model_copy(update={"follow_view_updates": True, "candidate_confirm_seconds": .2,
+        **({"mode": "disabled"} if case == "disabled" else {}),
+        **({"campaign_ends_at": clock() - 1} if case == "expiry" else {})})
+    store.replace_profile(current)
+    assert store.get_profile(current.id) is not None
+    checks = []
+    async def status(**kwargs):
+        checks.append(kwargs)
+        if case == "status_failure":
+            raise RuntimeError("unavailable")
+        return {"supported": True, "preparation_required": len(calls) == 0}
+    services.register("cameras.panorama.attention_response_status", status)
+    state["arrival_evidence"] = {"response_preparation": {
+        "response_qualified": True, "following_pulse_limit_seconds": 1.2}}
+    if case == "missing_proof":
+        state["arrival_evidence"] = {}
+    runtime = controller._runtime_for(current)
+    if case == "budget":
+        runtime.movement_times.extend([clock()] * current.max_movements_per_minute)
+    await controller.tick_once()
+    await asyncio.sleep(0)
+    if case in {"shadow", "disabled", "expiry", "budget", "status_failure"}:
+        assert not calls and camera.acquires == 0
+        if case == "status_failure":
+            assert runtime.state == "FAULT"
+        if case in {"shadow", "disabled", "expiry"}:
+            assert not checks
+    else:
+        assert len(calls) == 1 and calls[0]["prepare_response"] is True
+        assert calls[0]["returning"] is True and camera.acquires == 1
+        assert runtime.state == "RETURNING" and runtime.lease_id
+        await controller.submit_intent(event(clock))
+        assert len(calls) == 1, "A subject cannot preempt local preparation"
+        if case == "pause":
+            await controller.pause(current.id)
+        else:
+            await controller.tick_once()
+            assert runtime.state == ("FAULT" if case in {"missing_proof", "return_failure"} else "IDLE")
+            assert not runtime.lease_id
+            if case == "success":
+                await controller.tick_once()
+                assert len(calls) == 1, "A current response does not repeat the probe"
+    await controller.shutdown()
+    store.close()

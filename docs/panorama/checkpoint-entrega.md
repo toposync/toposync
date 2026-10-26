@@ -1,5 +1,24 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Renovação local pelo ciclo de atenção — 23/10/2026
+
+O acompanhamento panorâmico pode renovar uma sondagem normal previamente
+qualificada no mesmo ponto de monitoramento, sem repetir a ida a outro alvo.
+A consulta de disponibilidade é passiva. Quando a resposta vinculada expira,
+o controlador entra no retorno existente, adquire a concessão e executa
+sondagem e volta pelo navegador compartilhado. Durante essa operação, alvos
+não iniciam aquisição. A conclusão exige resposta medida, imagem de retorno
+recente, limite de enquadramento e controle parado sob a mesma posse.
+
+Somente o eixo, sentido, velocidade e duração já qualificados são reutilizados;
+mudar o ponto de monitoramento ou a referência invalida essa preparação.
+O limite de cinco minutos e a invalidação espacial permanecem. Respostas de
+outros eixos não recebem validade nova por essa sondagem. Câmeras sem essa
+qualificação mantêm o caminho anterior; não se pressupõem dois eixos ou Zoom.
+Pausa, prazo, limite de movimentos, falha e recuperação usam o ciclo existente.
+As decisões distinguem preparação solicitada e comprovada. Integração ainda
+pendente de ensaio físico; testes de software não constituem aceite móvel.
+
 ## Capacidade reservada para confirmação e recuperação — 23/10/2026
 
 Os replays opcionais da navegação compartilham a cota existente com as imagens

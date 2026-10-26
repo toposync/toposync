@@ -63,7 +63,8 @@ async def test_attention_stop_refreshes_native_status_without_promoting_unknown_
     "metadata_expired", "metadata_control_failure", "metadata_stop_failure", "metadata_combined",
     "prepared_reference", "dynamic_reference_ignored", "cancel_initial_localization",
     "continuous_preparation", "continuous_preparation_cancelled", "cancel_cleanup", "failed_cleanup", "external_cancel_cleanup",
-    "response_cancelled", "response_expired", "response_empty", "response_stop_failure", "response_control_failure"])
+    "response_cancelled", "response_expired", "response_empty", "response_stop_failure", "response_control_failure",
+    "local_preparation", "local_preparation_rejected", "local_preparation_cancelled", "local_preparation_return_failed", "local_preparation_degraded"])
 async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_image(monkeypatch, tmp_path, reuse):
     import numpy as np
     from toposync_ext_cameras import panorama_scan, panorama_navigation
@@ -243,9 +244,46 @@ async def test_attention_arrival_uses_refreshed_endpoint_and_saves_only_one_imag
             current_direction[0] = [float(np.cos(.005)), float(np.sin(.005)), 0.]
             return {"center_error_pixels": .3}
         navigator._target_measurement.side_effect = measured_after_update
+    if reuse.startswith("local_preparation"):
+        async def local_probe(**kwargs):
+            assert navigator.aim.await_count == 1
+            assert not navigator.response and not navigator.probe_durations
+            if reuse == "local_preparation_cancelled":
+                raise module.asyncio.CancelledError()
+            navigator.response["pan"] = np.array([.2, 0])
+            navigator.pulse_limits["pan"] = 1.2
+            return {"response_qualified": reuse != "local_preparation_rejected",
+                    "following_pulse_limit_seconds": 1.2}
+        navigator.qualify_velocity = AsyncMock(side_effect=local_probe)
+        if reuse == "local_preparation_return_failed":
+            navigator.aim.side_effect = [navigator.aim.return_value, PanoramaCaptureError("visual_arrival_unconfirmed")]
+        if reuse == "local_preparation_degraded":
+            async def degraded_return(*args, **kwargs):
+                if navigator.aim.await_count == 2:
+                    navigator.pulse_limits["pan"] = .6
+                return navigator.aim.return_value
+            navigator.aim.side_effect = degraded_return
     operation = service._visual_operation_with_pinned_reference(None, job,
         {"ray": [0, 0, 1]}, borrowed_control={"lease_id": "attention", "fence": 7}, maximum_error_pixels=tolerance,
-        **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}))
+        **({"target_provider": current_target} if reuse.endswith("during_cleanup") or reuse == "dynamic_reference_ignored" else {}),
+        **({"response_preparation": {"axis": "pan", "direction": 1, "speed": .1, "duration_seconds": .6}}
+           if reuse.startswith("local_preparation") else {}))
+    if reuse.startswith("local_preparation"):
+        if reuse == "local_preparation":
+            _, evidence = await operation
+            assert evidence["response_preparation"]["response_qualified"] is True
+            cached = service._attention_responses["camera"]
+            assert cached["response"]["pulse_limits"]["pan"] == 1.2
+            assert not cached["response"]["probe_durations"], "Old axes cannot gain a new expiry"
+        else:
+            with pytest.raises(module.asyncio.CancelledError if reuse.endswith("cancelled") else HTTPException):
+                await operation
+            assert not service._attention_responses
+        assert navigator.aim.await_count == (1 if reuse.endswith("cancelled") else 2)
+        scanner._confirm_stop.assert_awaited()
+        camera.close.assert_awaited_once()
+        assert not service.busy and not service._navigation_scanners
+        return
     if reuse.startswith("response_"):
         with pytest.raises(module.asyncio.CancelledError if reuse == "response_cancelled" else HTTPException):
             await operation
@@ -1252,3 +1290,83 @@ async def test_attention_progress_keeps_pinned_binding_and_does_not_replace_term
     assert events[0]["destination"] == destination
     assert events[0]["evidence"]["arrival_verified"] is False
     assert result["stop_confirmed"] is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("case", ["missing", "fresh", "expired", "future", "binding", "short", "axis", "home", "unqualified", "fast", "nan", "trial_failed"])
+async def test_response_readiness_is_passive_bound_and_never_renews_expiry(monkeypatch, case):
+    from copy import deepcopy
+    service, job, _ = framing_service(monkeypatch)
+    service._map_validated = lambda _: True
+    job["_attention_trial"] = {"status": "verified", "stages": [
+        {"stage": "return", "target": {"ray": [0, 0, 1]}}], "velocity_probe": {
+        "axis": "pan", "direction": 1, "speed": .1, "duration_seconds": .6,
+        "response_qualified": True, "following_pulse_limit_seconds": 1.2}}
+    cached = {"job_binding": {key: deepcopy(job.get(key)) for key in
+        ("id", "revision", "source_id", "_source_digest", "_composition_digest", "source_panorama")},
+        "observed_monotonic": 49., "response": {"response": {"pan": [.2, 0]}, "pulse_limits": {"pan": 1.2}}}
+    service._attention_responses = {"camera": cached}
+    if case == "missing":
+        service._attention_responses.clear()
+    if case == "expired":
+        cached["observed_monotonic"] = -251.
+    if case == "future":
+        cached["observed_monotonic"] = 51.
+    if case == "binding":
+        cached["job_binding"]["revision"] = 1
+    if case == "short":
+        cached["response"]["pulse_limits"]["pan"] = .6
+    if case == "axis":
+        cached["response"]["response"].clear()
+    if case == "home":
+        job["_attention_trial"]["stages"][0]["target"]["ray"] = [1, 0, 0]
+    if case == "unqualified":
+        job.pop("_attention_qualification")
+    if case == "fast":
+        job["_attention_trial"]["velocity_probe"]["speed"] = .2
+    if case == "nan":
+        job["_attention_trial"]["velocity_probe"]["following_pulse_limit_seconds"] = float("nan")
+    if case == "trial_failed":
+        job["_attention_trial"]["status"] = "failed"
+    before = deepcopy(service._attention_responses)
+    result = await service.attention_response_status(camera_id="camera", source_id="wide",
+        composition_id="yard", element_id="element", home_target={"x": 0, "z": 0})
+    supported = case not in {"home", "unqualified", "fast", "nan", "trial_failed"}
+    assert result["supported"] is supported
+    assert result["preparation_required"] is (supported and case != "fresh")
+    assert service._attention_responses == before
+    service.services.call.assert_not_awaited()
+    service._visual_operation_with_pinned_reference.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("case", ["success", "no_probe", "wrong_home", "moving_target", "not_returning", "lost_lease"])
+async def test_response_preparation_uses_only_qualified_home_and_owned_return(monkeypatch, case):
+    service, job, _ = framing_service(monkeypatch)
+    destination = {key: job[key] for key in ("camera_id", "source_id", "composition_id", "element_id", "revision")}
+    destination.update(job_id=job["id"], ray=[0, 0, 1])
+    probe = {"axis": "pan", "direction": 1, "speed": .1, "duration_seconds": .6}
+    job["_attention_trial"] = {"status": "verified", "stages": [
+        {"stage": "return", "target": {"ray": [0, 0, 1]}}],
+        "velocity_probe": {**probe, "response_qualified": True, "following_pulse_limit_seconds": 1.2}}
+    service._visual_operation_with_pinned_reference.return_value = ("image", {"target_ray": [0, 0, 1]})
+    if case == "no_probe":
+        job["_attention_trial"].pop("velocity_probe")
+    if case == "wrong_home":
+        destination["ray"] = [1, 0, 0]
+    if case == "lost_lease":
+        service.services.call.return_value["active_lease"]["fence"] = 8
+    operation = service.navigate_attention(destination=destination, lease_id="attention", fence=7,
+        command_id="prepare", returning=case != "not_returning", prepare_response=True,
+        **({"target_provider": lambda: destination} if case == "moving_target" else {}))
+    if case != "success":
+        with pytest.raises(HTTPException):
+            await operation
+        service._visual_operation_with_pinned_reference.assert_not_awaited()
+    else:
+        result = await operation
+        assert result["returning"] is True
+        arguments = service._visual_operation_with_pinned_reference.call_args.kwargs
+        assert arguments["response_preparation"] == probe
+        assert arguments["borrowed_control"] == {"lease_id": "attention", "fence": 7}
+        assert "qualification_home" not in arguments

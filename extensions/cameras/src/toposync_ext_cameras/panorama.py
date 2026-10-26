@@ -1583,6 +1583,7 @@ class PanoramaService:
         target_provider: Callable[[], list[float]] | None = None,
         target_observation_provider: Callable[[], dict | None] | None = None,
         following_observer: Callable[[dict], None] | None = None,
+        response_preparation: dict | None = None,
     ) -> tuple[str, dict[str, Any]]:
         from .panorama_scan import _Scan, _Stopped, _write_image, _match
         from .panorama_capture import PanoramaCaptureError
@@ -1822,6 +1823,20 @@ class PanoramaService:
                         **({"target_provider": target_provider} if target_provider is not None else {}),
                         **({"target_observation_provider": target_observation_provider} if target_observation_provider is not None else {}),
                         **({"following_observer": following_observer} if following_observer is not None else {}))
+                    if response_preparation is not None:
+                        # Reuse the qualified local probe and the same verified home path.
+                        for name in response_fields:
+                            getattr(navigator, name).clear()
+                        probe = await navigator.qualify_velocity(**response_preparation)
+                        response_observed = None
+                        await approach_native_reference(target["ray"])
+                        evidence = await navigator.aim(target["ray"], maximum_error_pixels=maximum_error_pixels)
+                        evidence["response_preparation"] = probe
+                        if (probe.get("response_qualified") is not True
+                                or not 1 <= probe.get("following_pulse_limit_seconds", 0) <= 1.2
+                                or response_preparation["axis"] not in navigator.response
+                                or not 1 <= navigator.pulse_limits.get(response_preparation["axis"], 0) <= 1.2):
+                            raise PanoramaCaptureError("visual_response_unavailable")
                 evidence["lens"] = localizer.lens
             await self._current(job, request)
         except (PanoramaCaptureError, _Stopped) as error:
@@ -1926,7 +1941,8 @@ class PanoramaService:
                             and getattr(navigator, "commands", 0) > 0 and getattr(navigator, "response", None)):
                         # shortcut: reuse expires after five minutes; longer reuse needs a durable actuator calibration.
                         self._attention_responses[job["camera_id"]] = {
-                            "binding": response_binding, "observed_monotonic": response_observed or time.monotonic(),
+                            "binding": response_binding, "job_binding": copy.deepcopy(metadata_binding),
+                            "observed_monotonic": response_observed or time.monotonic(),
                             "response": {name: copy.deepcopy(getattr(navigator, name)) for name in response_fields},
                         }
                     elif (not job.get("stop_confirmed")
@@ -2349,6 +2365,45 @@ class PanoramaService:
                 "geometry_digest": binding["geometry"]["model_digest"], "source_id": source_id, "revision": revision,
                 "_coverage_mask": localizer.coverage_mask}
 
+    def _attention_response_probe(self, job: dict, ray: list[float]) -> dict | None:
+        trial = job.get("_attention_trial") or {}
+        observed = trial.get("velocity_probe") or {}
+        home = next((stage.get("target", {}).get("ray") for stage in trial.get("stages", [])
+                     if stage.get("stage") == "return"), None)
+        if (not self._attention_qualified(job) or trial.get("status") != "verified"
+                or observed.get("response_qualified") is not True
+                or observed.get("speed") != .1 or not 1 <= observed.get("following_pulse_limit_seconds", 0) <= 1.2
+                or home is None or not np.allclose(home, ray, atol=1e-7, rtol=0)):
+            return None
+        try:
+            return VelocityProbe.model_validate({key: observed.get(key)
+                for key in ("axis", "direction", "speed", "duration_seconds")}).model_dump()
+        except ValueError:
+            return None
+
+    async def attention_response_status(self, *, camera_id: str, source_id: str,
+                                        composition_id: str, element_id: str, home_target: dict) -> dict:
+        """Read local response availability; never acquire, capture or move."""
+        active = await self.get_active(camera_id=camera_id, source_id=source_id,
+            composition_id=composition_id, element_id=element_id)
+        public = active.get("job")
+        if not public:
+            return {"supported": False, "preparation_required": False}
+        job = self.jobs[public["id"]]
+        probe = self._attention_response_probe(job, self._target(job, home_target)["ray"])
+        if probe is None:
+            return {"supported": False, "preparation_required": False}
+        binding = {key: job.get(key) for key in
+            ("id", "revision", "source_id", "_source_digest", "_composition_digest", "source_panorama")}
+        cached = getattr(self, "_attention_responses", {}).get(camera_id, {})
+        age = time.monotonic() - cached.get("observed_monotonic", 0)
+        response = cached.get("response", {})
+        ready = (cached.get("job_binding") == binding and 0 <= age <= 300
+            and probe["axis"] in response.get("response", {})
+            and response.get("pulse_limits", {}).get(probe["axis"], 0) >= 1)
+        return {"supported": True, "preparation_required": not ready,
+                "response_age_seconds": age if ready else None, "axis": probe["axis"]}
+
     async def prepare_attention(self, *, camera_id: str, source_id: str, composition_id: str,
                                 element_id: str) -> dict[str, bool]:
         """Discover protocol metadata without capture, control ownership or movement."""
@@ -2551,13 +2606,14 @@ class PanoramaService:
                 raise
 
     async def navigate_attention(self, *, destination: dict, lease_id: str, fence: int,
-                                 command_id: str, returning: bool = False,
+                                 command_id: str, returning: bool = False, prepare_response: bool = False,
                                  target_provider: Callable[[], dict] | None = None,
                                  observation_timeout_seconds: float = 2.0,
                                  progress_observer: Callable[[dict], None] | None = None) -> dict:
         if (not isinstance(destination, dict) or not isinstance(lease_id, str) or not lease_id.strip()
                 or type(fence) is not int or fence < 1 or not isinstance(command_id, str) or not command_id.strip()
-                or type(returning) is not bool
+                or type(returning) is not bool or type(prepare_response) is not bool
+                or (prepare_response and not returning)
                 or type(observation_timeout_seconds) not in (int, float) or not .5 <= observation_timeout_seconds <= 5
                 or any(not isinstance(destination.get(key), str) or not destination[key].strip() for key in
                     ("camera_id", "source_id", "composition_id", "element_id", "job_id"))
@@ -2687,6 +2743,9 @@ class PanoramaService:
             entry_stage("control_checked")
             ray = current_ray()
             entry_stage("target_refreshed")
+            response_preparation = self._attention_response_probe(job, ray) if prepare_response else None
+            if prepare_response and response_preparation is None:
+                raise _error("visual_response_unavailable", "A qualified local response probe is required")
             def following_progress(evidence: dict) -> None:
                 # Only this pinned source and live command may publish progress.
                 # It is a projection during motion, never a stopped arrival.
@@ -2700,7 +2759,8 @@ class PanoramaService:
             _, evidence = await self._visual_operation_with_pinned_reference(None, job, {"ray": ray},
                 borrowed_control={"lease_id": lease_id, "fence": fence}, maximum_error_pixels=MAXIMUM_LIVE_CENTER_ERROR_PIXELS,
                 **({"target_provider": current_ray, "target_observation_provider": current_observation} if follows_observation else {}),
-                **({"following_observer": following_progress} if progress_observer is not None else {}))
+                **({"following_observer": following_progress} if progress_observer is not None else {}),
+                **({"response_preparation": response_preparation} if prepare_response else {}))
             final = await self.services.call("cameras.control.snapshot", camera_id=camera_id,
                 source_id=source_id, refresh_physical=False)
             owned = final.get("active_lease") or {}
@@ -3082,6 +3142,7 @@ def register_panorama_routes(
     services.register("cameras.panorama.localize_frame", service.localize_frame)
     services.register("cameras.panorama.resolve_target", service.resolve_target)
     services.register("cameras.panorama.prepare_attention", service.prepare_attention)
+    services.register("cameras.panorama.attention_response_status", service.attention_response_status)
     services.register("cameras.panorama.navigate_attention", service.navigate_attention)
 
     @app.get(_PREFIX)

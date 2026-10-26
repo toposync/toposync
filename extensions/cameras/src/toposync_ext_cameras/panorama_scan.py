@@ -3288,6 +3288,7 @@ class _Scan:
         transition_estimator: Callable | None = None,
         stable_frame_observer: Callable[[dict], None] | None = None,
         frame_observer: Callable[[dict], None] | None = None,
+        motion_stop_requested: Callable[[], str | None] | None = None,
         requested_velocity: dict[str, float] | None = None,
         expected_frame: dict | None = None,
         movement_intent: dict[str, Any] | None = None,
@@ -3766,6 +3767,14 @@ class _Scan:
                 self._check(budget=not self.returning)
                 if operation.done():
                     operation.result()
+                    if motion_stop_requested is not None and not stopped and stop_operation is None:
+                        reason = motion_stop_requested()
+                        if reason is not None:
+                            if (not isinstance(reason, str) or not reason.startswith("visual_feedback_")
+                                    or len(reason) > 64 or any(c not in "abcdefghijklmnopqrstuvwxyz_" for c in reason)):
+                                raise PanoramaCaptureError("invalid_visual_feedback")
+                            diagnostic.value["motion_feedback_stop"] = reason
+                            start_stop(reason)
                 if stop_operation is not None and stop_operation.done() and not stopped:
                     if not stop_operation.result():
                         raise PanoramaCaptureError("stop_unconfirmed")
@@ -3956,6 +3965,7 @@ class _Scan:
                             **late_capture,
                             "pose": self.last_pose,
                             "precondition_match": precondition,
+                            "motion_feedback_stop": diagnostic.value.get("motion_feedback_stop"),
                         }
                 if (
                     last_result["stable"]
@@ -4030,6 +4040,7 @@ class _Scan:
                         "pose": self.last_pose,
                         "match": matching,
                         "precondition_match": precondition,
+                        "motion_feedback_stop": diagnostic.value.get("motion_feedback_stop"),
                         "stable": True,
                         "stationary": False,
                     }
@@ -4156,6 +4167,7 @@ class _Scan:
                             "match": matching,
                             "native_stationary": native_no_effect,
                             "precondition_match": precondition,
+                            "motion_feedback_stop": diagnostic.value.get("motion_feedback_stop"),
                             "stable": False,
                             "stationary": True,
                         }
@@ -4195,6 +4207,7 @@ class _Scan:
                         **late_capture,
                         "pose": self.last_pose,
                         "precondition_match": precondition,
+                        "motion_feedback_stop": diagnostic.value.get("motion_feedback_stop"),
                     }
             raise PanoramaCaptureError(deadline_code())
         except PanoramaCaptureError as error:
@@ -5349,6 +5362,7 @@ class _Scan:
         connection_recovery_phase: str | None = None,
         transition_estimator: Callable | None = None,
         frame_observer: Callable[[dict], None] | None = None,
+        motion_stop_requested: Callable[[], str | None] | None = None,
     ) -> dict:
         # Start slowly enough to retain inter-frame correspondence on cameras
         # with fast motors. Duration adapts to measured overlap in _seek; speed
@@ -5431,6 +5445,7 @@ class _Scan:
                 lambda: self.camera.move_relative(**delta),
                 allow_stationary=True,
                 **({"frame_observer": frame_observer} if frame_observer else {}),
+                **({"motion_stop_requested": motion_stop_requested} if motion_stop_requested else {}),
                 expected_frame=expected_frame,
                 **({"transition_estimator": transition_estimator} if transition_estimator is not None else {}),
                 movement_intent={
@@ -5477,6 +5492,7 @@ class _Scan:
             allow_stationary=True,
             requested_velocity=velocity,
             **({"frame_observer": frame_observer} if frame_observer else {}),
+            **({"motion_stop_requested": motion_stop_requested} if motion_stop_requested else {}),
             expected_frame=expected_frame,
             **({"transition_estimator": transition_estimator} if transition_estimator is not None else {}),
             movement_intent={

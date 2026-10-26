@@ -1,5 +1,20 @@
 # Panorâmica ao vivo — seguimento móvel em validação, 20/10/2026
 
+## Parada antecipada por observação visual — 23/10/2026
+
+Nas correções de atenção com alvo dinâmico e resposta já conhecida, a navegação
+pode interromper o pulso quando uma orientação visual recente indica centro
+alcançado, direção ultrapassada ou perda da validade da observação. O alvo
+continua sendo validado enquanto o primeiro resultado visual é processado.
+A interrupção reutiliza o Stop, a confirmação de estabilidade e a recuperação
+do scanner; não aumenta o prazo nem o orçamento do comando.
+
+Um pulso interrompido não qualifica ganho nem limite mecânico. A navegação
+relocaliza e mede o alvo atualizado antes de decidir a próxima correção ou
+confirmar chegada. Provas de chegada e retorno continuam exigindo parada.
+Essa intervenção antecipada ainda não implementa atualização contínua de
+velocidade; ganho de cadência, enquadramento móvel e Zoom exigem ensaio físico.
+
 ## Observação visual durante aproximação móvel — 23/10/2026
 
 A navegação de atenção passa a preparar orientações visuais durante seus pulsos,

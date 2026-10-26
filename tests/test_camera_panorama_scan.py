@@ -10845,3 +10845,56 @@ def test_motion_frame_offer_does_not_replace_stop_or_stability(tmp_path, monkeyp
     diagnostic = json.loads((tmp_path / "scan-diagnostics.json").read_text())["attempts"][-1]
     assert bool(diagnostic.get("frame_observer_failed")) == observer_fails
     assert diagnostic["stop_command_accepted"] is True
+
+
+@pytest.mark.parametrize("stop_fails", [False, True])
+def test_visual_feedback_uses_existing_stop_before_pulse_deadline(tmp_path, monkeypatch, stop_fails):
+    class Camera(SimulatedCamera):
+        stop_at = None
+        async def stop(self):
+            self.stop_at = self.now
+            result = await super().stop()
+            if stop_fails:
+                raise PanoramaCaptureError("stop_unconfirmed")
+            return result
+    camera = Camera()
+    _clock(monkeypatch, camera)
+    offered = []
+    async def scenario():
+        scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+        scanner.last_pose = await camera.position()
+        start = camera.now
+        def request_stop():
+            return "visual_feedback_target_reached" if len(offered) >= 3 else None
+        result = await scanner._move(lambda: camera.move_velocity(pan=.1, timeout_s=1.2),
+            duration=1.2, allow_stationary=True, frame_observer=lambda f: offered.append(f),
+            motion_stop_requested=request_stop)
+        assert result["stable"] is True
+        assert result["motion_feedback_stop"] == "visual_feedback_target_reached"
+        assert camera.stop_at - start < 1.2
+    if stop_fails:
+        with pytest.raises(PanoramaCaptureError, match="stop_unconfirmed"):
+            asyncio.run(scenario())
+    else:
+        asyncio.run(scenario())
+    assert _event_names(camera).count("velocity") == 1
+    assert _event_names(camera).count("stop") == 1
+
+
+@pytest.mark.parametrize("failure", ["expired_target", "invalid_reason"])
+def test_visual_feedback_failure_still_stops_the_shared_command(tmp_path, monkeypatch, failure):
+    camera = SimulatedCamera()
+    _clock(monkeypatch, camera)
+    scanner = scan._Scan(camera, tmp_path, _progress, lambda: False, None)
+    def request_stop():
+        if failure == "expired_target":
+            raise PanoramaCaptureError("following_observation_expired")
+        return "untrusted reason"
+    async def scenario():
+        await scanner._move(lambda: camera.move_velocity(pan=.1, timeout_s=1.2),
+            duration=1.2, allow_stationary=True, motion_stop_requested=request_stop)
+    expected = "following_observation_expired" if failure == "expired_target" else "invalid_visual_feedback"
+    with pytest.raises(PanoramaCaptureError, match=expected):
+        asyncio.run(scenario())
+    assert len([event for event in camera.events if event[0] == "velocity"]) == 1
+    assert len([event for event in camera.events if event[0] == "stop"]) == 1

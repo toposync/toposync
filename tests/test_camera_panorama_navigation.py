@@ -3582,3 +3582,41 @@ def test_coarse_command_replans_current_target_without_dispatching_changed_comma
     else:
         assert scanner.checkpoint['navigation_target_replans'] == 1
         assert 'dispatch_replan' not in scanner.checkpoint['navigation_step']
+
+
+def test_feedback_shortened_pulse_remeasures_latest_target_without_learning_full_pulse_gain():
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}}, checkpoint={}, physical_state="stopped",
+        last_frame={"received_monotonic": time.monotonic(), "capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []},
+        target_reference=lambda _: reference)
+    current = [np.array([np.cos(.2), np.sin(.2), 0.])]
+    samples = []
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+        async def _target_measurement(self, target, located):
+            samples.append(np.asarray(target).copy())
+            return localized_axis_measurement(target, lens, located)
+        async def _pulse(self, axis, amount, **kwargs):
+            assert self.motion_feedback_target is not None
+            assert self.commands == 0
+            self.commands += 1
+            self.trace.append({})
+            current[0] = np.array([1., 0., 0.])
+            self.last_pulse_feedback_stop = "visual_feedback_target_reached"
+            self.last_pulse_stationary = True  # Must not become an actuator boundary.
+    navigator = Navigator(scanner, localizer)
+    original_response = np.array([-.5, 0.])
+    navigator.response["pan"] = original_response.copy()
+    result = asyncio.run(navigator.aim(current[0], target_provider=lambda: current[0]))
+    assert result["verified"] and result["target_ray"] == pytest.approx(current[0])
+    assert len(samples) == 2 and not np.allclose(samples[0], samples[1])
+    assert navigator.response["pan"] == pytest.approx(original_response)
+    assert navigator.direction_responses == navigator.stationary_durations == {}
+    assert navigator.trace[0]["response_qualified"] is False
+    assert navigator.trace[0]["stationary_verified"] is False
+    assert navigator.motion_feedback_target is None and navigator.dispatch_guard is None

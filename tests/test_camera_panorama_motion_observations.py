@@ -185,3 +185,44 @@ def test_following_pulse_uses_shared_observer_and_closes_it_on_failure(monkeypat
     assert records[0]["arrival_verified"] is False
     assert camera.dispatch_guard is None and offered[0].__self__.closed
     assert scanner.physical_state == "stopped"
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("toward", None), ("reached", "visual_feedback_target_reached"),
+    ("passed", "visual_feedback_direction_changed"), ("old", "visual_feedback_expired"),
+    ("failed", "visual_feedback_unavailable"), ("binding", "visual_feedback_binding_changed"),
+    ("epoch", "visual_feedback_capture_changed"), ("previous_command", None),
+])
+def test_motion_feedback_stops_only_from_current_operation_evidence(monkeypatch, case, expected):
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
+    model = localizer()
+    navigator = navigation.VisualNavigator(SimpleNamespace(), model)
+    navigator.commands = 1
+    navigator.response["pan"] = np.array([-.2, 0.])
+    angle = .5 if case != "passed" else -.5
+    if case == "reached": angle = 0.
+    navigator.motion_feedback_target = lambda: ([np.cos(angle), np.sin(angle), 0.], 12.)
+    observed = frame()
+    geometry = navigation.arrival_frame_geometry(observed, model.locate(observed['image'], observed['capture_evidence']), model.lens, [1, 0, 0])
+    record = {"command": 1, "status": "localized", "frame_received_monotonic": 10.,
+        "capture_evidence": observed['capture_evidence'], "frame_geometry": geometry}
+    if case == "old": record["frame_received_monotonic"] = 8.
+    if case == "failed": record["status"] = "unlocalized"
+    if case == "binding": record["capture_evidence"] = {}
+    if case == "previous_command": record["command"] = 0
+    observer = SimpleNamespace(closed=case == "epoch", latest=record)
+    assert navigator._motion_stop_reason(observer, "pan", 1) == expected
+    # An old entry in persistent history cannot stop a new operation.
+    observer.latest = None
+    observer.closed = False
+    assert navigator._motion_stop_reason(observer, "pan", 1) is None
+
+
+def test_motion_feedback_checks_target_validity_before_first_pose():
+    from toposync_ext_cameras.panorama_capture import PanoramaCaptureError
+    navigator = navigation.VisualNavigator(SimpleNamespace(checkpoint={}), localizer())
+    def expired():
+        raise PanoramaCaptureError("following_observation_expired")
+    navigator.motion_feedback_target = expired
+    with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
+        navigator._motion_stop_reason(SimpleNamespace(closed=False, latest=None), "pan", 1)

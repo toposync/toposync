@@ -866,6 +866,7 @@ class MotionFrameObservations:
     def __init__(self, localizer: Any, records: list[dict], command: int):
         self.localizer, self.records, self.command = localizer, records, command
         self.pending = None
+        self.latest = None
         self.worker = None
         self.closed = False
         self.identity = None
@@ -935,6 +936,7 @@ class MotionFrameObservations:
                 record.update(status="unlocalized", reason="motion_observation_failed")
             record["elapsed_seconds"] = time.monotonic() - started
             if not self.closed:
+                self.latest = record
                 self.records.append(record)
                 del self.records[:-32]
 
@@ -964,6 +966,8 @@ class VisualNavigator:
         self.response_rotations: dict[str, np.ndarray] = {}
         self.trace: list[dict[str, Any]] = []
         self.dispatch_guard: Callable[[], None] | None = None
+        self.motion_feedback_target: Callable[[], tuple[Any, float]] | None = None
+        self.last_pulse_feedback_stop = None
         self.localization_replay = LocalizationReplay()
         self.probe_durations: dict[str, float] = {}
         self.last_pulse_stationary = False
@@ -1193,6 +1197,40 @@ class VisualNavigator:
         self.scanner._check()
         return located
 
+    def _motion_stop_reason(self, observer: MotionFrameObservations, axis: str, direction: int) -> str | None:
+        """Interrupt an obsolete correction, never certify arrival or learn a gain."""
+        if self.motion_feedback_target is None:
+            return None
+        if observer.closed:
+            return "visual_feedback_capture_changed"
+        # Validate the live target even while the first pose is still processing.
+        ray, maximum_error = self.motion_feedback_target()
+        record = observer.latest
+        if record is None or record.get("command") != self.commands:
+            return None
+        if not 0 <= time.monotonic() - record.get("frame_received_monotonic", 0) <= 1:
+            return "visual_feedback_expired"
+        geometry = record.get("frame_geometry")
+        if record.get("status") != "localized" or not isinstance(geometry, dict):
+            return "visual_feedback_unavailable"
+        if geometry.get("capture_evidence") != record.get("capture_evidence"):
+            return "visual_feedback_binding_changed"
+        measured = localized_axis_measurement(ray, self.localizer.lens, geometry)
+        if measured is None:
+            return "visual_feedback_target_unavailable"
+        if measured["center_error_pixels"] <= maximum_error:
+            return "visual_feedback_target_reached"
+        response_rotation = self.response_rotations.get(axis)
+        if response_rotation is not None:
+            rotation = np.asarray(geometry["rotation_matrix"])
+            angle = np.arccos(np.clip((np.trace(response_rotation.T @ rotation) - 1) / 2, -1, 1))
+            if angle > np.radians(MAXIMUM_RESPONSE_VIEW_CHANGE_DEGREES):
+                return "visual_feedback_response_changed"
+        response = self.response.get(axis)
+        if response is not None and float(self._error(ray, geometry) @ (direction * response)) >= 0:
+            return "visual_feedback_direction_changed"
+        return None
+
     async def _pulse(self, axis: str, amount: float, *, speed: float = DEFAULT_CONTINUOUS_PULSE_SPEED) -> None:
         started = time.monotonic()
         if self.commands >= self.maximum_commands:
@@ -1208,6 +1246,7 @@ class VisualNavigator:
             raise PanoramaCaptureError("panorama_frame_not_recent")
         self.commands += 1
         self.last_pulse_stationary = False
+        self.last_pulse_feedback_stop = None
         self.last_pulse_match = {}
         self.trace.append({
             **self.scanner.checkpoint.get("navigation_step", {}),
@@ -1231,6 +1270,9 @@ class VisualNavigator:
                 options = {"speed": speed} if speed != DEFAULT_CONTINUOUS_PULSE_SPEED else {}
                 if motion_observations is not None:
                     options["frame_observer"] = motion_observations.offer
+                    if self.motion_feedback_target is not None:
+                        options["motion_stop_requested"] = lambda: self._motion_stop_reason(
+                            motion_observations, axis, 1 if amount > 0 else -1)
                 transition_estimator = getattr(self.localizer, "calibrated_transition", None)
                 if callable(transition_estimator):
                     options["transition_estimator"] = transition_estimator
@@ -1269,6 +1311,8 @@ class VisualNavigator:
                 await motion_observations.close()
         self.scanner.last_frame = result.get("observation_frame", result["frame"])
         self.scanner.last_pose = result.get("pose", {})
+        self.last_pulse_feedback_stop = result.get("motion_feedback_stop")
+        self.trace[-1]["motion_feedback_stop"] = self.last_pulse_feedback_stop
         if (result.get("stable") is True and self.scanner.physical_state == "stopped"
                 and speed >= DEFAULT_CONTINUOUS_PULSE_SPEED):
             self.last_pulse_match = result.get("match", {})
@@ -1736,6 +1780,9 @@ class VisualNavigator:
                                 return
                         raise _TargetDispatchChanged("target_shifted", frame_age, shift)
             self.dispatch_guard = guard_target_dispatch if target_provider is not None else None
+            self.motion_feedback_target = (lambda: (read_target(), maximum_error_pixels)) if (
+                target_provider is not None and final and not missing and not direction_probe
+                and pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED) else None
             pulse_started = time.monotonic()
             try:
                 if pulse_speed == DEFAULT_CONTINUOUS_PULSE_SPEED:
@@ -1757,6 +1804,14 @@ class VisualNavigator:
                 continue
             finally:
                 self.dispatch_guard = None
+                self.motion_feedback_target = None
+            if self.last_pulse_feedback_stop:
+                # The command ended before its planned duration. Its endpoint
+                # cannot qualify the full-pulse gain or a stationary boundary.
+                self.trace[-1]["response_qualified"] = False
+                self.trace[-1]["stationary_verified"] = False
+                last_error = None
+                continue
             self.trace[-1]["response_equivalent_amount"] = amount
             expired_measurements = 0
             after = await self.locate()

@@ -3653,3 +3653,35 @@ def test_unqualified_probe_keeps_live_target_guard_until_observation_finishes():
     with pytest.raises(PanoramaCaptureError, match="following_observation_expired"):
         asyncio.run(navigator.aim(target, target_provider=provider))
     assert navigator.observation_guard is None and navigator.dispatch_guard is None
+
+
+@pytest.mark.parametrize("case", ["following", "static", "relative", "probe", "short_pulse", "unknown_direction"])
+def test_following_window_requires_an_existing_overlap_qualified_coarse_correction(case):
+    import time
+    lens = {"width": 960, "height": 540, "fx": 560, "fy": 560, "cx": 479.5, "cy": 269.5}
+    reference = {"id": "reference", "rotation_matrix": np.eye(3).tolist()}
+    scanner = SimpleNamespace(capabilities={"axes": {"pan": True}, "velocity_supported": case != "relative"},
+        checkpoint={}, physical_state="stopped", last_frame={"received_monotonic": time.monotonic(), "capture_evidence": {}})
+    localizer = SimpleNamespace(lens=lens, references=[reference], model={"overlap_links": []}, target_reference=lambda _: reference)
+    target = np.array([np.cos(.6), np.sin(.6), 0.])
+    class ReachedPulse(Exception):
+        pass
+    class Navigator(VisualNavigator):
+        async def locate(self):
+            return {**reference, "reference_id": "reference", "analysis_width": 960,
+                "validation_matches": 24, "validation_p95_pixels": 1., "inlier_fraction": .8}
+        async def _target_measurement(self, ray, located):
+            return localized_axis_measurement(ray, lens, located)
+        async def _pulse(self, axis, amount, **options):
+            assert self.following_seconds == (6. if case == "following" else None)
+            if case == "following":
+                assert amount == 1.2 and self.motion_prediction is not None
+            raise ReachedPulse()
+    navigator = Navigator(scanner, localizer)
+    if case != "probe":
+        navigator.response["pan"] = np.array([-.2, 0.])
+        navigator.pulse_limits["pan"] = .6 if case == "short_pulse" else 1.2
+        if case != "unknown_direction": navigator.direction_responses[("pan", 1)] = (.6, np.array([-.12, 0.]))
+    with pytest.raises(ReachedPulse):
+        asyncio.run(navigator.aim(target, **({"target_provider": lambda: target} if case != "static" else {})))
+    assert navigator.following_seconds is None and navigator.motion_prediction is None

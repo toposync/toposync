@@ -155,12 +155,14 @@ def test_observation_history_is_bounded(monkeypatch):
 
 
 @pytest.mark.parametrize("failed", [False, True])
-def test_following_pulse_uses_shared_observer_and_closes_it_on_failure(monkeypatch, failed):
+@pytest.mark.parametrize("window", [False, True])
+def test_following_pulse_uses_shared_observer_and_closes_it_on_failure(monkeypatch, failed, window):
     monkeypatch.setattr(navigation.time, "monotonic", lambda: 10.)
     offered = []
     async def persist():
         pass
     async def pulse(axis, direction, duration, **options):
+        assert options.get("following_seconds") == (6. if window else None)
         observer = options["frame_observer"]
         offered.append(observer)
         observer(frame())
@@ -174,6 +176,9 @@ def test_following_pulse_uses_shared_observer_and_closes_it_on_failure(monkeypat
         physical_state="stopped", camera=camera)
     navigator = navigation.VisualNavigator(scanner, localizer())
     navigator.dispatch_guard = lambda: None
+    if window:
+        navigator.following_seconds = 6.
+        navigator.motion_feedback_target = lambda: ([1., 0., 0.], 12.)
     async def scenario():
         if failed:
             with pytest.raises(navigation.PanoramaCaptureError): await navigator._pulse("pan", .12)
@@ -305,3 +310,71 @@ def test_following_progress_emits_once_per_frame_without_arrival_or_visibility_c
     assert len(events) == 1
     assert events[0]["arrival_verified"] is events[0]["stop_confirmed"] is events[0]["subject_visibility_verified"] is False
     assert events[0]["frame_geometry"]["capture_evidence"] == events[0]["capture_evidence"]
+
+
+@pytest.mark.parametrize("case", ["moving", "stopped", "reversed", "coverage_gap", "expired", "capture_changed",
+    "same_velocity_renewal", "new_velocity_waits_for_effect"])
+def test_following_matches_world_target_rate_instead_of_stopping_at_instantaneous_center(monkeypatch, case):
+    clock = [10.1]
+    monkeypatch.setattr(navigation.time, "monotonic", lambda: clock[0])
+    model = localizer()
+    model.lens = {"width": 960, "height": 540, "fx": 560., "fy": 560., "cx": 479.5, "cy": 269.5}
+    model.coverage_mask = np.zeros((20, 40), bool) if case == "coverage_gap" else np.ones((20, 40), bool)
+    model.target_reference = lambda _: {"id": "reference"}
+    capabilities = {"defaults": {"continuous": "normalized"}, "spaces": {"continuous": [
+        {"uri": "normalized", "normalized": True, "x": {"min": -1., "max": 1.}, "y": {"min": -1., "max": 1.}}]}}
+    navigator = navigation.VisualNavigator(SimpleNamespace(capabilities=capabilities), model)
+    navigator.response["pan"] = np.array([-999., 0.])  # Never convert this pulse gain into a motor rate.
+    navigator.following_seconds = 6.
+    navigator.trace = [{}]
+    motion = navigation.TargetMotion()
+    ray = [np.array([1., 0., 0.])]
+    navigator.motion_feedback_target = lambda: (ray[0], 12.)
+    navigator.motion_prediction = lambda geometry, seconds: navigator._predict_target(motion, geometry, 12., seconds)
+    observer = SimpleNamespace(closed=False, latest=None, command=1)
+    feedback = navigator._velocity_feedback(observer, "pan", 1, .1)
+    context = {"velocity": {"pan": .1, "tilt": 0.}, "accepted_monotonic": 10.,
+        "deadline_monotonic": 10.7, "window_deadline_monotonic": 16., "maximum_duration_seconds": 1.2}
+    plans = []
+    for index in range(6 if case in {"same_velocity_renewal", "new_velocity_waits_for_effect"} else 3):
+        clock[0] = 10.1 + index * .11
+        if index == 3:
+            context.update(accepted_monotonic=clock[0] - .1, deadline_monotonic=11.1, observed_response_seconds=.5)
+            if case == "new_velocity_waits_for_effect": context["velocity"] = {"pan": .05, "tilt": 0.}
+        angle = index * .022
+        target_angle = .022 if case == "stopped" and index == 2 else 0. if case == "reversed" and index == 2 else angle
+        ray[0] = np.array([np.cos(target_angle), np.sin(target_angle), 0.])
+        motion.observe({"scope": ["camera", "source", "job", 1, "artifact", "geometry"],
+            "capture_instance": "source", "generation": 2 if case == "capture_changed" and index == 2 else 1,
+            "sequence": index + 1, "observed_monotonic": clock[0] - (2 if case == "expired" else 0)}, ray[0], clock[0])
+        c, s = np.cos(angle), np.sin(angle)
+        capture = {"capture_instance": "decoder", "generation": 1, "sequence": index + 1}
+        geometry = {"rotation_matrix": [[c, 0, s], [0, 1, 0], [-s, 0, c]],
+            "analysis_width": 960, "validation_p95_pixels": 1., "validation_matches": 24,
+            "inlier_fraction": .9, "capture_evidence": capture}
+        observer.latest = {"status": "localized", "command": 1, "frame_received_monotonic": clock[0],
+            "capture_evidence": capture, "frame_geometry": geometry}
+        plans.append(feedback(context))
+    reason = navigator._motion_stop_reason(observer, "pan", 1)
+    if case == "new_velocity_waits_for_effect":
+        assert plans[2] is not None
+        assert plans[3:] == [None, None, None], "Old video cannot qualify the new speed"
+        return
+    if case == "same_velocity_renewal":
+        assert plans[2] is not None and plans[3] is not None, "Same-speed renewal must not relearn the unchanged rate"
+        return
+    if case != "moving":
+        assert reason in {"visual_feedback_target_reached", "visual_feedback_direction_changed"}
+        assert plans[-1] is None
+        return
+    assert reason is None
+    assert plans[:2] == [None, None]
+    plan = plans[-1]
+    assert plan["duration_seconds"] == 1.2
+    assert plan["velocity"] == {"pan": .1, "tilt": 0.}
+    assert plan["measurement"]["target_rate_radians_per_second"][0] == pytest.approx(.2, abs=.001)
+    assert plan["measurement"]["rate_radians_per_second"][0] == pytest.approx(-.2, abs=.001)
+    plan["dispatch_guard"]()
+    observer.latest["status"] = "unlocalized"
+    with pytest.raises(navigation.PanoramaCaptureError, match="visual_feedback_unavailable"):
+        plan["dispatch_guard"]()

@@ -57,6 +57,7 @@ MAX_FIRST_REFUSAL_BYTES = 64 * 1024**2
 MAX_FIRST_REFUSAL_METADATA_BYTES = 1024**2
 CONTINUOUS_CURSOR_VERSION = 4
 DEFAULT_CONTINUOUS_PULSE_SPEED = 0.1
+MAXIMUM_FOLLOWING_WINDOW_SECONDS = 6.0
 MINIMUM_CONTINUOUS_PULSE_SECONDS = 0.05
 MINIMUM_SEEK_PULSE_SECONDS = 0.12
 UNCONFIRMED_NO_EFFECT_PIXELS = 0.5
@@ -3307,6 +3308,7 @@ class _Scan:
         motion_stop_requested: Callable[[], str | None] | None = None,
         motion_velocity_update: Callable[[dict], dict | None] | None = None,
         requested_velocity: dict[str, float] | None = None,
+        following_seconds: float | None = None,
         expected_frame: dict | None = None,
         movement_intent: dict[str, Any] | None = None,
         persist_recovery_return_intent: bool = False,
@@ -3322,6 +3324,12 @@ class _Scan:
             or self.returning or self.checkpoint.get("continuous_cursor") is not None
             or self.checkpoint.get("control_verification") is not None
             or not self.capabilities.get("velocity_supported")
+        ):
+            raise PanoramaCaptureError("visual_feedback_unavailable")
+        if following_seconds is not None and (
+            _finite(following_seconds) is None or not duration <= following_seconds <= MAXIMUM_FOLLOWING_WINDOW_SECONDS
+            or motion_velocity_update is None or motion_stop_requested is None
+            or frame_observer is None or observation_guard is None
         ):
             raise PanoramaCaptureError("visual_feedback_unavailable")
         if not self.returning:
@@ -3737,6 +3745,7 @@ class _Scan:
                 raise PanoramaCaptureError("correction_precondition_changed")
             self._check(budget=not self.returning)
         diagnostic.value["command_outcome"] = "pending"
+        window_deadline = time.monotonic() + following_seconds if following_seconds is not None else None
         operation = asyncio.create_task(issue_command())
         frames: deque[dict] = deque()
         terminal_frames: deque[dict] = deque()
@@ -3748,6 +3757,9 @@ class _Scan:
         diagnostic.value["motion_velocity_updates"] = velocity_updates
         velocity_context = {"velocity": dict(requested_velocity or {}), "accepted_monotonic": None}
         velocity_deadline = None
+        if window_deadline is not None:
+            diagnostic.value["following_window_seconds"] = following_seconds
+            diagnostic.value["following_window_deadline_monotonic"] = window_deadline
         stop_operation: asyncio.Task[bool] | None = None
         pose_time = start - 1
         pose_matches = 0
@@ -3794,6 +3806,7 @@ class _Scan:
                 stop_operation = asyncio.create_task(request_stop(reason))
 
         async def issue_velocity_update(plan: dict, entry: dict) -> None:
+            nonlocal velocity_deadline
             # Persist the intent before transport; each update consumes the same
             # navigation and regional budgets as a fresh command.
             if self.region_policy is not None:
@@ -3804,12 +3817,18 @@ class _Scan:
                 commands.append(entry)
             plan["reserve"](entry)
             await self._persist()
-            remaining = min(2., velocity_deadline - time.monotonic() - .1)
+            now = time.monotonic()
+            next_deadline = velocity_deadline
+            if "duration_seconds" in plan:
+                next_deadline = min(now + plan["duration_seconds"], window_deadline - .1)
+            remaining = min(2., next_deadline - now - .1)
             if remaining < .05:
                 raise PanoramaCaptureError("visual_feedback_expired")
             def guard():
                 self._check()
-                if stop_operation is not None or velocity_deadline - time.monotonic() < remaining:
+                now = time.monotonic()
+                if (stop_operation is not None or now >= velocity_deadline
+                        or next_deadline - now < remaining):
                     raise PanoramaCaptureError("visual_feedback_expired")
                 if not 0 <= time.monotonic() - entry["frame_received_monotonic"] <= .35:
                     raise PanoramaCaptureError("visual_feedback_expired")
@@ -3818,6 +3837,11 @@ class _Scan:
             receipt = await self.camera.move_velocity(**entry["velocity"], timeout_s=remaining, dispatch_guard=guard)
             entry.update(state="accepted", accepted_monotonic=time.monotonic(),
                 command_id=receipt.get("command_id"), timeout_seconds=remaining)
+            if "duration_seconds" in plan:
+                # Acknowledgement never renews the outer window or hides transport time.
+                velocity_deadline = min(next_deadline, now + remaining,
+                    entry["accepted_monotonic"] + max(0., receipt.get("pulse_remaining_seconds", remaining)))
+                entry["deadline_monotonic"] = velocity_deadline
             velocity_context.update(velocity=entry["velocity"], accepted_monotonic=entry["accepted_monotonic"])
 
         try:
@@ -3839,6 +3863,15 @@ class _Scan:
                     if update_operation is not None and update_operation.done():
                         update_operation.result()
                         update_operation = None
+                    plan = None
+                    if (motion_velocity_update is not None and update_operation is None and not stopped
+                            and stop_operation is None
+                            and velocity_deadline - time.monotonic() >= .1):
+                        plan = motion_velocity_update({**velocity_context, "deadline_monotonic": velocity_deadline,
+                            **({"window_deadline_monotonic": window_deadline, "maximum_duration_seconds": duration,
+                                "observed_response_seconds": max(0., diagnostic.value.get("first_motion_transition_seconds", 0)
+                                    - diagnostic.value.get("command_accepted_seconds", 0))}
+                                if window_deadline is not None else {})})
                     if motion_stop_requested is not None and not stopped and stop_operation is None:
                         reason = motion_stop_requested()
                         if reason is not None:
@@ -3847,28 +3880,30 @@ class _Scan:
                                 raise PanoramaCaptureError("invalid_visual_feedback")
                             diagnostic.value["motion_feedback_stop"] = reason
                             start_stop(reason)
-                    if (motion_velocity_update is not None and update_operation is None and not stopped
-                            and stop_operation is None and velocity_deadline - time.monotonic() >= .1):
-                        plan = motion_velocity_update({**velocity_context, "deadline_monotonic": velocity_deadline})
-                        if plan is not None:
-                            velocity = plan.get("velocity", {})
-                            # Do not expand the swept region: same axis/direction,
-                            # at most the original speed and absolute deadline.
-                            if (len(velocity_updates) >= 8 or set(velocity) != {"pan", "tilt"}
-                                    or any(_finite(v) is None or v * requested_velocity.get(axis, 0) < 0
-                                        or abs(v) > abs(requested_velocity.get(axis, 0)) for axis, v in velocity.items())
-                                    or not any(velocity.values()) or not callable(plan.get("dispatch_guard"))
-                                    or not callable(plan.get("reserve"))):
-                                raise PanoramaCaptureError("invalid_visual_feedback")
-                            if not _exact_velocity_supported(self.capabilities, velocity):
-                                raise PanoramaCaptureError("visual_control_resolution_unverified")
-                            entry = {"id": uuid.uuid4().hex, "state": "pending", "kind": "velocity_update",
-                                "velocity": dict(velocity), "returning": False,
-                                "measurement": copy.deepcopy(plan.get("measurement")),
-                                "capture_evidence": copy.deepcopy(plan["capture_evidence"]),
-                                "frame_received_monotonic": plan["frame_received_monotonic"]}
-                            velocity_updates.append(entry)
-                            update_operation = asyncio.create_task(issue_velocity_update(plan, entry))
+                    if plan is not None and stop_operation is None and len(velocity_updates) < 8:
+                        velocity = plan.get("velocity", {})
+                        # Same axis, direction and speed envelope. Renewal requires
+                        # an explicit bounded window and never lengthens an individual pulse.
+                        if (set(velocity) != {"pan", "tilt"}
+                                or any(_finite(v) is None or v * requested_velocity.get(axis, 0) < 0
+                                    or abs(v) > abs(requested_velocity.get(axis, 0)) for axis, v in velocity.items())
+                                or not any(velocity.values()) or not callable(plan.get("dispatch_guard"))
+                                or not callable(plan.get("reserve"))):
+                            raise PanoramaCaptureError("invalid_visual_feedback")
+                        if "duration_seconds" in plan and (
+                            window_deadline is None or _finite(plan["duration_seconds"]) is None
+                            or not .05 <= plan["duration_seconds"] <= duration
+                        ):
+                            raise PanoramaCaptureError("invalid_visual_feedback")
+                        if not _exact_velocity_supported(self.capabilities, velocity):
+                            raise PanoramaCaptureError("visual_control_resolution_unverified")
+                        entry = {"id": uuid.uuid4().hex, "state": "pending", "kind": "velocity_update",
+                            "velocity": dict(velocity), "returning": False,
+                            "measurement": copy.deepcopy(plan.get("measurement")),
+                            "capture_evidence": copy.deepcopy(plan["capture_evidence"]),
+                            "frame_received_monotonic": plan["frame_received_monotonic"]}
+                        velocity_updates.append(entry)
+                        update_operation = asyncio.create_task(issue_velocity_update(plan, entry))
                 if stop_operation is not None and stop_operation.done() and not stopped:
                     if update_operation is not None:
                         await asyncio.shield(update_operation)
@@ -3926,7 +3961,8 @@ class _Scan:
                         + max(0.0, receipt["pulse_remaining_seconds"])
                         if "pulse_remaining_seconds" in receipt else duration
                     )
-                    stop_due = target is None and duration > 0 and now - start >= pulse_deadline
+                    stop_due = target is None and duration > 0 and now >= (
+                        velocity_deadline if velocity_deadline is not None else start + pulse_deadline)
                     if stop_due:
                         start_stop("pulse_deadline")
                 # Continuous/preset moves settle from video. Repeated native
@@ -5474,6 +5510,7 @@ class _Scan:
         observation_guard: Callable[[], None] | None = None,
         motion_stop_requested: Callable[[], str | None] | None = None,
         motion_velocity_update: Callable[[dict], dict | None] | None = None,
+        following_seconds: float | None = None,
     ) -> dict:
         # Start slowly enough to retain inter-frame correspondence on cameras
         # with fast motors. Duration adapts to measured overlap in _seek; speed
@@ -5547,7 +5584,7 @@ class _Scan:
             and not self.capabilities.get("velocity_supported")
         )
         if use_relative:
-            if motion_velocity_update is not None:
+            if motion_velocity_update is not None or following_seconds is not None:
                 raise PanoramaCaptureError("visual_feedback_unavailable")
             if speed != DEFAULT_CONTINUOUS_PULSE_SPEED:
                 raise PanoramaCaptureError("visual_control_resolution_unverified")
@@ -5589,6 +5626,7 @@ class _Scan:
             allow_stationary=True,
             requested_velocity=velocity,
             **({"motion_velocity_update": motion_velocity_update} if motion_velocity_update else {}),
+            **({"following_seconds": following_seconds} if following_seconds is not None else {}),
             **({"frame_observer": frame_observer} if frame_observer else {}),
             **({"observation_guard": observation_guard} if observation_guard else {}),
             **({"motion_stop_requested": motion_stop_requested} if motion_stop_requested else {}),

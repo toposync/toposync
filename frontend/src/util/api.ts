@@ -2102,6 +2102,8 @@ export async function retryProcessingServerVisionModel(
   return res.json();
 }
 
+export const visionModelArtifactUpdatedEvent = "toposync:vision-model-artifact-updated";
+
 export async function uploadProcessingServerVisionModelArtifact(
   serverId: string,
   modelId: string,
@@ -2127,6 +2129,7 @@ export async function uploadProcessingServerVisionModelArtifact(
     xhr.onerror = () => reject(new Error(`Failed to upload vision model artifact for ${modelId}`));
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
+        window.dispatchEvent(new CustomEvent(visionModelArtifactUpdatedEvent, { detail: serverId }));
         resolve(xhr.response as ProcessingServerVisionModelArtifactUploadResponse);
         return;
       }

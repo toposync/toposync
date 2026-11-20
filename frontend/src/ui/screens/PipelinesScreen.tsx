@@ -31,6 +31,7 @@ import {
   isAbortError,
   putPipeline,
   resetPipelineStats,
+  visionModelArtifactUpdatedEvent,
 } from "../../util/api";
 import { extractProcessingRuntimeNodeIssues, filterProcessingRuntimeIssuesForPipeline } from "../processingRuntimeHealth";
 import { PipelineStorageCard } from "./pipelines/InteractivePipelineEditor";
@@ -260,6 +261,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
   const [recommendations, setRecommendations] = useState<PipelineAlert[]>([]);
   const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [modelArtifactRevision, setModelArtifactRevision] = useState(0);
 
   const [interactiveSteps, setInteractiveSteps] = useState<InteractiveStep[]>([]);
   const [interactiveWarning, setInteractiveWarning] = useState<string | null>(null);
@@ -660,6 +662,17 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
     return validateResolvedGraph(resolved.graph);
   };
 
+  const draftProcessingServerId = draft?.processing_server_id?.trim() || "local";
+  useEffect(() => {
+    const onArtifactUpdated = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === draftProcessingServerId) {
+        setModelArtifactRevision(revision => revision + 1);
+      }
+    };
+    window.addEventListener(visionModelArtifactUpdatedEvent, onArtifactUpdated);
+    return () => window.removeEventListener(visionModelArtifactUpdatedEvent, onArtifactUpdated);
+  }, [draftProcessingServerId]);
+
   useEffect(() => {
     if (!draft) {
       setRecommendations([]);
@@ -740,7 +753,7 @@ export function PipelinesScreen({ onClose, onOpenProcessingServers, operatorPane
       window.clearTimeout(handle);
       controller.abort();
     };
-  }, [draft, mode, interactiveGraph.graph, graphText, interactiveWarning, pythonText]);
+  }, [draft, mode, interactiveGraph.graph, graphText, interactiveWarning, pythonText, modelArtifactRevision]);
 
   useEffect(() => {
     if (!draft) {

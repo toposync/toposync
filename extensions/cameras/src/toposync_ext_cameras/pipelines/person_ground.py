@@ -26,6 +26,9 @@ from .postprocess import CameraMappingConfig, CameraMappingRuntime
 
 _MINIMUM_STATIONARY_SUPPORT_SECONDS = 0.20
 _STATIONARY_SUPPORT_TOLERANCE_METERS = 0.04
+_TORSO_HEIGHT_FRACTIONS = ((0.50, 0.78), (0.54, 0.82), (0.58, 0.86))
+
+_TorsoMotionReference = tuple[tuple[float, ...], ...]
 
 
 class PersonGroundConfig(BaseModel):
@@ -249,7 +252,7 @@ def estimate_body_and_feet(
         shoulder = tuple(np.mean([points["left_shoulder"], points["right_shoulder"]], axis=0))
         reason = "upright_geometry_inconsistent"
         for height in np.linspace(config.height_min_meters, config.height_max_meters, 15):
-            for hip_fraction, shoulder_fraction in ((0.50, 0.78), (0.54, 0.82), (0.58, 0.86)):
+            for hip_fraction, shoulder_fraction in _TORSO_HEIGHT_FRACTIONS:
                 hip_world = camera.point_at_height(hip, float(height * hip_fraction))
                 shoulder_world = camera.point_at_height(shoulder, float(height * shoulder_fraction))
                 if hip_world is None or shoulder_world is None:
@@ -321,15 +324,45 @@ def estimate_body_and_feet(
     return {"body": body, "feet": feet}
 
 
+def _torso_motion_reference(
+    camera: MetricCamera, pose: dict, config: PersonGroundConfig
+) -> _TorsoMotionReference | None:
+    """Scale ray slopes so their changes bound motion at any fixed prior height."""
+    points = _landmarks(pose, config.minimum_model_score)
+    reference = []
+    for joint, fractions in zip(("hip", "shoulder"), zip(*_TORSO_HEIGHT_FRACTIONS)):
+        names = (f"left_{joint}", f"right_{joint}")
+        if not all(name in points for name in names):
+            return None
+        center = tuple(np.mean([points[name] for name in names], axis=0))
+        try:
+            _, direction = camera.ray(center)
+        except ValueError:
+            return None
+        if abs(direction[1]) <= 1e-6:
+            return None
+        maximum_vertical_distance = max(
+            abs(config.height_min_meters * min(fractions) - camera.camera_center[1]),
+            abs(config.height_max_meters * max(fractions) - camera.camera_center[1]),
+        )
+        reference.append(tuple(direction[::2] * (maximum_vertical_distance / direction[1])))
+    return tuple(reference)
+
+
+@dataclass
+class _FootEvidence:
+    observation: dict
+    support_origin: tuple[float, ...] | None
+    torso_reference: _TorsoMotionReference | None
+
+
 @dataclass
 class _History:
     timestamp: float
     seen_monotonic: float
     calibration: str
     view: str
-    body: list[float] | None
-    feet: dict[str, dict]
-    support_origins: dict[str, tuple[float, ...]]
+    feet: dict[str, _FootEvidence]
     capture_instance: str
     capture_generation: int
     capture_sequence: int
@@ -509,18 +542,24 @@ class PersonGroundRuntime(TransformOperatorRuntime):
         )
         result["support_geometry_reason"] = axes_reason
         body_position = result["body"].get("position")
+        torso_reference = (
+            _torso_motion_reference(camera, poses[0], self.config)
+            if self.config.complete_hidden_feet and body_position is not None
+            else None
+        )
         image_feet = {}
-        support_origins = {}
         for side, foot in result["feet"].items():
-            old = previous.feet.get(side) if previous else None
+            evidence = previous.feet.get(side) if previous else None
+            old = evidence.observation if evidence else None
             if foot.get("position") is not None:
                 foot["image_evidence_timestamp"] = timestamp
                 foot["valid_for_seconds"] = self.config.maximum_history_seconds
                 foot["body_at_image_evidence"] = body_position
                 stable_since = timestamp
+                origin = None
                 if foot.get("support_consistency") == "relative_3d_compatible":
                     position = tuple(foot["position"])
-                    origin = previous.support_origins.get(side) if previous else None
+                    origin = evidence.support_origin if evidence else None
                     # A fixed origin detects accumulated movement without amplifying frame jitter.
                     if (
                         origin is not None
@@ -530,23 +569,23 @@ class PersonGroundRuntime(TransformOperatorRuntime):
                         stable_since = old["stable_since"]
                     else:
                         origin = position
-                    support_origins[side] = origin
                 stationary = timestamp - stable_since >= _MINIMUM_STATIONARY_SUPPORT_SECONDS
                 foot["stable_since"] = stable_since
                 foot["contact"] = "stationary_support_hypothesis" if stationary else "candidate"
-                image_feet[side] = dict(foot)
+                image_feet[side] = _FootEvidence(dict(foot), origin, torso_reference)
             elif (
-                self.config.complete_hidden_feet
-                and old
+                old
                 and foot.get("reason") == "foot_image_evidence_insufficient"
-                and body_position is not None
-                and previous.body is not None
+                and torso_reference is not None
+                and evidence.torso_reference is not None
                 and old.get("contact") == "stationary_support_hypothesis"
                 and 0
                 < timestamp - old["image_evidence_timestamp"]
                 <= self.config.maximum_history_seconds
-                and old.get("body_at_image_evidence") is not None
-                and math.dist(body_position, old["body_at_image_evidence"]) <= 0.25
+                and all(
+                    math.dist(current, observed) <= 0.25
+                    for current, observed in zip(torso_reference, evidence.torso_reference)
+                )
             ):
                 age = timestamp - old["image_evidence_timestamp"]
                 result["feet"][side] = {
@@ -561,7 +600,7 @@ class PersonGroundRuntime(TransformOperatorRuntime):
                     "reason": "recent_image_support",
                 }
                 # Preserve the original evidence, never the completed output.
-                image_feet[side] = old
+                image_feet[side] = replace(evidence, support_origin=None)
         if key not in self.history and len(self.history) >= self.config.maximum_subjects:
             oldest = min(self.history, key=lambda k: self.history[k].seen_monotonic)
             self.history.pop(oldest)
@@ -573,9 +612,7 @@ class PersonGroundRuntime(TransformOperatorRuntime):
             now,
             camera.calibration_digest,
             view,
-            body_position,
             image_feet,
-            support_origins,
             capture["capture_instance"],
             capture["generation"],
             capture["sequence"],

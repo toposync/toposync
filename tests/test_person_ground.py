@@ -11,6 +11,7 @@ import pytest
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.pipelines.image_geometry import image_geometry
+from toposync_ext_cameras.pipelines import person_ground as person_ground_module
 from toposync_ext_cameras.pipelines.person_ground import (
     PersonGroundConfig,
     PersonGroundRuntime,
@@ -384,6 +385,50 @@ def test_support_distinguishes_frame_jitter_from_accumulated_motion(offsets, exp
             assert visible_foot["contact"] == "candidate"
         else:
             assert hidden_foot["position"] is None
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("torso_shift", "nominal_shift", "expected_contact"),
+    [
+        (0.0, 0.30, "retained_support_hypothesis"),
+        (0.35, 0.0, "unknown"),
+    ],
+)
+def test_retention_checks_observed_torso_motion_at_consistent_heights(
+    monkeypatch, torso_shift, nominal_shift, expected_contact
+):
+    def substitute_nominal(camera, pose, config, **kwargs):
+        estimate = estimate_body_and_feet(camera, pose, config, **kwargs)
+        # Isolate the nominal anchor from both the observed torso and the support check.
+        assert estimate["body"]["status"] == "estimated"
+        estimate["body"]["position"] = [pose["metadata"].get("nominal_shift", 0.0), 0.0, 0.0]
+        return estimate
+
+    monkeypatch.setattr(person_ground_module, "estimate_body_and_feet", substitute_nominal)
+
+    async def scenario():
+        runtime = PersonGroundRuntime(
+            {"mapping": mapping_config(), "complete_hidden_feet": True},
+            PipelineRuntimeDependencies(),
+        )
+        await runtime.process_packet(packet(0.0), None)
+        await runtime.process_packet(packet(0.25), None)
+        incoming = packet(0.30, hidden=("left", "right"))
+        pose = incoming.payload["vision"]["poses"][0]
+        pose["metadata"]["nominal_shift"] = nominal_shift
+        camera = known_camera()
+        for landmark in pose["landmarks"]:
+            side, joint = landmark["name"].split("_", 1)
+            if joint in ("hip", "shoulder"):
+                offset, height = (0.16, 0.92) if joint == "hip" else (0.22, 1.394)
+                x = torso_shift + (-offset if side == "left" else offset)
+                landmark["position"] = camera.project((x, height, 0.0))
+        [output] = await runtime.process_packet(incoming, None)
+        feet = output.payload["spatial"]["person_ground"]["feet"]
+        assert all(foot["contact"] == expected_contact for foot in feet.values())
         await runtime.shutdown()
 
     asyncio.run(scenario())

@@ -128,6 +128,10 @@ def _json(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
 
 
+def _allows_continuity(status: str, reason: str) -> bool:
+    return status in {"pending", "unobservable"} and reason != "ambiguous_face_association"
+
+
 class IdentityStore:
     """Uma galeria por escopo autorizado; criação ocorre somente após ativação."""
 
@@ -1238,6 +1242,7 @@ class IdentityStore:
                     )
                 elif (
                     identity_id is None
+                    and _allows_continuity(status, reason)
                     and evidence.observed_at - current.evidence_at <= policy.continuity_seconds
                 ):
                     status, identity_id, provenance, reason = (
@@ -1349,7 +1354,7 @@ class IdentityStore:
             accepted = (
                 current.identity_id is not None
                 and policy_current
-                and status != "unavailable"
+                and _allows_continuity(status, reason)
                 and current.gallery_revision == self.revision
                 and 0 <= observed_at - current.evidence_at <= continuity_seconds
             )

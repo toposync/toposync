@@ -432,6 +432,51 @@ def test_missing_evidence_expires_and_model_failure_is_not_recognition(store):
     assert failed.status == "unavailable" and failed.identity_id is None
 
 
+@pytest.mark.parametrize("with_observation", [True, False])
+@pytest.mark.parametrize(("status", "reason"), [
+    ("unavailable", "model_load_failed"),
+    ("unobservable", "ambiguous_face_association"),
+    ("unobservable", "face_not_visible"),
+])
+def test_continuity_respects_the_extraction_result_at_close(store, with_observation, status, reason):
+    identity, _, _ = enroll(store)
+    for visit in ("automatic-visit", "curated-visit"):
+        first = store.observe(evidence(visit), policy())
+        assert first.identity_id == identity and first.provenance == "automatic"
+        if visit == "curated-visit":
+            curate(store, "assign", {"observation_ids": [first.observation_id], "identity_id": identity})
+        if with_observation:
+            sample = evidence(visit, capture="second", observed_at=2).model_copy(update={
+                "status": status, "reason": reason, "vector": None, "reference_eligible": False,
+            })
+            store.observe(sample, policy())
+        else:
+            store.no_evidence(visit, observed_at=2, status=status, reason=reason)
+        store.close_occurrence(visit)
+        closed = store.decision(visit)
+        if visit == "curated-visit":
+            assert (closed.identity_id, closed.provenance) == (identity, "human")
+        elif reason == "face_not_visible":
+            assert (closed.identity_id, closed.provenance, closed.evidence_at) == (identity, "continuity", 1)
+        else:
+            assert (closed.status, closed.reason) == (status, reason)
+            assert closed.identity_id is None and not closed.candidate_ids
+
+
+@pytest.mark.parametrize(("similarity", "expected_status"), [(0.0, "unknown"), (0.8, "suggested")])
+def test_fresh_comparison_replaces_an_automatic_name(store, similarity, expected_status):
+    identity, _, _ = enroll(store)
+    first = store.observe(evidence("visit"), policy())
+    assert first.identity_id == identity
+    vector = [similarity, (1 - similarity ** 2) ** 0.5] + [0] * 14
+    later = store.observe(evidence("visit", capture="next", observed_at=2, vector=vector), policy())
+    assert later.status == expected_status and later.identity_id is None
+    assert later.candidate_ids == ((identity,) if expected_status == "suggested" else ())
+    store.no_evidence("visit", observed_at=3, status="pending", reason="sampling")
+    store.close_occurrence("visit")
+    assert store.decision("visit").identity_id is None
+
+
 def test_abstention_can_be_named_without_inventing_reference(store):
     sample = evidence("blurry").model_copy(
         update={

@@ -65,10 +65,11 @@ function harness({ canEdit = true, initial = graph() } = {}) {
         default_input_policy: { queue: { max_items: 4 }, lifecycle: { propagate_close: true } } },
     },
     latestGraphRef: { current: initial }, undoGraphStackRef: { current: [] },
-    selection: { kind: "node", id: "detect" }, pendingFocusNodeId: null, actionError: null, undoGraphStack: [], changes: [],
+    selection: { kind: "node", id: "detect" }, pendingFocusNodeId: null, actionError: null,
+    humanMotionNeedsModels: true, undoGraphStack: [], changes: [],
     t: (key, parameters, fallback) => fallback ?? key,
   };
-  for (const key of ["selection", "pendingFocusNodeId", "actionError", "undoGraphStack"]) {
+  for (const key of ["selection", "pendingFocusNodeId", "actionError", "humanMotionNeedsModels", "undoGraphStack"]) {
     context[`set${key[0].toUpperCase()}${key.slice(1)}`] = (update) => {
       context[key] = typeof update === "function" ? update(context[key]) : update;
     };
@@ -111,6 +112,7 @@ for (const scenario of ["occupied input", "cycle", "self", "removed node"]) {
     assert.equal(h.context.changes.length, 0);
     assert.equal(h.context.undoGraphStackRef.current.length, 0);
     assert.deepEqual(plain(h.context.selection), { kind: "node", id: "detect" });
+    assert.equal(h.context.humanMotionNeedsModels, true);
   });
 }
 
@@ -131,6 +133,7 @@ test("successful connection preserves source selection, configurations and opera
   assert.deepEqual(committed.edges[1].lifecycle, { propagate_close: true });
   assert.deepEqual(plain(h.context.selection), { kind: "node", id: "detect" });
   assert.equal(h.context.pendingFocusNodeId, null);
+  assert.equal(h.context.humanMotionNeedsModels, false);
   assert.deepEqual(initial, before);
   assert.equal(h.context.undoGraphStackRef.current.length, 1);
   assert.equal(h.context.undoGraphStackRef.current[0], initial);

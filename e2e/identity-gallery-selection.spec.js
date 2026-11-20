@@ -2,7 +2,7 @@ const { test, expect } = require("@playwright/test");
 
 test("gallery retains authorized selection on refresh and clears removed or revoked photos", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("toposync.locale", "pt-BR"));
-  let identities = [];
+  let identities = [{ id: "cat", name: "Nina", species: "cat", references: 0, occurrences: 1, representative_id: null }];
   await page.route("**/api/vision/identities", route => route.fulfill({ json: {
     identities, revision: 1, permissions: { curate: true, history: false },
   } }));
@@ -19,6 +19,25 @@ test("gallery retains authorized selection on refresh and clears removed or revo
   await gallery.getByRole("checkbox", { name: "Para revisar", exact: true }).check();
   await gallery.getByRole("checkbox", { name: "Selecionar as 2 fotos exibidas do grupo 1", exact: true }).check();
   await expect(gallery.getByText("2 fotos selecionadas", { exact: true })).toBeVisible();
+  await gallery.getByRole("button", { name: "Identificar ou mover seleção" }).click();
+  const editor = gallery.locator("form");
+  const save = editor.getByRole("button", { name: "Salvar", exact: true });
+  await editor.getByRole("radio", { name: "Nina" }).check();
+  await expect(save).toBeEnabled();
+  await editor.getByRole("searchbox").fill("outra gata");
+  await expect(editor.getByRole("radio", { name: "Nina" })).toHaveCount(0);
+  await expect(save).toBeDisabled();
+  let submissions = 0;
+  await page.route("**/api/vision/identities/curation", route => {
+    submissions++;
+    return route.fulfill({ status: 409, json: { detail: "unexpected mutation" } });
+  });
+  await editor.evaluate(form => form.requestSubmit());
+  await editor.getByRole("searchbox").fill("Nina");
+  await expect(save).toBeEnabled();
+  expect(submissions).toBe(0);
+  await editor.getByRole("button", { name: "Cancelar" }).click();
+  await gallery.getByRole("checkbox", { name: "Selecionar as 2 fotos exibidas do grupo 1", exact: true }).check();
   const refresh = gallery.getByRole("button", { name: "Atualizar", exact: true });
   await refresh.click();
   await expect(refresh).toBeEnabled();

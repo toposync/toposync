@@ -154,11 +154,13 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
   const matching = available.filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const [name, setName] = useState("");
   const [reference, setReference] = useState(false);
+  const canSave = mode === "new" ? Boolean(name.trim()) : matching.some((item) => item.id === identity);
   const { busy, error, run } = useMutation();
   const title = useRef<HTMLHeadingElement>(null);
   useEffect(() => { title.current?.focus(); }, []);
   return <form className="identityForm" onSubmit={(event) => {
     event.preventDefault();
+    if (!canSave || busy) return;
     void run("/curation", { action: "identify", expected_revision: revision, values: { species, observation_ids: observations.map((item) => item.id), ...(mode === "new" ? { name: name.trim() } : { identity_id: identity }), use_as_reference: reference } }).then((saved) => { if (saved) onClose(); });
   }}>
     <h3 tabIndex={-1} ref={title}>{t("who")}</h3><p className="identityMuted">{t("selection", { count: observations.length })}</p>
@@ -179,7 +181,7 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
       {mode === "new" && <label className="identityField">{t("name")}<input maxLength={120} required value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" /></label>}
       <label><input type="checkbox" disabled={!observations.some((item) => item.eligible)} checked={reference} onChange={(event) => setReference(event.target.checked)} />{t("reference")}</label><p className="identityMuted">{t("referenceHelp")}</p>
       {error && <ErrorMessage t={t} message={error} />}
-      <div className="identityActions"><button className="chipButton" type="button" onClick={onClose}>{t("cancel")}</button><button className="primaryButton" type="submit" disabled={mode === "new" ? !name.trim() : !identity}>{t(busy ? "saving" : "save")}</button></div>
+      <div className="identityActions"><button className="chipButton" type="button" onClick={onClose}>{t("cancel")}</button><button className="primaryButton" type="submit" disabled={!canSave}>{t(busy ? "saving" : "save")}</button></div>
     </fieldset>
   </form>;
 }
@@ -335,9 +337,10 @@ export function Gallery({ i18n, ui }: { i18n: HostI18n; ui?: HostUi }) {
     const saved = action === "delete" ? await run(`/${encodeURIComponent(profile!)}`, { expected_revision: revision }, "DELETE") : await run("/curation", { action, expected_revision: revision, values: action === "merge" ? { source_id: profile, target_id: target } : { identity_id: profile, name } });
     if (saved) { resetAfterSave(); if (action !== "rename") setProfile(null); }
   };
+  const refreshPending = gallery.loading || photos.loading || busy;
   return <section className="identityGallery" aria-label={t("title")}><style>{styles}</style>
     {error && <ErrorMessage t={t} message={error} />}
-    <div className="identityActions"><button type="button" className="chipButton" disabled={gallery.loading || photos.loading || busy} onClick={changed}>{t("retry")}</button></div>
+    <div className="identityActions"><button type="button" className="chipButton" aria-disabled={refreshPending} onClick={() => { if (!refreshPending) changed(); }}>{t("retry")}</button></div>
     {gallery.error || photos.error ? <ErrorMessage t={t} onRetry={() => { pendingFocus.current = true; changed(); }} /> : (gallery.loading && !gallery.data) || (photos.loading && !photos.data) ? <p role="status">{t("loading")}</p> : <>
       {current ? <div className="identityToolbar"><button className="chipButton" type="button" onClick={() => { setProfile(null); resetAfterSave(); }}>{t("back")}</button><h3 ref={profileHeading} tabIndex={-1} className="identityName">{current.name}</h3><span className="identityMuted">{t("references", { count: current.references })}</span></div> : <div className="identityToolbar"><input ref={gallerySearch} aria-label={t("search")} placeholder={t("search")} value={search} onChange={(event) => setSearch(event.target.value)} /><label><select aria-label={t("all")} value={species} onChange={(event) => { setSpecies(event.target.value); reset(); }}><option value="">{t("all")}</option>{(["person", "cat", "dog"] as Species[]).map((item) => <option key={item} value={item}>{t(item)}</option>)}</select></label><label><input type="checkbox" checked={review} onChange={(event) => { setReview(event.target.checked); reset(); }} />{t("review")}</label></div>}
       {!profile && !review && <div className="identityGrid">{identities.map((item) => <button className="identityTile" type="button" key={item.id} onClick={() => { setProfile(item.id); setReview(false); resetAfterSave(); }}>{item.representative_id && <Photo observation={{id:item.representative_id}} t={t} />}<span className="identityName">{item.name}</span><span className="identityMuted">{t(item.species)} · {t("references", { count: item.references })}</span></button>)}</div>}

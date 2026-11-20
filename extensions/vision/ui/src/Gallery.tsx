@@ -6,7 +6,7 @@ import { styles } from "./styles";
 type Translate = (key: string, params?: Record<string, unknown>) => string;
 function useText(i18n: HostI18n): Translate {
   const { t } = i18n.useI18n();
-  return (key, params) => t(`ext.vision.identity.${params?.count === 1 && ["selection", "references", "visits"].includes(key) ? `${key}One` : key}`, params);
+  return (key, params) => t(`ext.vision.identity.${params?.count === 1 && ["selection", "selectedRecords", "references", "visits"].includes(key) ? `${key}One` : key}`, params);
 }
 function useRevision() {
   const [revision, setRevision] = useState(0);
@@ -237,12 +237,13 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
   const matching = available.filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const [name, setName] = useState("");
   const [referenceIds, setReferenceIds] = useState<string[]>([]);
-  const eligible = observations.filter(item => item.eligible);
+  const eligible = observations.filter(item => item.eligible && item.has_image !== false);
   const { observationIds } = reviewedSelection(revision, observations);
   const [draft] = useState<ReviewedSelection>(() => reviewed ?? { revision, observationIds });
   const confirmingSuggestion = mode === "existing" && identity === draft.suggestedIdentity;
   const suggestionWithdrawn = confirmingSuggestion && !candidateLabels?.has(identity);
-  const stale = suggestionWithdrawn || revision !== draft.revision || observationIds.length !== draft.observationIds.length
+  const stale = suggestionWithdrawn || referenceIds.some(id => !eligible.some(item => item.id === id))
+    || revision !== draft.revision || observationIds.length !== draft.observationIds.length
     || observationIds.some((id, index) => id !== draft.observationIds[index]);
   const canSave = !stale && (mode === "new" ? Boolean(name.trim()) : matching.some((item) => item.id === identity));
   const { busy, error, run } = useMutation();
@@ -253,7 +254,7 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
     if (!canSave || busy) return;
     void run("/curation", { action: "identify", expected_revision: draft.revision, values: { species, observation_ids: draft.observationIds, ...(confirmingSuggestion ? { require_current_suggestion: true } : {}), ...(mode === "new" ? { name: name.trim() } : { identity_id: identity }), reference_observation_ids: referenceIds } }).then((saved) => { if (saved) onClose(true); });
   }}>
-    <h3 tabIndex={-1} ref={title}>{t("who")}</h3><p className="identityMuted">{t("selection", { count: observations.length })}</p>
+    <h3 tabIndex={-1} ref={title}>{t("who")}</h3><p className="identityMuted">{t(observations.some(item => item.has_image === false) ? "selectedRecords" : "selection", { count: observations.length })}</p>
     <fieldset disabled={busy}>
       {available.length > 0 && <label><input type="radio" checked={mode === "existing"} onChange={() => { setMode("existing"); setReferenceIds([]); }} />{t("existing")}</label>}
       {mode === "existing" && <>
@@ -300,12 +301,16 @@ function groupMembers(notification: Notification): GroupMember[] {
 export function supportsRecognition(notification: Notification): boolean {
   return occurrenceId(notification) !== null || groupMembers(notification).length > 0;
 }
+function visitPhoto(visit: Occurrence | null | undefined) {
+  return visit?.observations.find(item => item.has_image !== false);
+}
 function MemberChoice({ member, selected, choose, t, index, refreshKey, deadline }: { deadline: number; refreshKey: string; member: GroupMember; selected: boolean; choose: () => void; t: Translate; index: number }) {
   const access = useNotificationAccess();
   const visit = useLoad<Occurrence>(`/occurrences/${encodeURIComponent(member.recognition_occurrence_id)}`, refreshKey, deadline, access);
   const name = visit.data?.identities.find((item) => item.id === visit.data?.decision.identity_id)?.name;
+  const photo = visitPhoto(visit.data);
   return <button type="button" className={`identityTile ${selected ? "isSelected" : ""}`} aria-pressed={selected} onClick={choose}>
-    {!visit.checkingAccess && visit.data?.observations[0] && <Photo observation={visit.data.observations[0]} t={t} />}
+    {!visit.checkingAccess && photo && <Photo observation={photo} t={t} />}
     <span className="identityName">{(!visit.checkingAccess && name) || `${t(member.category)} ${index + 1}`}</span>
     {visit.loading && !visit.data && <span>{t("loading")}</span>}
     {visit.waiting && <span>{t("pending")}</span>}
@@ -339,7 +344,13 @@ function IndividualIdentity({ notification, i18n, ui, summary = false, selectedO
   const choiceButton = useRef<HTMLButtonElement>(null);
   const [inspecting, setInspecting] = useState<string | null>(null);
   const photoButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (inspecting && !visit.data?.observations.some((item) => item.id === inspecting)) setInspecting(null); }, [inspecting, visit.data]);
+  useEffect(() => {
+    if (!inspecting || visit.data?.observations.some(item => item.id === inspecting && item.has_image !== false)) return;
+    setInspecting(null);
+    if (document.activeElement === document.body || document.activeElement?.closest(".identityInspector")) {
+      requestAnimationFrame(() => (photoButton.current ?? button.current)?.focus());
+    }
+  }, [inspecting, visit.data]);
   const gallery = useLoad<GalleryData>(key && editing && !summary ? "" : null, "", 0, access);
   const button = useRef<HTMLButtonElement>(null);
   const { busy, error, run } = useMutation();
@@ -361,12 +372,13 @@ function IndividualIdentity({ notification, i18n, ui, summary = false, selectedO
   if (visit.error) return <section className="identityGallery"><ErrorMessage t={t} /></section>;
   if (!visit.data) return null;
   const detail = visit.data;
+  const photo = visitPhoto(detail);
   const checkingAccess = visit.checkingAccess || gallery.checkingAccess || photos.checkingAccess;
   const writable = detail.editable;
   const candidates = detail.decision.candidate_ids.flatMap(id => detail.identities.filter(item => item.id === id));
   const labels = profileLabels(candidates, t, "namesakeSuggestion");
   return <section className="identityGallery" style={checkingAccess ? { display: "none" } : undefined} aria-label={t("title")}><style>{styles}</style>
-    <div className="identityToolbar">{detail.observations[0] && <button type="button" className="identityPhotoButton" aria-label={t("viewPhoto")} ref={photoButton} onClick={() => setInspecting(detail.observations[0].id)}><Photo observation={detail.observations[0]} portrait t={t} /></button>}<div><h3>{current?.name || t(detail.decision.status === "suggested" ? `suggested_${detail.species}` : detail.decision.status)}</h3>{current && <p className="identityMuted">{t(detail.decision.reason === "confirmed" ? "identifiedBadge" : "automaticAssociation")}</p>}{detail.decision.reason === "calibration_required" && <p className="identityMuted">{t("calibration_required")}</p>}</div></div>
+    <div className="identityToolbar">{photo && <button type="button" className="identityPhotoButton" aria-label={t("viewPhoto")} ref={photoButton} onClick={() => setInspecting(photo.id)}><Photo observation={photo} portrait t={t} /></button>}<div><h3>{current?.name || t(detail.decision.status === "suggested" ? `suggested_${detail.species}` : detail.decision.status)}</h3>{current && <p className="identityMuted">{t(detail.decision.reason === "confirmed" ? "identifiedBadge" : "automaticAssociation")}</p>}{detail.decision.reason === "calibration_required" && <p className="identityMuted">{t("calibration_required")}</p>}</div></div>
     {inspecting && <PhotoInspector observation={{ id: inspecting }} t={t} onClose={() => { setInspecting(null); requestAnimationFrame(() => photoButton.current?.focus()); }} />}
     {error && <ErrorMessage t={t} message={error} />}
     {!writable && detail.observations.length > 0 && <p className="identityMuted">{t("readOnly")}</p>}
@@ -402,7 +414,7 @@ function IndividualIdentity({ notification, i18n, ui, summary = false, selectedO
           </>)}
         </details>
       </>}
-      {!detail.observations.length && <p className="identityMuted">{t(detail.decision.reason === "identity_deleted" ? "deletedPhotos" : "missing")}</p>}
+      {!photo && <p className="identityMuted">{t(detail.decision.reason === "identity_deleted" ? "deletedPhotos" : "missing")}</p>}
     </>}
   </section>;
 }

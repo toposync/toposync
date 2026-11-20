@@ -7,7 +7,7 @@ import { validateVisualQualification, type VisualQualification } from "./visualQ
 export type Species = "person" | "cat" | "dog";
 export type Identity = { id: string; name: string; species: Species; references: number; occurrences: number; representative_id: string | null };
 export type GalleryData = { identities: Identity[]; revision: number; permissions: { curate: boolean; history: boolean } };
-export type Observation = { editable: boolean; id: string; occurrence_id?: string; species?: Species; identity_id: string | null; eligible: boolean; confirmed: boolean; reference: boolean; cluster_id: string | null };
+export type Observation = { editable: boolean; id: string; has_image?: boolean; occurrence_id?: string; species?: Species; identity_id: string | null; eligible: boolean; confirmed: boolean; reference: boolean; cluster_id: string | null };
 export type Decision = { status: string; identity_id: string | null; candidate_ids: string[]; reason: string };
 export type Occurrence = { closed: boolean; identities: Identity[]; editable: boolean; id: string; species: Species; decision: Decision; observations: Observation[]; revision: number };
 export type Operation = { id: string; action: string; created_at: number; undone: boolean };

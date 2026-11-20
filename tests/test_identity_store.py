@@ -267,6 +267,11 @@ def test_encrypted_evidence_and_missing_key_fail_closed(tmp_path):
     result = store.observe(evidence(), policy(), crop=secret)
     retained = store.image(result.observation_id)
     assert Image.open(BytesIO(retained)).size == (32, 32)
+    second = store.observe(evidence(capture="vector-only", observed_at=2.0), policy())
+    observations = store.occurrence_details("visit-one")["observations"]
+    assert {item["id"]: item["has_image"] for item in observations} == {
+        result.observation_id: True, second.observation_id: False,
+    }
     directory = store.directory
     store.close()
     raw = (directory / "gallery.sqlite3").read_bytes()

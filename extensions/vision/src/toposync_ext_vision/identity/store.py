@@ -711,9 +711,10 @@ class IdentityStore:
             if decision is None:
                 return None
             observations = [
-                dict(item)
+                {**item, "has_image": bool(item["has_image"])}
                 for item in self._connection.execute(
-                    "SELECT id,quality,eligible,identity_id,confirmed,reference,cluster_id FROM available_observation "
+                    "SELECT id,quality,eligible,identity_id,confirmed,reference,cluster_id,crop IS NOT NULL AS has_image "
+                    "FROM available_observation "
                     "WHERE occurrence_id=? ORDER BY quality DESC,id",
                     (occurrence_id,),
                 )

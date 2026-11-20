@@ -13,10 +13,38 @@ function useRevision() {
   useEffect(() => { const update = () => setRevision((value) => value + 1); window.addEventListener("toposync:identity-gallery-changed", update); return () => window.removeEventListener("toposync:identity-gallery-changed", update); }, []);
   return revision;
 }
-function useLoad<T>(path: string | null, refreshKey = "", occurrenceDeadline = 0) {
+// Keep the draft mounted while the returning window rechecks its private data.
+function useNotificationAccess() {
+  const [version, setVersion] = useState<number | null>(0);
+  useEffect(() => {
+    let generation = 0;
+    let active = true;
+    const leave = () => { active = false; setVersion(null); };
+    const resume = () => {
+      if (!active && !document.hidden) { active = true; setVersion(++generation); }
+    };
+    const visibility = () => { if (document.hidden) leave(); else resume(); };
+    window.addEventListener("blur", leave);
+    window.addEventListener("pagehide", leave);
+    window.addEventListener("focus", resume);
+    window.addEventListener("pageshow", resume);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      window.removeEventListener("blur", leave);
+      window.removeEventListener("pagehide", leave);
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("pageshow", resume);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, []);
+  return version;
+}
+function useLoad<T>(path: string | null, refreshKey = "", occurrenceDeadline = 0, accessVersion: number | null = 0) {
   const revision = useRevision();
+  const [validated, setValidated] = useState(0);
   const [state, setState] = useState<{ data?: T; path?: string; loading: boolean; waiting?: boolean; error: boolean }>({ loading: true, error: false });
   useEffect(() => {
+    if (accessVersion === null) return;
     if (path === null) { setState({ loading: false, error: false }); return; }
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -25,6 +53,7 @@ function useLoad<T>(path: string | null, refreshKey = "", occurrenceDeadline = 0
       try {
         const data = await read<T>(path, controller.signal);
         if (!controller.signal.aborted) {
+          setValidated(accessVersion);
           setState({ data, path, loading: false, error: false });
           if ((data as { closed?: boolean }).closed === false && Date.now() < occurrenceDeadline && document.visibilityState === "visible") {
             timer = setTimeout(() => { void load(); }, Math.min(2000, occurrenceDeadline - Date.now()));
@@ -43,29 +72,31 @@ function useLoad<T>(path: string | null, refreshKey = "", occurrenceDeadline = 0
     };
     void load();
     return () => { controller.abort(); if (timer) clearTimeout(timer); };
-  }, [path, revision, refreshKey, occurrenceDeadline]);
-  return state;
+  }, [path, revision, refreshKey, occurrenceDeadline, accessVersion]);
+  return { ...state, checkingAccess: path !== null && Boolean(state.data) && validated !== accessVersion };
 }
 function occurrenceDeadline(notification: Notification): number {
   const timestamp = Date.parse(notification.updatedAt ?? notification.createdAt ?? "");
   return Number.isFinite(timestamp) ? timestamp + 60_000 : 0;
 }
 type PhotoPage = { observations: Observation[]; revision: number; next_cursor: string | null };
-function usePhotos(path: string | null) {
+function usePhotos(path: string | null, accessVersion: number | null = 0) {
   const revision = useRevision();
+  const [validated, setValidated] = useState(0);
   const [state, setState] = useState<{ data?: PhotoPage; path?: string; loading: boolean; error: boolean }>({ loading: false, error: false });
   const operation = useRef<AbortController>();
   const locked = useRef(false);
   useEffect(() => {
     operation.current?.abort(); locked.current = false;
+    if (accessVersion === null) return;
     if (path === null) { setState({ loading: false, error: false }); return; }
     const controller = new AbortController(); operation.current = controller;
     setState((previous) => ({ data: previous.path === path ? previous.data : undefined, path, loading: true, error: false }));
     void read<PhotoPage>(path, controller.signal).then((data) => {
-      if (!controller.signal.aborted) setState({ data, path, loading: false, error: false });
+      if (!controller.signal.aborted) { setValidated(accessVersion); setState({ data, path, loading: false, error: false }); }
     }).catch(() => { if (!controller.signal.aborted) setState({ path, loading: false, error: true }); });
     return () => operation.current?.abort();
-  }, [path, revision]);
+  }, [path, revision, accessVersion]);
   const more = async () => {
     const cursor = state.data?.next_cursor;
     if (!path || !cursor || state.loading || locked.current) return;
@@ -86,7 +117,7 @@ function usePhotos(path: string | null) {
     }
     finally { if (operation.current === controller) locked.current = false; }
   };
-  return { ...state, more };
+  return { ...state, more, checkingAccess: path !== null && Boolean(state.data) && validated !== accessVersion };
 }
 function useMutation() {
   const [busy, setBusy] = useState(false);
@@ -102,6 +133,8 @@ function useMutation() {
       await write(path, path === "/curation" ? { ...body, request_key: retryKey.current.key } : body, method);
       retryKey.current = undefined; changed(); return true;
     } catch (cause) {
+      const status = (cause as { status?: number })?.status;
+      if (status === 401 || status === 403) changed();
       const text = String(cause);
       setError(text.includes("409") || text.includes("revision") || text.includes("changed") ? "conflict" : "error"); return false;
     } finally { locked.current = false; setBusy(false); }
@@ -145,8 +178,28 @@ function PhotoInspector({ observation, t, onClose }: { observation: Pick<Observa
     <Photo observation={observation} full t={t} />
   </section>;
 }
-function Editor({ species, observations, identities, revision, t, onClose, initialIdentity = "" }: { species: Species; observations: Observation[]; identities: Identity[]; revision: number; t: Translate; onClose: () => void; initialIdentity?: string }) {
+function profileLabels(profiles: Identity[], t: Translate, namesakeKey = "namesake") {
+  const groups = new Map<string, Identity[]>();
+  for (const profile of profiles) {
+    const group = groups.get(profile.name);
+    if (group) group.push(profile); else groups.set(profile.name, [profile]);
+  }
+  const labels = new Map<string, string>();
+  for (const [name, peers] of groups) peers.forEach((profile, index) => {
+    labels.set(profile.id, peers.length === 1 ? name : t(namesakeKey, {
+      name, index: index + 1, total: peers.length, references: t("references", { count: profile.references }),
+    }));
+  });
+  return labels;
+}
+type ReviewedSelection = { revision: number; observationIds: string[] };
+function reviewedSelection(revision: number, observations: Observation[]): ReviewedSelection {
+  return { revision, observationIds: observations.map(item => item.id).sort() };
+}
+function Editor({ species, observations, identities, revision, t, onClose, initialIdentity = "", reviewed, candidateLabels }: { candidateLabels?: Map<string, string>; reviewed?: ReviewedSelection; species: Species; observations: Observation[]; identities: Identity[]; revision: number; t: Translate; onClose: (saved?: boolean) => void; initialIdentity?: string }) {
   const available = identities.filter((item) => item.species === species);
+  const labels = profileLabels(available, t);
+  for (const [id, label] of candidateLabels ?? []) labels.set(id, label);
   const [mode, setMode] = useState(available.length ? "existing" : "new");
   const [identity, setIdentity] = useState(initialIdentity);
   const [query, setQuery] = useState("");
@@ -154,14 +207,18 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
   const matching = available.filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const [name, setName] = useState("");
   const [reference, setReference] = useState(false);
-  const canSave = mode === "new" ? Boolean(name.trim()) : matching.some((item) => item.id === identity);
+  const { observationIds } = reviewedSelection(revision, observations);
+  const [draft] = useState(() => reviewed ?? { revision, observationIds });
+  const stale = revision !== draft.revision || observationIds.length !== draft.observationIds.length
+    || observationIds.some((id, index) => id !== draft.observationIds[index]);
+  const canSave = !stale && (mode === "new" ? Boolean(name.trim()) : matching.some((item) => item.id === identity));
   const { busy, error, run } = useMutation();
   const title = useRef<HTMLHeadingElement>(null);
   useEffect(() => { title.current?.focus(); }, []);
   return <form className="identityForm" onSubmit={(event) => {
     event.preventDefault();
     if (!canSave || busy) return;
-    void run("/curation", { action: "identify", expected_revision: revision, values: { species, observation_ids: observations.map((item) => item.id), ...(mode === "new" ? { name: name.trim() } : { identity_id: identity }), use_as_reference: reference } }).then((saved) => { if (saved) onClose(); });
+    void run("/curation", { action: "identify", expected_revision: draft.revision, values: { species, observation_ids: draft.observationIds, ...(mode === "new" ? { name: name.trim() } : { identity_id: identity }), use_as_reference: reference } }).then((saved) => { if (saved) onClose(true); });
   }}>
     <h3 tabIndex={-1} ref={title}>{t("who")}</h3><p className="identityMuted">{t("selection", { count: observations.length })}</p>
     <fieldset disabled={busy}>
@@ -170,9 +227,9 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
         <label className="identityField">{t("search")}<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} autoComplete="off" /></label>
         <div className="identityChoices" role="group" aria-label={t("choose")}>
           {matching.map((item) => <label className={`identityChoice ${identity === item.id ? "isSelected" : ""}`} key={item.id}>
-            <input type="radio" name={choiceName} value={item.id} checked={identity === item.id} onChange={() => setIdentity(item.id)} />
+            <input type="radio" name={choiceName} value={item.id} aria-label={labels.get(item.id)} checked={identity === item.id} onChange={() => setIdentity(item.id)} />
             {item.representative_id && <Photo observation={{ id: item.representative_id }} portrait t={t} />}
-            <span className="identityName">{item.name}</span>
+            <span className="identityName">{labels.get(item.id)}</span>
           </label>)}
           {!matching.length && <p className="identityMuted">{t("noMatches")}</p>}
         </div>
@@ -180,8 +237,8 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
       <label><input type="radio" checked={mode === "new"} onChange={() => setMode("new")} />{t("create")}</label>
       {mode === "new" && <label className="identityField">{t("name")}<input maxLength={120} required value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" /></label>}
       <label><input type="checkbox" disabled={!observations.some((item) => item.eligible)} checked={reference} onChange={(event) => setReference(event.target.checked)} />{t("reference")}</label><p className="identityMuted">{t("referenceHelp")}</p>
-      {error && <ErrorMessage t={t} message={error} />}
-      <div className="identityActions"><button className="chipButton" type="button" onClick={onClose}>{t("cancel")}</button><button className="primaryButton" type="submit" disabled={!canSave}>{t(busy ? "saving" : "save")}</button></div>
+      {stale ? <ErrorMessage t={t} message="conflict" onRetry={() => { onClose(); changed(); }} /> : error && <ErrorMessage t={t} message={error} />}
+      <div className="identityActions"><button className="chipButton" type="button" onClick={() => onClose()}>{t("cancel")}</button><button className="primaryButton" type="submit" disabled={!canSave}>{t(busy ? "saving" : "save")}</button></div>
     </fieldset>
   </form>;
 }
@@ -205,11 +262,12 @@ export function supportsRecognition(notification: Notification): boolean {
   return occurrenceId(notification) !== null || groupMembers(notification).length > 0;
 }
 function MemberChoice({ member, selected, choose, t, index, refreshKey, deadline }: { deadline: number; refreshKey: string; member: GroupMember; selected: boolean; choose: () => void; t: Translate; index: number }) {
-  const visit = useLoad<Occurrence>(`/occurrences/${encodeURIComponent(member.recognition_occurrence_id)}`, refreshKey, deadline);
+  const access = useNotificationAccess();
+  const visit = useLoad<Occurrence>(`/occurrences/${encodeURIComponent(member.recognition_occurrence_id)}`, refreshKey, deadline, access);
   const name = visit.data?.identities.find((item) => item.id === visit.data?.decision.identity_id)?.name;
   return <button type="button" className={`identityTile ${selected ? "isSelected" : ""}`} aria-pressed={selected} onClick={choose}>
-    {visit.data?.observations[0] && <Photo observation={visit.data.observations[0]} t={t} />}
-    <span className="identityName">{name || `${t(member.category)} ${index + 1}`}</span>
+    {!visit.checkingAccess && visit.data?.observations[0] && <Photo observation={visit.data.observations[0]} t={t} />}
+    <span className="identityName">{(!visit.checkingAccess && name) || `${t(member.category)} ${index + 1}`}</span>
     {visit.loading && !visit.data && <span>{t("loading")}</span>}
     {visit.waiting && <span>{t("pending")}</span>}
     {visit.error && <span>{t("memberUnavailable")}</span>}
@@ -221,7 +279,7 @@ export function NotificationIdentity({ notification, i18n, ui, summary = false }
   const [selected, setSelected] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const individual = occurrenceId(notification);
-  if (individual) return <IndividualIdentity notification={notification} i18n={i18n} ui={ui} summary={summary} />;
+  if (individual) return <IndividualIdentity key={individual} notification={notification} i18n={i18n} ui={ui} summary={summary} />;
   if (!members.length || summary) return null;
   const selectedMember = members.find((member) => member.recognition_occurrence_id === selected);
   const start = Math.min(page, Math.floor((members.length - 1) / 12)) * 12;
@@ -235,34 +293,66 @@ export function NotificationIdentity({ notification, i18n, ui, summary = false }
 function IndividualIdentity({ notification, i18n, ui, summary = false, selectedOccurrence }: { notification: Notification; i18n: HostI18n; ui?: HostUi; summary?: boolean; selectedOccurrence?: string }) {
   const t = useText(i18n);
   const key = selectedOccurrence ?? occurrenceId(notification);
-  const visit = useLoad<Occurrence>(key ? `/occurrences/${encodeURIComponent(key)}` : null, notification.updatedAt ?? "", occurrenceDeadline(notification));
-  const [editing, setEditing] = useState(false);
+  const access = useNotificationAccess();
+  const visit = useLoad<Occurrence>(key ? `/occurrences/${encodeURIComponent(key)}` : null, notification.updatedAt ?? "", occurrenceDeadline(notification), access);
+  const [editing, setEditing] = useState<ReviewedSelection | null>(null);
+  const chosenCandidate = useRef("");
+  const choiceButton = useRef<HTMLButtonElement>(null);
   const [inspecting, setInspecting] = useState<string | null>(null);
   const photoButton = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (inspecting && !visit.data?.observations.some((item) => item.id === inspecting)) setInspecting(null); }, [inspecting, visit.data]);
-  const gallery = useLoad<GalleryData>(key && editing && !summary ? "" : null);
+  const gallery = useLoad<GalleryData>(key && editing && !summary ? "" : null, "", 0, access);
   const button = useRef<HTMLButtonElement>(null);
   const { busy, error, run } = useMutation();
-  const close = () => { setEditing(false); requestAnimationFrame(() => button.current?.focus()); };
+  const edit = (candidate = "") => {
+    if (!visit.data) return;
+    chosenCandidate.current = candidate;
+    setEditing(reviewedSelection(visit.data.revision, visit.data.observations));
+  };
+  const close = (saved = false) => {
+    setEditing(null);
+    requestAnimationFrame(() => (saved ? button.current : choiceButton.current || button.current)?.focus());
+  };
   const current = visit.data?.identities.find((item) => item.id === visit.data?.decision.identity_id);
   const [photosOpen, setPhotosOpen] = useState(false);
-  const photos = usePhotos(photosOpen && current ? `/observations?identity_id=${encodeURIComponent(current.id)}` : null);
-  if (summary) return current ? <span className="notificationCardDesc">{current.name}</span> : null;
+  const photos = usePhotos(photosOpen && current ? `/observations?identity_id=${encodeURIComponent(current.id)}` : null, access);
+  if (summary) return current && !visit.checkingAccess ? <span className="notificationCardDesc">{current.name}</span> : null;
   if (visit.loading && !visit.data) return <p role="status">{t("loading")}</p>;
   if (visit.waiting) return <section className="identityGallery"><p role="status">{t("pending")}</p><button type="button" className="chipButton" onClick={changed}>{t("retry")}</button></section>;
   if (visit.error) return <section className="identityGallery"><ErrorMessage t={t} /></section>;
   if (!visit.data) return null;
   const detail = visit.data;
+  const checkingAccess = visit.checkingAccess || gallery.checkingAccess || photos.checkingAccess;
   const writable = detail.editable;
-  const candidates = detail.identities.filter((item) => detail.decision.candidate_ids.includes(item.id));
-  return <section className="identityGallery" aria-label={t("title")}><style>{styles}</style>
-    <div className="identityToolbar">{detail.observations[0] && <button type="button" className="identityPhotoButton" aria-label={t("viewPhoto")} ref={photoButton} onClick={() => setInspecting(detail.observations[0].id)}><Photo observation={detail.observations[0]} portrait t={t} /></button>}<div><h3>{current?.name || t(detail.decision.status)}</h3>{current && <p className="identityMuted">{t(detail.decision.reason === "confirmed" ? "identifiedBadge" : "automaticAssociation")}</p>}{detail.decision.reason === "calibration_required" && <p className="identityMuted">{t("calibration_required")}</p>}</div></div>
+  const candidates = detail.decision.candidate_ids.flatMap(id => detail.identities.filter(item => item.id === id));
+  const labels = profileLabels(candidates, t, "namesakeSuggestion");
+  return <section className="identityGallery" style={checkingAccess ? { display: "none" } : undefined} aria-label={t("title")}><style>{styles}</style>
+    <div className="identityToolbar">{detail.observations[0] && <button type="button" className="identityPhotoButton" aria-label={t("viewPhoto")} ref={photoButton} onClick={() => setInspecting(detail.observations[0].id)}><Photo observation={detail.observations[0]} portrait t={t} /></button>}<div><h3>{current?.name || t(detail.decision.status === "suggested" ? `suggested_${detail.species}` : detail.decision.status)}</h3>{current && <p className="identityMuted">{t(detail.decision.reason === "confirmed" ? "identifiedBadge" : "automaticAssociation")}</p>}{detail.decision.reason === "calibration_required" && <p className="identityMuted">{t("calibration_required")}</p>}</div></div>
     {inspecting && <PhotoInspector observation={{ id: inspecting }} t={t} onClose={() => { setInspecting(null); requestAnimationFrame(() => photoButton.current?.focus()); }} />}
     {error && <ErrorMessage t={t} message={error} />}
     {!writable && detail.observations.length > 0 && <p className="identityMuted">{t("readOnly")}</p>}
-    {editing && writable ? gallery.error ? <ErrorMessage t={t} /> : !gallery.data ? <p role="status">{t("loading")}</p> : <Editor species={detail.species} observations={detail.observations} identities={gallery.data.identities} revision={detail.revision} t={t} onClose={close} initialIdentity={current?.id} /> : <>
-      {candidates.length > 0 && <div><p className="identityMuted">{t("suggestions")}</p>{candidates.map((item) => <div className="identityToolbar" key={item.id}><span>{item.name}</span><button type="button" className="chipButton" disabled={busy || !writable} onClick={(event) => { const trigger = event.currentTarget; void run("/curation", { action: "reject", expected_revision: detail.revision, values: { identity_id: item.id, observation_ids: detail.observations.map((sample) => sample.id) } }).then((saved) => { requestAnimationFrame(() => { if (document.activeElement === trigger || document.activeElement === document.body) (saved ? button.current : trigger)?.focus(); }); }); }}>{t("reject")}</button></div>)}</div>}
-      {detail.observations.length > 0 && <div className="identityActions"><button className="chipButton" type="button" ref={button} disabled={!writable || busy} onClick={() => setEditing(true)}>{t(current ? "correct" : "identify")}</button></div>}
+    {editing && writable ? gallery.error ? <ErrorMessage t={t} /> : !gallery.data ? <p role="status">{t("loading")}</p> : <Editor reviewed={editing} candidateLabels={labels} species={detail.species} observations={detail.observations} identities={gallery.data.identities} revision={detail.revision} t={t} onClose={close} initialIdentity={chosenCandidate.current || current?.id} /> : <>
+      {candidates.length > 0 && <div className="identitySuggestions">
+        <p className="identityMuted">{t("suggestions")}</p>
+        {candidates.map(item => {
+          const label = labels.get(item.id)!;
+          const content = <>{item.representative_id && <Photo observation={{ id: item.representative_id }} portrait t={t} />}<span className="identityName">{label}</span></>;
+          return <div className="identityToolbar" key={item.id}>
+            {writable ? <>
+              <button type="button" className="chipButton identityCandidate" ref={chosenCandidate.current === item.id ? choiceButton : undefined}
+                aria-label={t("chooseCandidate", { name: label })} disabled={busy} onClick={() => edit(item.id)}>{content}</button>
+              <button type="button" className="chipButton" aria-label={t("rejectCandidate", { name: label })} disabled={busy} onClick={event => {
+                const trigger = event.currentTarget;
+                void run("/curation", { action: "reject", expected_revision: detail.revision, values: { identity_id: item.id,
+                  observation_ids: detail.observations.map(sample => sample.id) } }).then(saved => requestAnimationFrame(() => {
+                  if (document.activeElement === trigger || document.activeElement === document.body) (saved ? button.current : trigger)?.focus();
+                }));
+              }}>{t("dismiss")}</button>
+            </> : <div className="identityCandidate">{content}</div>}
+          </div>;
+        })}
+      </div>}
+      {detail.observations.length > 0 && <div className="identityActions"><button className="chipButton" type="button" ref={button} disabled={!writable || busy} onClick={() => edit()}>{t(current ? "correct" : candidates.length ? "chooseOther" : "identify")}</button></div>}
       {current && <>
         {ui?.openNotificationHistory && <button className="chipButton" type="button" onClick={() => ui.openNotificationHistory!({ id: "com.toposync.vision.identities", value: `recognized:${current.id}` }, notification.id)}>{t("viewEvents")}</button>}
         <details open={photosOpen} onToggle={event => setPhotosOpen(event.currentTarget.open)}><summary>{t("associatedPhotos")}</summary>

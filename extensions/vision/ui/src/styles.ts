@@ -1,6 +1,9 @@
 export const styles = `
 .identityGallery {display:grid;gap:16px;min-width:0;color:var(--text)}
 .identityGallery h3,.identityGallery p {margin:0}.identityGallery p {line-height:1.5}
+.identityGallery .identitySuggestions {display:grid;gap:8px}
+.identityGallery .identityCandidate {display:flex;align-items:center;gap:8px;text-align:left;flex:1 1 140px;min-width:0;padding:4px 12px 4px 5px}
+.identityGallery .identityCandidate .identityPortrait {width:40px;height:40px;border-radius:8px;flex:none}
 .identityGallery .identityMuted {color:var(--muted);font-size:13px}
 .identityGallery .identityToolbar {display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .identityGallery .identityToolbar input:not([type=checkbox]):not([type=radio]) {flex:1;min-width:150px}

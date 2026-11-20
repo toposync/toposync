@@ -192,7 +192,7 @@ function profileLabels(profiles: Identity[], t: Translate, namesakeKey = "namesa
   });
   return labels;
 }
-type ReviewedSelection = { revision: number; observationIds: string[] };
+type ReviewedSelection = { revision: number; observationIds: string[]; suggestedIdentity?: string };
 function reviewedSelection(revision: number, observations: Observation[]): ReviewedSelection {
   return { revision, observationIds: observations.map(item => item.id).sort() };
 }
@@ -209,8 +209,10 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
   const [reference, setReference] = useState(false);
   const canAddReference = observations.some(item => item.eligible && !(mode === "existing" && item.reference && item.identity_id === identity));
   const { observationIds } = reviewedSelection(revision, observations);
-  const [draft] = useState(() => reviewed ?? { revision, observationIds });
-  const stale = revision !== draft.revision || observationIds.length !== draft.observationIds.length
+  const [draft] = useState<ReviewedSelection>(() => reviewed ?? { revision, observationIds });
+  const confirmingSuggestion = mode === "existing" && identity === draft.suggestedIdentity;
+  const suggestionWithdrawn = confirmingSuggestion && !candidateLabels?.has(identity);
+  const stale = suggestionWithdrawn || revision !== draft.revision || observationIds.length !== draft.observationIds.length
     || observationIds.some((id, index) => id !== draft.observationIds[index]);
   const canSave = !stale && (mode === "new" ? Boolean(name.trim()) : matching.some((item) => item.id === identity));
   const { busy, error, run } = useMutation();
@@ -219,7 +221,7 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
   return <form className="identityForm" onSubmit={(event) => {
     event.preventDefault();
     if (!canSave || busy) return;
-    void run("/curation", { action: "identify", expected_revision: draft.revision, values: { species, observation_ids: draft.observationIds, ...(mode === "new" ? { name: name.trim() } : { identity_id: identity }), use_as_reference: canAddReference && reference } }).then((saved) => { if (saved) onClose(true); });
+    void run("/curation", { action: "identify", expected_revision: draft.revision, values: { species, observation_ids: draft.observationIds, ...(confirmingSuggestion ? { require_current_suggestion: true } : {}), ...(mode === "new" ? { name: name.trim() } : { identity_id: identity }), use_as_reference: canAddReference && reference } }).then((saved) => { if (saved) onClose(true); });
   }}>
     <h3 tabIndex={-1} ref={title}>{t("who")}</h3><p className="identityMuted">{t("selection", { count: observations.length })}</p>
     <fieldset disabled={busy}>
@@ -238,7 +240,7 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
       <label><input type="radio" checked={mode === "new"} onChange={() => { setMode("new"); setReference(false); }} />{t("create")}</label>
       {mode === "new" && <label className="identityField">{t("name")}<input maxLength={120} required value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" /></label>}
       <label><input type="checkbox" disabled={!canAddReference} checked={canAddReference && reference} onChange={(event) => setReference(event.target.checked)} />{t("reference")}</label><p className="identityMuted">{t("referenceHelp")}</p>
-      {stale ? <ErrorMessage t={t} message="conflict" onRetry={() => { onClose(); changed(); }} /> : error && <ErrorMessage t={t} message={error} />}
+      {stale ? <ErrorMessage t={t} message={suggestionWithdrawn ? "suggestionWithdrawn" : "conflict"} onRetry={() => { onClose(); changed(); }} /> : error && <ErrorMessage t={t} message={error} />}
       <div className="identityActions"><button className="chipButton" type="button" onClick={() => onClose()}>{t("cancel")}</button><button className="primaryButton" type="submit" disabled={!canSave}>{t(busy ? "saving" : "save")}</button></div>
     </fieldset>
   </form>;
@@ -308,7 +310,7 @@ function IndividualIdentity({ notification, i18n, ui, summary = false, selectedO
   const edit = (candidate = "") => {
     if (!visit.data) return;
     chosenCandidate.current = candidate;
-    setEditing(reviewedSelection(visit.data.revision, visit.data.observations));
+    setEditing({ ...reviewedSelection(visit.data.revision, visit.data.observations), suggestedIdentity: candidate || undefined });
   };
   const close = (saved = false) => {
     setEditing(null);

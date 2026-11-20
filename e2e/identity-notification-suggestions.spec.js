@@ -7,13 +7,14 @@ test("choosing a namesake suggestion opens a draft tied to the reviewed visit", 
   const identities = [1, 2, 3].map(index => ({ id: String(index), name: "Nina", species: "cat", references: index,
     representative_id: null, occurrences: index }));
   let revision = 1;
+  let candidateIds = ["2", "1"];
   let submissions = 0;
   await page.route(/\/api\/notifications(?:\?.*)?$/, route => route.fulfill({ json: { notifications: [notification], next_cursor: null } }));
   await page.route("**/api/notifications/suggestion-notice", route => route.fulfill({ json: notification }));
   await page.route("**/api/vision/identities", route => route.fulfill({ json: { identities, revision, permissions: { curate: true } } }));
   await page.route("**/api/vision/identities/occurrences/suggestion-visit", route => route.fulfill({ json: {
     id: "suggestion-visit", closed: true, species: "cat", revision, identities: identities.slice(0, 2), editable: true,
-    decision: { identity_id: null, status: "suggested", candidate_ids: ["2", "1"] },
+    decision: { identity_id: null, status: "suggested", candidate_ids: candidateIds },
     observations: [{ id: "photo", editable: true, eligible: true, reference: false, confirmed: false }],
   } }));
   await page.route("**/api/vision/identities/curation", route => {
@@ -42,6 +43,15 @@ test("choosing a namesake suggestion opens a draft tied to the reviewed visit", 
   await expect(suggestions.first()).toBeFocused();
   await suggestions.first().press("Enter");
   const save = form.getByRole("button", { name: "Salvar" });
+  await expect(save).toBeEnabled();
+  candidateIds = ["1"];
+  await page.evaluate(() => { window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus")); });
+  await expect(form.getByRole("alert")).toContainText("Esse perfil deixou de ser sugerido");
+  await expect(save).toBeDisabled();
+  await form.evaluate(element => element.requestSubmit());
+  expect(submissions).toBe(0);
+  await form.getByRole("button", { name: "Cancelar" }).press("Enter");
+  await suggestions.first().press("Enter");
   await expect(save).toBeEnabled();
   revision++;
   await page.evaluate(() => { window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus")); });

@@ -395,6 +395,76 @@ def test_close_before_first_evidence_is_a_persistent_tombstone(tmp_path):
         store.close()
 
 
+@pytest.mark.parametrize(("automatic", "reject_leader"), [(False, True), (True, True), (True, False)])
+def test_reject_one_candidate_preserves_other_choices_on_closed_visit(store, tmp_path, automatic, reject_leader):
+    leader, _, _ = enroll(store)
+    other, _, _ = enroll(store, name="Bruno", event="other-reference", vector=[.8, .6] + [0] * 14)
+    initial = store.observe(evidence("visit"), policy(automatic=automatic))
+    assert initial.candidate_ids == (leader, other)
+    store.close_occurrence("visit")
+    rejected, remaining = (leader, other) if reject_leader else (other, leader)
+    operation = curate(store, "reject", {"identity_id": rejected, "observation_ids": [initial.observation_id]})
+    reopened = IdentityStore(tmp_path, scope="installation:authorized-camera")
+    try:
+        current = reopened.decision("visit")
+        assert current.candidate_ids == (remaining,)
+        if automatic and not reject_leader:
+            assert (current.identity_id, current.status, current.provenance) == (leader, "recognized", "automatic")
+        else:
+            assert current.status == "suggested" and current.identity_id is None
+        assert reopened.occurrence_details("visit")["closed"]
+        reopened.undo(operation["operation_id"], expected_revision=reopened.revision)
+        assert reopened.decision("visit").candidate_ids == initial.candidate_ids
+        assert reopened.decision("visit").identity_id == initial.identity_id
+    finally:
+        reopened.close()
+
+
+def test_undo_rejection_keeps_expired_decision_and_original_photo_attributions(store):
+    leader, _, _ = enroll(store)
+    other, _, _ = enroll(store, name="Bruno", event="B", vector=[.8, .6] + [0] * 14)
+    unrecognized = store.observe(evidence("visit", vector=[0, 0, 1] + [0] * 13), policy())
+    initial = store.observe(evidence("visit", capture="next", observed_at=2), policy())
+    assert initial.identity_id == leader and unrecognized.identity_id is None
+    curate(store, "create", {"name": "Outro", "species": "person"})
+    assert initial.gallery_revision < store.revision
+    op = curate(store, "reject", {"observation_ids": [initial.observation_id], "identity_id": other})
+    store.undo(op["operation_id"], expected_revision=store.revision)
+    restored = store.decision("visit")
+    assert restored.gallery_revision == initial.gallery_revision
+    observations = {r["id"]: r["identity_id"] for r in store.occurrence_details("visit")["observations"]}
+    assert observations == {initial.observation_id: leader, unrecognized.observation_id: None}
+
+
+def test_undo_rejection_conflicts_with_new_candidate_evidence(store):
+    leader, _, _ = enroll(store)
+    enroll(store, name="Bruno", event="B", vector=[.8, .6] + [0] * 14)
+    third, _, _ = enroll(store, name="C", event="C", vector=[0, 0, 1] + [0] * 13)
+    initial = store.observe(evidence("visit"), policy(automatic=False))
+    op = curate(store, "reject", {"observation_ids": [initial.observation_id], "identity_id": leader})
+    latest = store.observe(evidence("visit", capture="new", observed_at=2, vector=[0, 0, 1] + [0] * 13), policy(automatic=False))
+    assert latest.candidate_ids == (third,)
+    with pytest.raises(IdentityConflict):
+        store.undo(op["operation_id"], expected_revision=store.revision)
+    assert store.decision("visit") == latest
+
+
+def test_withdrawn_suggestion_requires_manual_choice(store):
+    identity, _, _ = enroll(store)
+    initial = store.observe(evidence("visit"), policy(automatic=False))
+    assert initial.candidate_ids == (identity,)
+    values = {"observation_ids": [initial.observation_id], "identity_id": identity}
+    revision = store.revision
+    store.no_evidence("visit", observed_at=2, status="unobservable", reason="original_frame_required")
+    store.close_occurrence("visit")
+    assert store.revision == revision
+    with pytest.raises(IdentityConflict):
+        curate(store, "identify", {**values, "require_current_suggestion": True})
+    assert store.revision == revision and store.decision("visit").identity_id is None
+    curate(store, "identify", values)
+    assert store.decision("visit").provenance == "human"
+
+
 def test_negative_candidate_feedback_allows_a_different_identity(store):
     first, _, _ = enroll(store)
     second, _, _ = enroll(store, name="Bruno", event="other-reference", vector=[0, 1] + [0] * 14)

@@ -1644,6 +1644,11 @@ class IdentityStore:
                 if action in {"assign", "reject"}
                 else None
             )
+            if values.get("require_current_suggestion"):
+                for occurrence_id in {row["occurrence_id"] for row in observations}:
+                    current = self.decision(occurrence_id)
+                    if current is None or identity["id"] not in current.candidate_ids:
+                        raise IdentityConflict("suggestion changed; reload before confirming")
             for row in observations:
                 if identity and identity["species"] != row["species"]:
                     raise ValueError("identity species does not match observation")
@@ -1689,24 +1694,26 @@ class IdentityStore:
             if action == "reject":
                 for occurrence_id in affected:
                     current = self._stored_decision(occurrence_id)
-                    if current and (
-                        current.identity_id == identity["id"] or current.identity_id is None
-                    ):
-                        updated = current.model_copy(
-                            update={
-                                "status": "unknown",
-                                "identity_id": None,
-                                "candidate_ids": (),
-                                "provenance": "none",
-                                "reason": "candidate_rejected",
-                                "revision": current.revision + 1,
-                                "gallery_revision": revision,
-                            }
+                    rejected = identity["id"]
+                    if not current or (current.identity_id != rejected and rejected not in current.candidate_ids):
+                        continue
+                    remaining = tuple(item for item in current.candidate_ids if item != rejected)
+                    updates = {"candidate_ids": remaining, "revision": current.revision + 1}
+                    # Removing an alternative cannot renew an expired automatic decision.
+                    if current.gallery_revision == self.revision:
+                        updates["gallery_revision"] = revision
+                    if current.identity_id == rejected or current.status == "suggested":
+                        updates.update(
+                            status="suggested" if remaining else "unknown",
+                            identity_id=None,
+                            provenance="none",
+                            reason="confirmation_required" if remaining else "candidate_rejected",
                         )
-                        connection.execute(
-                            "UPDATE occurrence SET decision=? WHERE id=?",
-                            (self._seal(updated.model_dump()), occurrence_id),
-                        )
+                    updated = current.model_copy(update=updates)
+                    connection.execute(
+                        "UPDATE occurrence SET decision=? WHERE id=?",
+                        (self._seal(updated.model_dump()), occurrence_id),
+                    )
             elif action != "reference":
                 self._refresh_decisions(connection, affected, revision)
             return {"observation_ids": observation_ids}
@@ -1791,6 +1798,7 @@ class IdentityStore:
                 or latest_edit[0] != operation_id
             ):
                 raise IdentityConflict("later edits prevent this undo; review the newer changes")
+            undo_rejection = row["action"] == "reject"
             changes = self._open(row["changes"])
             for pair in changes.get("observation", []):
                 for value in pair:
@@ -1806,6 +1814,8 @@ class IdentityStore:
                                 (row for row in state[table] if row["id"] == new["id"]), None
                             )
                             controlled = ("identity_id", "status", "provenance", "reason")
+                            if undo_rejection:
+                                controlled += ("candidate_ids", "observation_id", "evidence_at", "policy_fingerprint", "embedding_space")
                             expected = self._open(base64.b64decode(new["decision"]))
                             latest = (
                                 self._open(base64.b64decode(actual["decision"])) if actual else {}
@@ -1850,10 +1860,13 @@ class IdentityStore:
                             self._open(base64.b64decode(old["decision"]))
                         )
                         latest = self._stored_decision(old["id"])
+                        restored_revision = expected_revision + 1
+                        if undo_rejection and restored.gallery_revision != row["revision"] - 1:
+                            restored_revision = restored.gallery_revision
                         restored = restored.model_copy(
                             update={
                                 "revision": latest.revision + 1,
-                                "gallery_revision": expected_revision + 1,
+                                "gallery_revision": restored_revision,
                                 "observation_id": latest.observation_id,
                             }
                         )
@@ -1861,6 +1874,9 @@ class IdentityStore:
                             "UPDATE occurrence SET decision=? WHERE id=?",
                             (self._seal(restored.model_dump()), old["id"]),
                         )
+                        # Reject restores precisely the observation rows captured in feedback.
+                        if undo_rejection:
+                            continue
                         # New frames are retained but their unconfirmed attribution follows the restored decision.
                         connection.execute(
                             "UPDATE observation SET identity_id=? WHERE occurrence_id=? AND confirmed=0",

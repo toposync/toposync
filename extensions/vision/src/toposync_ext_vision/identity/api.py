@@ -33,9 +33,12 @@ class IdentifyValues(_Values):
     name: DisplayName | None = None
     species: Literal["person", "cat", "dog"] | None = None
     use_as_reference: StrictBool = False
+    require_current_suggestion: StrictBool = False
 
     @model_validator(mode="after")
     def identity_or_name(self):
+        if self.require_current_suggestion and self.identity_id is None:
+            raise ValueError("a suggestion must identify an existing profile")
         if self.identity_id is None and (self.name is None or self.species is None):
             raise ValueError("new identity requires name and species")
         if self.identity_id is not None and self.name is not None:

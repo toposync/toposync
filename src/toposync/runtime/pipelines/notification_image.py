@@ -191,20 +191,24 @@ def build_ephemeral_notification_image(packet: Packet, input_artifact_name: str 
         from .operators_sinks import _encode_image_bytes
 
         expires_at = evidence["published_at"] * 1000 + MAX_IMAGE_AGE_SECONDS * 1000
-        blob, _extension, mime = _encode_image_bytes(pixels, fmt="jpg", jpeg_quality=80)
-        if encoded_mime is None and isinstance(blob, bytes) and len(blob) > MAX_IMAGE_BYTES:
-            now = time.time()
-            if not _number(now) or now < initial_now:
-                return None, "image_clock_skew"
-            if now * 1000 >= expires_at:
-                return None, "image_expired"
-            # One quality retry preserves the original frame dimensions and geometry.
-            blob, _extension, mime = _encode_image_bytes(pixels, fmt="jpg", jpeg_quality=65)
-        if not isinstance(blob, bytes) or len(blob) > MAX_IMAGE_BYTES:
-            return None, "image_byte_limit"
-        decoded_width, decoded_height, decoded_mime = _decode_dimensions(blob)
-        if (decoded_width, decoded_height, decoded_mime) != (width, height, mime):
-            return None, "image_encoding_invalid"
+        if encoded_mime is not None:
+            # These immutable bytes already passed full decode, size and geometry checks.
+            blob, mime = pixels, encoded_mime
+        else:
+            blob, _extension, mime = _encode_image_bytes(pixels, fmt="jpg", jpeg_quality=80)
+            if isinstance(blob, bytes) and len(blob) > MAX_IMAGE_BYTES:
+                now = time.time()
+                if not _number(now) or now < initial_now:
+                    return None, "image_clock_skew"
+                if now * 1000 >= expires_at:
+                    return None, "image_expired"
+                # One quality retry preserves the original frame dimensions and geometry.
+                blob, _extension, mime = _encode_image_bytes(pixels, fmt="jpg", jpeg_quality=65)
+            if not isinstance(blob, bytes) or len(blob) > MAX_IMAGE_BYTES:
+                return None, "image_byte_limit"
+            decoded_width, decoded_height, decoded_mime = _decode_dimensions(blob)
+            if (decoded_width, decoded_height, decoded_mime) != (width, height, mime):
+                return None, "image_encoding_invalid"
         now = time.time()
         if not _number(now) or now < initial_now:
             return None, "image_clock_skew"

@@ -92,7 +92,11 @@ def test_exact_artifact_encodes_decodable_jpeg_with_original_binding_without_mut
 
 
 @pytest.mark.parametrize("fmt,mime", [("PNG", "image/png"), ("JPEG", "image/jpeg"), ("WEBP", "image/webp")])
-def test_encoded_images_require_real_decode_and_preserve_permitted_mime(fmt, mime):
+def test_encoded_images_require_real_decode_and_preserve_permitted_mime(fmt, mime, monkeypatch):
+    from unittest.mock import Mock
+
+    decode = Mock(wraps=notification_image._decode_dimensions)
+    monkeypatch.setattr(notification_image, "_decode_dimensions", decode)
     value = packet()
     buffer = io.BytesIO()
     Image.new("RGB", (64, 48), (12, 30, 40)).save(buffer, format=fmt)
@@ -102,6 +106,7 @@ def test_encoded_images_require_real_decode_and_preserve_permitted_mime(fmt, mim
     assert reason == "ready"
     assert descriptor["mimeType"] == mime
     assert base64.b64decode(descriptor["dataBase64"]) == blob
+    decode.assert_called_once_with(blob)
 
 
 def test_explicit_artifact_only_no_fallback_to_other_pixels_or_file_reference():

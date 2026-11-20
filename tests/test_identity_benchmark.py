@@ -87,3 +87,59 @@ def test_two_sources_deliver_distinct_visits_to_shared_subscriber(tmp_path, monk
     assert failure["notification_callbacks"] == 36 and failure["notification_incomplete_visits"] == {}
     assert failure["notifications_created"] == failure["distinct_notifications"] == 1
     assert failure["recognition_incomplete_visits"] is None
+
+
+def test_seeded_gallery_measures_authorized_names_and_keeps_backup_intact(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import pytest
+    from PIL import Image
+    from scripts.identity import benchmark_pipeline as benchmark
+    from test_identity_store import enroll, evidence, policy
+    from toposync_ext_vision.identity import pipelines
+    from toposync_ext_vision.identity.store import IdentityStore
+
+    photos = []
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    source = IdentityStore(tmp_path / "seeds", scope="offline-load-fixture")
+    expected = {}
+    try:
+        for species in ("person", "cat", "dog"):
+            photo = tmp_path / f"{species}.png"
+            Image.new("RGB", (16, 16)).save(photo)
+            photos.append((species, photo.name, hashlib.sha256(photo.read_bytes()).hexdigest()))
+            expected[species], _, _ = enroll(source, event=species, species=species, name=species)
+            source.close_occurrence(species)
+        source.backup_to(fixture / "backup")
+    finally:
+        source.close()
+    backup = fixture / "backup/gallery.sqlite3"
+    digest = hashlib.sha256(backup.read_bytes()).hexdigest()
+    manifest = {"expected_identities": expected, "policies": [policy(s).model_dump() for s in expected]}
+    (fixture / "fixture.json").write_text(json.dumps(manifest))
+
+    async def extract(self, packet, context):
+        if packet.lifecycle == benchmark.Lifecycle.CLOSE:
+            return [packet]
+        sample = evidence(pipelines.occurrence_key(packet), species=packet.payload["subject"]["category"],
+                          capture=packet.packet_id, observed_at=benchmark.resolve_media_ts(packet))
+        sample = sample.model_copy(update={"camera_id": packet.payload["camera_id"]})
+        return [packet.with_artifact(benchmark.Artifact(name=pipelines.PRIVATE_EVIDENCE_ARTIFACT,
+            data=json.dumps({"evidence": sample.model_dump()}).encode(), private=True))]
+
+    monkeypatch.setattr(benchmark, "SOURCES", photos)
+    monkeypatch.setattr(pipelines.IdentityEvidenceRuntime, "process_packet", extract)
+    result = asyncio.run(benchmark.trial(tmp_path, tmp_path / "result", enabled=True, parallel=True,
+        sources=2, visits=3, interval=.05, gallery_fixture=fixture))
+    assert result["reference_identities_at_start"] == result["references_at_start"] == 3
+    assert result["usable_inference_observations_by_species"] == {"person": 8, "cat": 8, "dog": 8}
+    lookup = result["private_name_lookup"]
+    assert lookup["recognized_packet_outcomes"] == {"correct_name": 18}
+    assert lookup["visits_with_correct_name"] == lookup["visits_with_correct_name_at_close"] == 6
+    assert lookup["visits_with_wrong_name"] == 0 and lookup["visit_open_to_first_correct_name_p95_ms"] > 0
+    expected["dog"] = expected["cat"]
+    (fixture / "fixture.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="confirmed reference identity"):
+        asyncio.run(benchmark.trial(tmp_path, tmp_path / "invalid", enabled=False, visits=3, interval=.05, gallery_fixture=fixture))
+    assert hashlib.sha256(backup.read_bytes()).hexdigest() == digest

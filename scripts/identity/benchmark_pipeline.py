@@ -42,7 +42,9 @@ from toposync.runtime.pipelines import (
 )
 from toposync.runtime.pipelines.templates import build_pipeline_graph_v2
 from toposync.runtime.services import ServiceRegistry
-from toposync_ext_vision.identity.pipelines import register_identity_operators
+from toposync.runtime.pipelines.packet_contract import resolve_media_ts
+from toposync_ext_vision.identity.contracts import RecognitionPolicy, Species
+from toposync_ext_vision.identity.pipelines import read_identity_decision, register_identity_operators
 from toposync_ext_vision.identity.store import IdentityStore
 from scripts.identity.real_pipeline_smoke import SOURCES
 
@@ -53,6 +55,11 @@ class EmptyConfig(BaseModel):
 
 class SourceConfig(BaseModel):
     source_index: int = Field(default=0, ge=0, le=1)
+
+
+class GalleryFixture(BaseModel):
+    policies: list[RecognitionPolicy] = Field(min_length=1, max_length=16)
+    expected_identities: dict[Species, str]
 
 
 def worker_resources():
@@ -88,6 +95,7 @@ async def trial(
     vision_input: bool = False,
     published: bool = False,
     sources: int = 1,
+    gallery_fixture: Path | None = None,
 ) -> dict:
     if sources not in (1, 2):
         raise ValueError("benchmark supports one or two sources")
@@ -101,7 +109,26 @@ async def trial(
             frames[species] = np.asarray(image)
             if vision_input:
                 frames[species] = frames[species][:, :, ::-1].copy()
-    gallery = IdentityStore(output / "gallery", scope="offline-load-fixture")
+    fixture = None
+    if gallery_fixture is not None:
+        if enabled and not parallel:
+            raise ValueError("populated recognition trials require the parallel decision collector")
+        fixture = GalleryFixture.model_validate_json((gallery_fixture / "fixture.json").read_bytes())
+        gallery = IdentityStore.restore_backup(gallery_fixture / "backup", output / "gallery", scope="offline-load-fixture")
+    else:
+        gallery = IdentityStore(output / "gallery", scope="offline-load-fixture")
+    initial_profiles = {p["id"]: p for p in gallery.list_identities()}
+    if fixture and (
+        set(fixture.expected_identities) != set(frames)
+        or any(initial_profiles.get(key, {}).get("species") != species
+               or not initial_profiles[key]["references"] for species, key in fixture.expected_identities.items())
+    ):
+        gallery.close()
+        raise ValueError("fixture must have a confirmed reference identity per workload species")
+    closed_at_start = gallery._connection.execute("SELECT count(*) FROM occurrence WHERE closed=1").fetchone()[0]
+    last_seed_observation = gallery._connection.execute("SELECT coalesce(max(rowid), 0) FROM observation").fetchone()[0]
+    source_cameras = ["offline-load"] if sources == 1 else [f"offline-load-{index}" for index in range(sources)]
+    fixture_cameras = gallery.camera_ids().union(source_cameras) if fixture else set()
     publication = NotificationsRuntime(data_dir=output) if published else None
     subscriber = publication.broadcaster.subscribe() if publication else None
     notifications = publication.store if publication else NotificationStore(output / "notifications.sqlite3")
@@ -111,9 +138,14 @@ async def trial(
     completed, warmed, recognition_completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     recognition_lifecycles = []
     recognition_reasons = Counter()
+    first_correct_name_ms = {}
+    name_lookup_outcomes = Counter()
+    wrong_name_visits = set()
+    named_visits_at_close = set()
     measured_occurrences = set()
     recognition_latencies = []
     expected_evidence = Counter()
+    species_by_visit = {}
 
     warm_visits = 3 * sources
     warm_packets = 3 * warm_visits
@@ -145,13 +177,14 @@ async def trial(
             local_visit = sequence // 3
             visit = local_visit * sources + self.source_index
             species = SOURCES[(local_visit + self.source_index) % len(SOURCES)][0]
-            camera = "offline-load" if sources == 1 else f"offline-load-{self.source_index}"
+            camera = source_cameras[self.source_index]
             phase = (Lifecycle.OPEN, Lifecycle.UPDATE, Lifecycle.CLOSE)[sequence % 3]
             packet_key = (f"load-{visit}", phase.value)
             planned[packet_key] = self.deadline
             sent[packet_key] = time.perf_counter()
             if visit >= warm_visits:
                 if phase == Lifecycle.OPEN:
+                    species_by_visit[visit] = species
                     expected_evidence[camera, species] += 1
                 emission_lateness.append((sent[packet_key] - self.deadline) * 1000)
             payload = {
@@ -232,13 +265,36 @@ async def trial(
         async def process_packet(self, value, context):
             visit = value.payload["benchmark_visit"]
             key = (f"load-{visit}", value.lifecycle.value)
-            recognition_lifecycles.append(key)
             if visit >= warm_visits:
                 summary = value.payload["recognition"]
                 recognition_reasons[summary["reason"]] += 1
                 recognition_latencies.append((time.perf_counter() - sent[key]) * 1000)
                 if summary.get("occurrence_id"):
                     measured_occurrences.add(summary["occurrence_id"])
+                if fixture and summary["status"] == "recognized":
+                    decision = await read_identity_decision(value, services)
+                    outcome = "decision_unavailable"
+                    if decision and decision.identity_id:
+                        outcome = "name_unavailable"
+                        inspected = await asyncio.to_thread(
+                            gallery.inspection_identity, decision.occurrence_id,
+                            decision_revision=decision.revision, observed_at=resolve_media_ts(value),
+                            camera_id=value.payload["camera_id"],
+                            authorize_cameras=lambda cameras: set(cameras).issubset(fixture_cameras),
+                        )
+                        if inspected and inspected.get("name"):
+                            species = species_by_visit[visit]
+                            expected_id = fixture.expected_identities[species]
+                            if decision.identity_id == expected_id and inspected["name"] == initial_profiles[expected_id]["name"]:
+                                outcome = "correct_name"
+                                first_correct_name_ms.setdefault(visit, (time.perf_counter() - sent[(key[0], "open")]) * 1000)
+                                if value.lifecycle == Lifecycle.CLOSE:
+                                    named_visits_at_close.add(visit)
+                            else:
+                                outcome = "wrong_name"
+                                wrong_name_visits.add(visit)
+                    name_lookup_outcomes[outcome] += 1
+            recognition_lifecycles.append(key)
             check_warmup()
             if len(recognition_lifecycles) == total_packets:
                 recognition_completed.set()
@@ -289,7 +345,7 @@ async def trial(
                 {
                     "id": "resolve",
                     "operator": "vision.recognize_identity",
-                    "config": {"enabled": True},
+                    "config": {"enabled": True, "policies": [p.model_dump() for p in fixture.policies] if fixture else []},
                 },
             ]
         )
@@ -385,7 +441,7 @@ async def trial(
             closed_count = gallery._connection.execute(
                 "SELECT count(*) FROM occurrence WHERE closed=1"
             ).fetchone()[0]
-            assert closed_count == measured_visits + warm_visits
+            assert closed_count - closed_at_start == measured_visits + warm_visits
             assert len(measured_occurrences) == measured_visits
             placeholders = ",".join("?" for _ in measured_occurrences)
             measured_visits_with_evidence = {
@@ -410,7 +466,8 @@ async def trial(
         evidence_counts = {
             row[0]: row[1]
             for row in gallery._connection.execute(
-                "SELECT species,count(*) FROM observation WHERE eligible=1 GROUP BY species"
+                "SELECT species,count(*) FROM observation WHERE eligible=1 AND rowid>? GROUP BY species",
+                (last_seed_observation,),
             )
         }
         assert len(lifecycles) == total_packets and len(latencies) == measured_visits * 3
@@ -440,7 +497,7 @@ async def trial(
         (output / "failure.json").write_text(
             json.dumps(
                 {
-                    "instrument_version": 5,
+                    "instrument_version": 6,
                     "error_type": type(error).__name__,
                     "expected_packets": total_packets,
                     "measured_evidence_expected": {f"{camera}/{species}": count for (camera, species), count in expected_evidence.items()},
@@ -482,7 +539,7 @@ async def trial(
             rates[label] = (len(times) - 1) / (max(times) - min(times))
         actual_rates.append(rates)
     return {
-        "instrument_version": 5,
+        "instrument_version": 6,
         "notification_execution": "NotificationsRuntime.upsert with subscribed JSON consumer" if published else "asyncio.to_thread, matching NotificationsRuntime.upsert",
         "notification_limit": "Includes public projection, broadcaster and JSON consumption; excludes HTTP/browser delivery" if published else "Store persistence only; excludes public projection and broadcaster",
         "identity_enabled": enabled,
@@ -507,7 +564,17 @@ async def trial(
         "detector_providers": detector_providers,
         "measured_visits": measured_visits,
         "measured_visits_per_source": visits,
-        "reference_identities_at_start": 0,
+        "reference_identities_at_start": sum(profile["references"] > 0 for profile in initial_profiles.values()),
+        "references_at_start": sum(profile["references"] for profile in initial_profiles.values()),
+        "private_name_lookup": {
+            "recognized_packet_outcomes": dict(name_lookup_outcomes),
+            "visits_with_correct_name": len(first_correct_name_ms),
+            "visits_with_wrong_name": len(wrong_name_visits),
+            "visits_with_correct_name_at_close": len(named_visits_at_close),
+            "visit_open_to_first_correct_name_p95_ms": (
+                float(np.percentile(list(first_correct_name_ms.values()), 95)) if first_correct_name_ms else None
+            ),
+        } if fixture and parallel else None,
         "measured_packets": len(latencies),
         "offered_packets_per_second": sources / interval,
         "interval_seconds": interval,
@@ -584,6 +651,7 @@ def main():
     parser.add_argument("--photos-dir", required=True, type=Path)
     parser.add_argument("--model-data-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--gallery-fixture", type=Path, help="Trusted offline fixture with backup/ and fixture.json")
     parser.add_argument("--enabled", action="store_true")
     parser.add_argument("--published", action="store_true", help="Measure real notification publication and subscribed JSON consumption")
     parser.add_argument("--vision-input", action="store_true", help="Detect and track public frames instead of preassigning subjects")
@@ -619,6 +687,7 @@ def main():
             published=args.published,
             visits=args.visits,
             sources=args.sources,
+            gallery_fixture=args.gallery_fixture,
             interval=args.interval,
         )
     )

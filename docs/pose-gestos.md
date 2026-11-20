@@ -107,6 +107,8 @@ inalterado e não é distribuído com o produto.
 
 Geometria métrica usa metros e eixos `x_y_up_z`. A saída tridimensional relativa ao quadril do modelo não é, sozinha, uma coordenada do mapa. Apontamento requer alinhamento geométrico, escala, translação, reprojeção compatível, apoio condicional atual e calibração correspondente. Paredes usadas como oclusores/alvos precisam de altura física explícita; a altura visual do tema não é uma medida.
 
+No modo automático, se dois braços atenderem à geometria, um único gesto de apontamento ativo pode indicar o lado. O gesto deve ter evidência atual para o mesmo sujeito, câmera, fluxo e instante. Use o operador de gestos em modo de anotação antes do apontamento para habilitar essa escolha. O raio continua dependendo da pose 3D. Quando falta evidência para desempatar, o operador informa ambiguidade.
+
 `CLOSE`, idade excessiva, mudança de vista/calibração, troca de geração de captura ou identidade invalidam derivados. Consumidores devem expirar o que mostram sem renovar o prazo ao renderizar, receber novamente ou abrir uma notificação antiga. Não sobreponha uma pose à última miniatura disponível sem comprovar que imagem, captura e transformações correspondem.
 
 Na execução por servidor de processamento, perder a conexão encerra as observações

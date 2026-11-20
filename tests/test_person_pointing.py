@@ -18,7 +18,9 @@ from toposync.runtime.config_store import (
 from toposync.runtime.pipelines.execution import PipelineRuntimeDependencies
 from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from toposync.runtime.pipelines.image_geometry import image_geometry
-from toposync_ext_cameras.pipelines.pointing import PointingTargetRuntime, _check_image_axes
+from toposync_ext_cameras.pipelines.pointing import (
+    PointingTargetRuntime, _check_image_axes, _current_gesture_arm,
+)
 from toposync_ext_cameras.processing.person_pointing import align_pose, pointing_ray, select_target
 from test_metric_camera import known_camera
 from test_person_ground import mapping_config
@@ -100,6 +102,52 @@ def volume(identifier="target", x=2.0, z=0.0):
         position={"x": x, "y": 0, "z": z},
         props={"size": {"x": 0.3, "y": 1.8, "z": 0.3}, "scale": 1.0},
     )
+
+
+def test_gesture_side_only_resolves_two_geometrically_valid_arms():
+    world = {
+        f"{side}_{joint}": np.array([sign * x, 1.4, 0.0])
+        for side, sign in (("left", -1), ("right", 1))
+        for joint, x in (("shoulder", .22), ("elbow", .50), ("wrist", .80))
+    }
+    with pytest.raises(ValueError, match="pointing_arm_ambiguous"):
+        pointing_ray(world, "auto")
+    assert pointing_ray(world, "auto", preferred_side="right")[0] == "right"
+    assert pointing_ray(world, "left", preferred_side="right")[0] == "left"
+    del world["right_elbow"]
+    assert pointing_ray(world, "auto", preferred_side="right")[0] == "left"
+    del world["left_elbow"]
+    with pytest.raises(ValueError, match="extended_arm_required"):
+        pointing_ray(world, "auto", preferred_side="right")
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (lambda gesture: None, "right"),
+        (lambda gesture: gesture.update(actor_subject_id="other"), None),
+        (lambda gesture: gesture.update(camera_id="other"), None),
+        (lambda gesture: gesture.update(source_stream_id="other"), None),
+        (lambda gesture: gesture.update(frame_ts=.9), None),
+        (lambda gesture: gesture.update(frame_ts=float("nan")), None),
+        (lambda gesture: gesture.update(schema_version=True), None),
+        (lambda gesture: gesture.update(status="unknown"), None),
+        (lambda gesture: gesture["active"][0].update(evidence_current=False), None),
+        (lambda gesture: gesture["side_evidence"]["right"].update(status="unknown"), None),
+        (lambda gesture: gesture["active"].append({**gesture["active"][0], "side": "left"}), None),
+    ],
+)
+def test_gesture_arm_requires_current_evidence_for_the_same_subject_and_source(change, expected):
+    gesture = {
+        "schema_version": 1, "status": "active", "coordinate_basis": "body_relative_2d",
+        "actor_subject_id": "person", "camera_id": "camera", "source_stream_id": "stream",
+        "frame_ts": 1.0, "side_evidence": {"right": {"status": "available"}},
+        "active": [{"name": "pointing_candidate", "side": "right", "evidence": "heuristic_2d",
+                    "evidence_current": True}],
+    }
+    change(gesture)
+    assert _current_gesture_arm(gesture, actor="person", camera="camera", stream="stream",
+                                timestamp=1.0) == expected
 
 
 def test_closed_pointing_subject_cannot_reopen_but_new_identity_can(tmp_path):

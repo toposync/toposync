@@ -29,6 +29,39 @@ class PointingTargetConfig(BaseModel):
     maximum_frame_age_ms: float = Field(default=750, gt=0, le=5000)
 
 
+def _current_gesture_arm(gesture, *, actor, camera, stream, timestamp):
+    if not isinstance(gesture, dict) or (
+        type(gesture.get("schema_version")) is not int
+        or gesture["schema_version"] != 1
+        or gesture.get("status") != "active"
+        or gesture.get("coordinate_basis") != "body_relative_2d"
+        or gesture.get("actor_subject_id") != actor
+        or gesture.get("camera_id") != camera
+        or gesture.get("source_stream_id") != stream
+    ):
+        return None
+    captured_at = gesture.get("frame_ts")
+    active, evidence = gesture.get("active"), gesture.get("side_evidence")
+    if (
+        type(captured_at) not in (int, float)
+        or not timestamp - 0.001 <= captured_at <= timestamp + 0.001
+        or not isinstance(active, list)
+        or not isinstance(evidence, dict)
+    ):
+        return None
+    sides = {
+        item["side"] for item in active
+        if isinstance(item, dict) and item.get("name") == "pointing_candidate"
+        and item.get("side") in ("left", "right")
+        and item.get("evidence") == "heuristic_2d" and item.get("evidence_current") is True
+    }
+    if len(sides) != 1:
+        return None
+    side = sides.pop()
+    side_evidence = evidence.get(side)
+    return side if isinstance(side_evidence, dict) and side_evidence.get("status") == "available" else None
+
+
 def _check_current_calibration(composition, record, camera, packet):
     # Reuse the mapping parser and scope rules; do not invent an entity catalog.
     from .postprocess import (
@@ -233,7 +266,11 @@ class PointingTargetRuntime(TransformOperatorRuntime):
                 self.config.minimum_model_score,
                 self.config.maximum_reprojection_error,
             )
-            side, origin, direction = pointing_ray(world, self.config.arm)
+            preferred_arm = _current_gesture_arm(
+                vision.get("gestures"), actor=actor, camera=camera_id, stream=source_stream,
+                timestamp=timestamp,
+            ) if self.config.arm == "auto" else None
+            side, origin, direction = pointing_ray(world, self.config.arm, preferred_side=preferred_arm)
             selection = select_target(
                 composition,
                 origin,

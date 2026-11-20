@@ -195,7 +195,7 @@ def align_pose(
     }
 
 
-def pointing_ray(world: dict, side: str):
+def pointing_ray(world: dict, side: str, *, preferred_side: str | None = None):
     candidates = []
     for current in ("left", "right") if side == "auto" else (side,):
         names = [f"{current}_{joint}" for joint in ("shoulder", "elbow", "wrist")]
@@ -211,6 +211,8 @@ def pointing_ray(world: dict, side: str):
         ):
             continue
         candidates.append((current, wrist, lower / lengths[1]))
+    if len(candidates) > 1 and preferred_side in ("left", "right"):
+        candidates = [candidate for candidate in candidates if candidate[0] == preferred_side]
     if len(candidates) != 1:
         raise ValueError("pointing_arm_ambiguous" if candidates else "extended_arm_required")
     return candidates[0]

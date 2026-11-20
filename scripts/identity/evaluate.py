@@ -196,6 +196,9 @@ def summarize(rows: list[dict], coverage_target: float) -> dict:
         "accepted_coverage_all_visits": accepted / len(rows) if rows else None,
         "nominal_known_visits": len(nominal),
         "nominal_correct_coverage": coverage,
+        "nominal_closed_correct_coverage": (
+            sum(row["closed_correct"] for row in nominal) / len(nominal) if nominal else None
+        ),
         "nominal_coverage_target": coverage_target,
         "accepted_identity_switches": sum(row["switches"] for row in rows),
         "final_states": dict(Counter(row["final_status"] for row in rows)),
@@ -271,6 +274,7 @@ def evaluate(protocol: Protocol, root: Path, output: Path, split: str) -> dict:
                 has_usable_evidence = False
                 inference_unavailable = False
                 started = time.perf_counter()
+                policy = None if visit.split == "enrollment" else profile.policy
                 for index, photo in enumerate(visit.photos):
                     blob = checked_photo(root, photo)
                     with Image.open(BytesIO(blob)) as image:
@@ -293,16 +297,23 @@ def evaluate(protocol: Protocol, root: Path, output: Path, split: str) -> dict:
                         result.evidence is not None and result.evidence.status == "ready"
                     )
                     if result.evidence is None:
-                        decisions.append({"status": result.status, "identity_id": None})
-                        continue
-                    decision = gallery.observe(
-                        result.evidence,
-                        None if visit.split == "enrollment" else profile.policy,
-                        crop=result.crop if visit.split == "enrollment" else None,
+                        decision = gallery.no_evidence(
+                            visit.id,
+                            observed_at=float(index),
+                            status=result.status,
+                            reason=result.reason,
+                            continuity_seconds=policy.continuity_seconds if policy else 0,
+                            expected_policy_fingerprint=policy.fingerprint() if policy else "",
+                        )
+                    else:
+                        decision = gallery.observe(
+                            result.evidence, policy, crop=result.crop if visit.split == "enrollment" else None
+                        )
+                        if result.evidence.reference_eligible:
+                            useful.append(decision.observation_id)
+                    decisions.append(
+                        decision.model_dump() if decision else {"status": result.status, "identity_id": None}
                     )
-                    decisions.append(decision.model_dump())
-                    if result.evidence.reference_eligible:
-                        useful.append(decision.observation_id)
                 if visit.split == "enrollment":
                     enrollment_rows.append(
                         {
@@ -324,7 +335,9 @@ def evaluate(protocol: Protocol, root: Path, output: Path, split: str) -> dict:
                             expected_revision=gallery.revision,
                         )
                         identities[visit.identity_label] = identified["identity_id"]
-                else:
+                gallery.close_occurrence(visit.id)
+                if visit.split != "enrollment":
+                    closed = gallery.decision(visit.id)
                     # Known means planned enrollment, even if every enrollment photo failed.
                     enrolled_labels = {
                         item.identity_label for item in selected if item.split == "enrollment"
@@ -346,13 +359,17 @@ def evaluate(protocol: Protocol, root: Path, output: Path, split: str) -> dict:
                             "switches": sum(
                                 left != right for left, right in zip(accepted, accepted[1:])
                             ),
+                            "last_extraction_status": result.status,
                             "final_status": decisions[-1]["status"],
+                            "closed_status": closed.status if closed else None,
+                            "closed_correct": bool(
+                                expected and closed and closed.status == "recognized" and closed.identity_id == expected
+                            ),
                             "usable_evidence": has_usable_evidence,
                             "inference_unavailable": inference_unavailable,
                             "processing_ms": (time.perf_counter() - started) * 1000,
                         }
                     )
-                gallery.close_occurrence(visit.id)
             declared = {visit.identity_label for visit in selected if visit.split == "enrollment"}
             results.append(
                 {

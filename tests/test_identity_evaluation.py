@@ -120,6 +120,7 @@ def row(*, known, accepted=False, correct=False, nominal=True, switches=0):
         "nominal": nominal,
         "switches": switches,
         "final_status": "recognized" if accepted else "unknown",
+        "closed_correct": correct,
         "inference_unavailable": False,
         "usable_evidence": True,
     }
@@ -180,23 +181,28 @@ def test_massive_unknown_unavailability_is_visible_and_never_approves_a_gate():
     assert "quality_criteria_met" not in result
 
 
+def write_evaluation_photos(content, root):
+    from io import BytesIO
+    from PIL import Image
+
+    for index, photo in enumerate(photo for visit in content["visits"] for photo in visit["photos"]):
+        encoded = BytesIO()
+        Image.new("RGB", (128, 128), (index * 10, 10, 10)).save(encoded, format="PNG")
+        blob = encoded.getvalue()
+        (root / photo["path"]).write_bytes(blob)
+        photo["sha256"] = hashlib.sha256(blob).hexdigest()
+    return Protocol.model_validate(content)
+
+
 @pytest.mark.parametrize("failure", ["unobservable", "unavailable"])
 def test_failed_enrollment_stays_known_in_real_store_accounting(tmp_path, monkeypatch, failure):
-    from io import BytesIO
     from types import SimpleNamespace
-    from PIL import Image
     import scripts.identity.evaluate as evaluation
     from toposync_ext_vision.identity.extraction import ExtractionResult
     from test_identity_store import evidence
 
     content = manifest()
-    for index, visit in enumerate(content["visits"]):
-        encoded = BytesIO()
-        Image.new("RGB", (128, 128), (index * 10, 10, 10)).save(encoded, format="PNG")
-        blob = encoded.getvalue()
-        (tmp_path / visit["photos"][0]["path"]).write_bytes(blob)
-        visit["photos"][0]["sha256"] = hashlib.sha256(blob).hexdigest()
-    protocol = Protocol.model_validate(content)
+    protocol = write_evaluation_photos(content, tmp_path)
 
     class AccountingExtractor:
         def __init__(self, *args, **kwargs):
@@ -223,3 +229,35 @@ def test_failed_enrollment_stays_known_in_real_store_accounting(tmp_path, monkey
     assert profile["metrics"]["unknown_visits"] == 1
     assert profile["metrics"]["known_identification_failure_rate"] == 1
     assert len(profile["visits"]) == 2
+
+@pytest.mark.parametrize(("window", "closed_status"), [(0, "unobservable"), (10, "recognized")])
+def test_low_resolution_after_match_updates_closed_gallery(tmp_path, monkeypatch, window, closed_status):
+    from types import SimpleNamespace
+    import scripts.identity.evaluate as evaluation
+    from toposync_ext_vision.identity.extraction import ExtractionResult
+    from test_identity_store import evidence
+
+    content = manifest()
+    content["profiles"][0]["policy"]["continuity_seconds"] = window
+    content["visits"][1]["photos"].append({"path": "low-resolution.png"})
+    protocol = write_evaluation_photos(content, tmp_path)
+
+    class Extractor:
+        embedding_space = policy().embedding_space
+
+        def extract(self, frame, **values):
+            if values["observed_at"] > 0 or values["occurrence_id"] == "2":
+                return ExtractionResult("unobservable", "insufficient_resolution")
+            sample = evidence(values["occurrence_id"], observed_at=values["observed_at"])
+            return ExtractionResult("pending", "evidence_ready", sample)
+
+    monkeypatch.setattr(evaluation, "IdentityExtractor", lambda *args, **kwargs: Extractor())
+    monkeypatch.setattr(evaluation, "build_default_model_registry",
+                        lambda: SimpleNamespace(get_manifest=lambda _: SimpleNamespace(sha256="0" * 64)))
+    profile, = evaluation.evaluate(protocol, tmp_path, tmp_path / "out", "development")["profiles"]
+    known, unknown = profile["visits"]
+    assert known["correct"] and known["last_extraction_status"] == "unobservable"
+    assert known["final_status"] == known["closed_status"] == closed_status
+    assert known["closed_correct"] == (window > 0)
+    assert unknown["closed_status"] is None and not unknown["closed_correct"]
+    assert profile["metrics"]["nominal_closed_correct_coverage"] == float(window > 0)

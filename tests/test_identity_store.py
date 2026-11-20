@@ -44,6 +44,7 @@ def policy(species="person", automatic=True):
         competitor_margin=0.1,
         clustering_similarity=0.9,
         calibration_revision="synthetic-contract-test",
+        calibrated_without_illumination_metadata=True,
         automatic_enabled=automatic,
     )
 
@@ -950,3 +951,54 @@ def test_human_decision_excludes_machine_candidates_in_new_and_legacy_records(st
     assert confirmed.identity_id == identity and confirmed.candidate_ids == ()
     legacy = {**confirmed.model_dump(), "candidate_ids": [other]}
     assert RecognitionDecision.model_validate_json(json.dumps(legacy)).candidate_ids == ()
+
+
+def test_live_clustering_uses_only_evidence_from_the_active_calibration(store):
+    calibrated = policy()
+    first, second = object(), object()
+    store.register_policy(calibrated, owner=first)
+    store.register_policy(calibrated, owner=second)
+    store.unregister_policies(first)
+    for index, selected in enumerate([None, None, calibrated, calibrated]):
+        store.observe(evidence(f"visit-{index}"), selected)
+    assert store.cluster_pending()["processed"] == 2
+    rows = {row["occurrence_id"]: row["cluster_id"] for row in store.observations()}
+    assert rows["visit-0"] is None and rows["visit-1"] is None
+    assert rows["visit-2"] and rows["visit-2"] == rows["visit-3"]
+    store.register_policy(calibrated.model_copy(update={"calibration_revision": "different"}), owner=first)
+    assert store.cluster_pending()["profiles"] == 0
+    store.unregister_policies(first)
+    assert store.cluster_pending()["profiles"] == 1
+    store.unregister_policies(second)
+    assert store.cluster_pending()["profiles"] == 0
+
+
+def test_legacy_calibration_fingerprint_survives_restore_and_needs_explicit_opt_in(tmp_path):
+    import hashlib
+    import json
+    from pydantic import ValidationError
+
+    legacy = policy().model_dump(exclude={"calibrated_without_illumination_metadata"})
+    prior_hash = hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    candidate = RecognitionPolicy.model_validate(legacy)
+    assert candidate.fingerprint() == prior_hash and prior_hash != policy().fingerprint()
+    with pytest.raises(ValidationError):
+        RecognitionPolicy.model_validate({**legacy, "calibrated_without_illumination_metadata": "true"})
+    gallery = IdentityStore(tmp_path, scope="restore")
+    try:
+        identity, _, _ = enroll(gallery)
+        archived = gallery.observe(evidence("past"), candidate)
+        assert archived.identity_id == identity
+    finally:
+        gallery.close()
+    gallery = IdentityStore(tmp_path, scope="restore")
+    try:
+        assert gallery.occurrence_details("past")["decision"]["identity_id"] == identity
+        gallery.register_policy(candidate)
+        assert gallery.cluster_pending()["profiles"] == 0
+        for selected in (candidate, policy()):
+            gallery.register_policy(selected)
+            assert gallery.validated_decision("past", decision_revision=archived.revision,
+                observed_at=archived.evidence_at, max_age_seconds=10) is None
+    finally:
+        gallery.close()

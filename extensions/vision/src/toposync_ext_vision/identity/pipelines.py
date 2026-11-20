@@ -7,6 +7,7 @@ from dataclasses import replace
 import hashlib
 import json
 import time
+from threading import Event, Lock
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -107,7 +108,8 @@ class RecognizeIdentityConfig(BaseModel):
 
     def policy_for(self, species: str, space: str) -> RecognitionPolicy | None:
         return next((item for item in self.policies
-                     if item.species == species and item.embedding_space == space), None)
+                     if item.species == species and item.embedding_space == space
+                     and item.calibrated_without_illumination_metadata), None)
 
 
 def identity_binding(packet: Packet) -> dict | None:
@@ -427,7 +429,29 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
         self.config = RecognizeIdentityConfig.model_validate(config)
         self.dependencies = dependencies
 
+        self._resolution_lock = Lock()
+        self._registration_owner = object()
+        self._registered_store = None
+        self._stopped = Event()
+
+    async def shutdown(self) -> None:
+        self._stopped.set()
+
+        def release():
+            with self._resolution_lock:
+                if self._registered_store is not None:
+                    self._registered_store.unregister_policies(self._registration_owner)
+                    self._registered_store = None
+
+        await asyncio.to_thread(release)
+
     def _resolve(self, packet: Packet, store: Any, key: str, artifact: Artifact | None):
+        with self._resolution_lock:
+            if self._stopped.is_set():
+                return None
+            return self._resolve_active(packet, store, key, artifact)
+
+    def _resolve_active(self, packet: Packet, store: Any, key: str, artifact: Artifact | None):
         # Decodificação, locks e SQLite ficam no executor limitado do operador.
         # Cancelar a espera não interrompe uma transação já iniciada na thread.
         if self.config.late_enrichment and artifact is None:
@@ -456,7 +480,10 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
                 raise ValueError("evidence_provenance_mismatch")
             policy = self.config.policy_for(evidence.species, evidence.embedding_space)
             if policy is not None:
-                store.register_policy(policy)
+                if self._registered_store is not None and self._registered_store is not store:
+                    self._registered_store.unregister_policies(self._registration_owner)
+                store.register_policy(policy, owner=self._registration_owner)
+                self._registered_store = store
             crop = base64.b64decode(decoded["crop"], validate=True) if decoded.get("crop") else None
             current = store.observe(
                 evidence,

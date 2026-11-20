@@ -456,12 +456,12 @@ def test_gallery_policy_lock_does_not_block_pipeline_event_loop(tmp_path):
     policy_threads = []
 
     class BusyGallery(IdentityStore):
-        def register_policy(self, value):
+        def register_policy(self, value, *, owner=None):
             policy_threads.append(threading.get_ident())
             entered.set()
             if not release.wait(timeout=2):
                 raise TimeoutError("Event loop blocked by gallery policy")
-            super().register_policy(value)
+            super().register_policy(value, owner=owner)
 
     async def scenario():
         scheduler = ExecutionScheduler()
@@ -615,5 +615,95 @@ def test_uncalibrated_branch_cannot_reuse_automatic_name_on_replay_or_close(tmp_
             assert store.decision(occurrence_key(event)).identity_id == identity
         finally:
             store.close()
+
+    asyncio.run(scenario())
+
+
+def test_unverified_illumination_needs_explicit_calibration_even_on_replay(tmp_path):
+    from test_identity_store import curate, enroll, evidence, policy
+
+    async def scenario():
+        gallery = IdentityStore(tmp_path, scope="test")
+        services = ServiceRegistry()
+        services.register("vision.identity.store", lambda: gallery)
+        dependencies = PipelineRuntimeDependencies(services=services)
+        qualified = policy("cat").model_dump()
+        qualified["calibrated_without_illumination_metadata"] = True
+        legacy = dict(qualified)
+        del legacy["calibrated_without_illumination_metadata"]
+        limited = RecognizeIdentityRuntime({"enabled": True, "policies": [legacy]}, dependencies)
+        try:
+            identity, _, _ = enroll(gallery, species="cat")
+            event = packet()
+            event = replace(event, payload={**event.payload, "illumination": "visible"})
+            sample = evidence(occurrence_key(event), species="cat")
+            incoming = event.with_artifact(Artifact(name=PRIVATE_EVIDENCE_ARTIFACT, private=True,
+                data=json.dumps({"evidence": sample.model_dump(), "crop": None}).encode()))
+            output, = await limited.process_packet(incoming, Context())
+            assert output.payload["recognition"]["reason"] == "calibration_required"
+            saved = gallery.occurrence_details(sample.occurrence_id)
+            assert not saved["decision"]["candidate_ids"] and saved["decision"]["identity_id"] is None
+            assert saved["observations"] and gallery.cluster_pending()["profiles"] == 0
+            curate(gallery, "assign", {"observation_ids": [saved["observations"][0]["id"]], "identity_id": identity})
+            closed, = await limited.process_packet(replace(event, lifecycle=Lifecycle.CLOSE), Context())
+            assert (await read_identity_decision(closed, services)).provenance == "human"
+            approved = RecognizeIdentityRuntime({"enabled": True, "policies": [qualified]}, dependencies)
+            next_event = packet(correlation="other")
+            next_sample = evidence(occurrence_key(next_event), species="cat")
+            named, = await approved.process_packet(next_event.with_artifact(Artifact(
+                name=PRIVATE_EVIDENCE_ARTIFACT, private=True,
+                data=json.dumps({"evidence": next_sample.model_dump(), "crop": None}).encode())), Context())
+            assert (await read_identity_decision(named, services)).identity_id == identity
+            for message in (replace(next_event, lifecycle=Lifecycle.UPDATE), replace(next_event, lifecycle=Lifecycle.CLOSE)):
+                projection, = await limited.process_packet(message, Context())
+                assert projection.payload["recognition"]["reason"] == "calibration_required"
+                assert await read_identity_decision(projection, services) is None
+            await approved.shutdown()
+            assert gallery.cluster_pending()["profiles"] == 0
+            assert await read_identity_decision(named, services) is None
+        finally:
+            gallery.close()
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_drains_admitted_observation_and_rejects_late_work(tmp_path):
+    from threading import Event
+    from test_identity_store import policy
+
+    async def scenario():
+        entered, finish = Event(), Event()
+        gallery = IdentityStore(tmp_path, scope="shutdown")
+        observe = gallery.observe
+
+        def delayed(*args, **kwargs):
+            entered.set()
+            assert finish.wait(3)
+            return observe(*args, **kwargs)
+
+        gallery.observe = delayed
+        profile = policy("cat").model_copy(update={"embedding_space": "test:synthetic"})
+        runtime = RecognizeIdentityRuntime({"enabled": True, "policies": [profile.model_dump()]},
+                                           PipelineRuntimeDependencies())
+        event = with_evidence(packet())
+        key = occurrence_key(event)
+        pending = asyncio.create_task(asyncio.to_thread(runtime._resolve, event, gallery, key,
+                                                         event.artifacts[PRIVATE_EVIDENCE_ARTIFACT]))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            shutdown = asyncio.create_task(runtime.shutdown())
+            done, _ = await asyncio.wait({shutdown}, timeout=0.2)
+            assert not done
+            finish.set()
+            await pending
+            await shutdown
+            assert gallery.cluster_pending()["profiles"] == 0
+            assert runtime._resolve(replace(event, lifecycle=Lifecycle.CLOSE), gallery, key, None) is None
+            assert gallery.occurrence_details(key)["closed"] is False
+        finally:
+            finish.set()
+            await pending
+            await runtime.shutdown()
+            gallery.close()
 
     asyncio.run(scenario())

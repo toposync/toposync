@@ -143,7 +143,7 @@ class IdentityStore:
         self.max_observations = max_observations
         self.activity_authorized = activity_authorized
         self._activity_cursor = ""
-        self._policies: dict[tuple[str, str], RecognitionPolicy] = {}
+        self._policy_owners: dict[tuple[str, str], dict[object, RecognitionPolicy]] = {}
         self.maintenance_error: str | None = None
         self.directory = directory / hashlib.sha256(scope.encode()).hexdigest()[:32]
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -452,7 +452,8 @@ class IdentityStore:
                 row = self._connection.execute(
                     "SELECT species FROM occurrence WHERE id=?", (current.occurrence_id,)
                 ).fetchone()
-                policy = (self._policies if policies is None else policies).get((row["species"], current.embedding_space))
+                key = (row["species"], current.embedding_space)
+                policy = self._active_policy(key) if policies is None else policies.get(key)
                 if (
                     policy is None
                     or not policy.automatic_enabled
@@ -871,13 +872,14 @@ class IdentityStore:
             len(pending) - len(selected),
         )
 
-    def cluster_unknowns(self, policy: RecognitionPolicy, *, batch_size: int = 128) -> dict:
+    def cluster_unknowns(self, policy: RecognitionPolicy, *, batch_size: int = 128, require_active: bool = False) -> dict:
         if not 1 <= batch_size <= 128:
             raise ValueError("clustering batch must contain at most 128 observations")
         query = (
-            "SELECT id,occurrence_id,evidence,cluster_id,created_at FROM available_observation "
-            "WHERE identity_id IS NULL AND confirmed=0 AND eligible=1 AND species=? AND space=? "
-            "ORDER BY created_at,id LIMIT ?"
+            "SELECT o.id,o.occurrence_id,o.evidence,o.cluster_id,o.created_at,d.decision "
+            "FROM available_observation o LEFT JOIN observation_decision d ON d.id=o.id "
+            "WHERE o.identity_id IS NULL AND o.confirmed=0 AND o.eligible=1 AND o.species=? AND o.space=? "
+            "ORDER BY o.created_at,o.id LIMIT ?"
         )
         parameters = (policy.species, policy.embedding_space, self.max_observations + 1)
         with self._lock:
@@ -885,6 +887,10 @@ class IdentityStore:
             rows = [dict(row) for row in self._connection.execute(query, parameters)]
         if len(rows) > self.max_observations:
             raise IdentityCapacityError("clustering observation budget reached")
+        if require_active:
+            fingerprint = policy.fingerprint()
+            rows = [row for row in rows if row["decision"] is not None
+                    and self._open(row["decision"]).get("policy_fingerprint") == fingerprint]
         proposals, assignments, pending = self._cluster_plan(rows, policy, batch_size)
         changes = [
             (assignments[row["id"]], row["id"])
@@ -895,6 +901,8 @@ class IdentityStore:
             # Ingestion does not change the gallery revision. Check snapshot members
             # as well; new observations can safely wait until the next bounded batch.
             current = {row["id"]: dict(row) for row in connection.execute(query, parameters)}
+            if require_active and self._active_policy((policy.species, policy.embedding_space)) != policy:
+                raise IdentityConflict("calibration changed while clustering")
             if self.revision != revision or any(current.get(row["id"]) != row for row in rows):
                 raise IdentityConflict(
                     "gallery changed while clustering; retry on next maintenance"
@@ -909,19 +917,39 @@ class IdentityStore:
                 "revision": self.revision,
             }
 
-    def register_policy(self, policy: RecognitionPolicy) -> None:
+    def _active_policy(self, key: tuple[str, str]) -> RecognitionPolicy | None:
+        owners = self._policy_owners.get(key, {})
+        first = next(iter(owners.values()), None)
+        return first if all(policy == first for policy in owners.values()) else None
+
+    def register_policy(self, policy: RecognitionPolicy, *, owner: object = None) -> None:
         with self._lock:
             key = (policy.species, policy.embedding_space)
-            if key not in self._policies and len(self._policies) >= 16:
+            if not policy.calibrated_without_illumination_metadata:
+                self._remove_policy_owner(key, owner)
+                return
+            if key not in self._policy_owners and len(self._policy_owners) >= 16:
                 raise IdentityCapacityError("active calibration profile budget reached")
-            self._policies[key] = policy
+            self._policy_owners.setdefault(key, {})[owner] = policy
+
+    def _remove_policy_owner(self, key: tuple[str, str], owner: object) -> None:
+        owners = self._policy_owners.get(key)
+        if owners is not None:
+            owners.pop(owner, None)
+            if not owners:
+                del self._policy_owners[key]
+
+    def unregister_policies(self, owner: object) -> None:
+        with self._lock:
+            for key in tuple(self._policy_owners):
+                self._remove_policy_owner(key, owner)
 
     def cluster_pending(self) -> dict:
         with self._lock:
-            policies = list(self._policies.values())
+            policies = [policy for key in self._policy_owners if (policy := self._active_policy(key))]
         processed = 0
         for policy in policies:
-            result = self.cluster_unknowns(policy, batch_size=128)
+            result = self.cluster_unknowns(policy, batch_size=128, require_active=True)
             processed += result["processed"]
         self.maintenance_error = None
         return {"profiles": len(policies), "processed": processed}

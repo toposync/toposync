@@ -223,7 +223,8 @@ def activity_policies(config, document):
         profile = RecognizeIdentityConfig.model_validate(values)
         for policy in profile.policies:
             key = (policy.species, policy.embedding_space)
-            if not profile.enabled or not policy.automatic_enabled or (key in policies and policies[key] != policy):
+            if (not profile.enabled or not policy.automatic_enabled or not policy.calibrated_without_illumination_metadata
+                    or (key in policies and policies[key] != policy)):
                 conflicts.add(key)
             policies[key] = policy
     return {key: value for key, value in policies.items() if key not in conflicts}

@@ -17,7 +17,7 @@ test('calibration never invents missing thresholds or accepts ambiguous policies
   assert.equal(valid([]), true);
   assert.equal(valid([{ species: 'person', embedding_space: 'synthetic', calibration_revision: '' }]), false);
   assert.equal(valid([policy]), true);
-  for (const patch of [{ suggestion_similarity: .95 }, { acceptance_similarity: NaN }, { competitor_margin: -1 }, { continuity_seconds: 61 }, { calibration_revision: ' ' }]) assert.equal(valid([{ ...policy, ...patch }]), false);
+  for (const patch of [{ calibrated_without_illumination_metadata: "true" }, { suggestion_similarity: .95 }, { acceptance_similarity: NaN }, { competitor_margin: -1 }, { continuity_seconds: 61 }, { calibration_revision: ' ' }]) assert.equal(valid([{ ...policy, ...patch }]), false);
   assert.equal(valid([policy, policy]), false);
   assert.equal(valid([policy, { ...policy, species: 'cat' }]), true);
 });
@@ -27,7 +27,9 @@ test('review shows calibrated values and an explicit unconfirmed state in both l
     const i18n = { useI18n: () => ({ locale }), t: key => key };
     const empty = renderToStaticMarkup(React.createElement(exportsObject.RecognitionPolicySummary, { i18n, config: {} }));
     assert.match(empty, locale === 'en' ? /identity unconfirmed/ : /identidade não confirmada/);
-    const summary = renderToStaticMarkup(React.createElement(exportsObject.RecognitionPolicySummary, { i18n, config: { policies: [policy] } }));
+    const summary = renderToStaticMarkup(React.createElement(exportsObject.RecognitionPolicySummary, { i18n, config: { policies: [{ ...policy, calibrated_without_illumination_metadata: true }] } }));
+    const legacy = renderToStaticMarkup(React.createElement(exportsObject.RecognitionPolicySummary, { i18n, config: { policies: [{ ...policy, automatic_enabled: true }] } }));
+    assert.match(legacy, locale === 'en' ? /Manual identification/ : /Identificação manual/);
     assert.match(summary, /test-only/);
     assert.match(summary, /0.9/);
     assert.match(summary, locale === 'en' ? /Suggestions only/ : /Somente sugestões/);

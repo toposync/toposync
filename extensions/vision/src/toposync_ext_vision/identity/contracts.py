@@ -5,7 +5,7 @@ import json
 import math
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 Species = Literal["person", "cat", "dog"]
 RecognitionStatus = Literal[
@@ -176,13 +176,18 @@ class RecognitionPolicy(BaseModel):
     competitor_margin: float = Field(ge=0, le=2, allow_inf_nan=False)
     clustering_similarity: float = Field(ge=-1, le=1, allow_inf_nan=False)
     calibration_revision: str = Field(min_length=1, max_length=512)
+    calibrated_without_illumination_metadata: StrictBool = False
     automatic_enabled: bool = False
     continuity_seconds: float = Field(default=10, ge=0, le=60, allow_inf_nan=False)
 
     def fingerprint(self) -> str:
+        fields = self.model_dump()
+        if not self.calibrated_without_illumination_metadata:
+            # Preserve the fingerprint of frozen protocols created before lighting was declared.
+            del fields["calibrated_without_illumination_metadata"]
         return hashlib.sha256(
             json.dumps(
-                self.model_dump(), sort_keys=True, separators=(",", ":"), allow_nan=False
+                fields, sort_keys=True, separators=(",", ":"), allow_nan=False
             ).encode()
         ).hexdigest()
 

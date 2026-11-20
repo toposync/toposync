@@ -56,16 +56,18 @@ def trio(client, *, third_camera='camera'):
     return history, gallery, document, identities
 
 
-@pytest.mark.parametrize('change', ['restart', 'remove', 'disable', 'recalibrate', 'revoke'])
+@pytest.mark.parametrize('change', ['restart', 'remove', 'disable', 'recalibrate', 'revoke', 'illumination'])
 def test_history_uses_current_saved_policy_without_new_capture(client, change):
     history, gallery, document, identities = trio(client)
-    gallery._policies.clear()
+    gallery.unregister_policies(None)
     config = client.portal.call(client.app.state.config_store.get_config)
     state = config.settings.core['automatic']
     if change == 'remove':
         state['intents'] = []
     elif change == 'revoke':
         state['denied_features'] = {'camera': ['recognition']}
+    elif change == 'illumination':
+        del state['intents'][0]['condition']['resource_parameters']['policies'][0]['calibrated_without_illumination_metadata']
     elif change in {'disable', 'recalibrate'}:
         profile = state['intents'][0]['condition']['resource_parameters']['policies'][0]
         profile['automatic_enabled' if change == 'disable' else 'calibration_revision'] = False if change == 'disable' else 'new'
@@ -77,7 +79,7 @@ def test_history_uses_current_saved_policy_without_new_capture(client, change):
     assert projected['person-0']['identification']['status'] == ('recognized' if change == 'restart' else 'unknown')
     if change == 'restart':
         assert projected['person-0']['identification']['name'] == 'Synthetic person 0'
-        assert gallery._policies == {}
+        assert gallery.cluster_pending()["profiles"] == 0
 
 
 def test_changed_configuration_during_history_projection_withholds_names(client, monkeypatch):

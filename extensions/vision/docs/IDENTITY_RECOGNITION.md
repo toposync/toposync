@@ -2,6 +2,14 @@
 
 This feature adds private visual evidence and a curated gallery to individual pipeline events. It is disabled by default. Installing a model does not enable recognition, and a successful inference does not establish identification accuracy.
 
+## Lighting conditions and saved calibrations
+
+The live camera pipeline receives images without a verified illumination mode per exposure. A profile trained only on daylight must remain available for manual curation until its operating conditions can be verified. Entering thresholds or selecting automatic confirmation alone leaves live visits available for identification, with no automatic name or suggested candidate.
+
+Select the lighting validation option (`calibrated_without_illumination_metadata: true`) only when the cited calibration covers the input actually delivered on the configured cameras, including unlabelled day/night transitions. This records an operator declaration. It cannot measure field accuracy. A saved policy with the field absent or false stays editable and abstains on this capture path. Confirmed human decisions and photos remain available. Previous recordings preserve their historical associations. Offline evaluation can measure candidate thresholds on its frozen inputs before making this declaration.
+
+Before a downgrade to a build that predates this setting, back up the gallery and configuration, disable recognition and remove its policies in the **new** build. Old builds reject the additional field and cannot enforce the lighting restriction. Restore the previous binary on an isolated copy first.
+
 ## Pipeline setup
 
 Place the operators after individual tracking, before grouping:

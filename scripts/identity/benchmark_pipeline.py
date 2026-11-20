@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
 import hashlib
 import json
 import os
@@ -22,7 +23,7 @@ import time
 
 import numpy as np
 from PIL import Image, ImageOps
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from toposync.runtime.config_store import Pipeline
 from toposync.runtime.notifications.store import NotificationStore
@@ -48,6 +49,10 @@ from scripts.identity.real_pipeline_smoke import SOURCES
 
 class EmptyConfig(BaseModel):
     pass
+
+
+class SourceConfig(BaseModel):
+    source_index: int = Field(default=0, ge=0, le=1)
 
 
 def worker_resources():
@@ -82,7 +87,10 @@ async def trial(
     context_only: bool = False,
     vision_input: bool = False,
     published: bool = False,
+    sources: int = 1,
 ) -> dict:
+    if sources not in (1, 2):
+        raise ValueError("benchmark supports one or two sources")
     frames = {}
     for species, filename, digest in SOURCES:
         path = photos / filename
@@ -102,24 +110,31 @@ async def trial(
     created_count = 0
     completed, warmed, recognition_completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     recognition_lifecycles = []
+    recognition_reasons = Counter()
+    measured_occurrences = set()
+    recognition_latencies = []
+    expected_evidence = Counter()
+
+    warm_visits = 3 * sources
+    warm_packets = 3 * warm_visits
+    measured_visits = visits * sources
+    total_packets = warm_packets + measured_visits * 3
 
     def check_warmup():
-        if len(lifecycles) >= 9 and (not parallel or len(recognition_lifecycles) >= 9):
+        if len(lifecycles) >= warm_packets and (not parallel or len(recognition_lifecycles) >= warm_packets):
             warmed.set()
 
-    warm_packets = 9
-    total_packets = warm_packets + visits * 3
-
     class Source(SourceOperatorRuntime):
-        def __init__(self):
+        def __init__(self, source_index):
+            self.source_index = source_index
             self.sequence = 0
             self.deadline = None
 
         async def produce(self, context):
-            if self.sequence >= total_packets:
+            if self.sequence >= 3 * (visits + 3):
                 await context.sleep(0.01)
                 return None
-            if self.sequence == warm_packets:
+            if self.sequence == 9:
                 await warmed.wait()
                 self.deadline = None
             now = time.perf_counter()
@@ -127,22 +142,26 @@ async def trial(
             await context.sleep(max(0, self.deadline - now))
             sequence = self.sequence
             self.sequence += 1
-            visit = sequence // 3
-            species = SOURCES[visit % 3][0]
+            local_visit = sequence // 3
+            visit = local_visit * sources + self.source_index
+            species = SOURCES[(local_visit + self.source_index) % len(SOURCES)][0]
+            camera = "offline-load" if sources == 1 else f"offline-load-{self.source_index}"
             phase = (Lifecycle.OPEN, Lifecycle.UPDATE, Lifecycle.CLOSE)[sequence % 3]
             packet_key = (f"load-{visit}", phase.value)
             planned[packet_key] = self.deadline
             sent[packet_key] = time.perf_counter()
-            if visit >= 3:
+            if visit >= warm_visits:
+                if phase == Lifecycle.OPEN:
+                    expected_evidence[camera, species] += 1
                 emission_lateness.append((sent[packet_key] - self.deadline) * 1000)
             payload = {
-                "camera_id": "offline-load",
+                "camera_id": camera,
                 "frame_ts": time.time(),
                 "benchmark_visit": visit,
             }
             if not vision_input:
                 payload.update({
-                    "source_stream_id": "offline-load",
+                    "source_stream_id": camera,
                     "correlation_id": f"load-{visit}",
                     "subject": {
                         "id": f"load-{visit}", "type": "event", "category": species,
@@ -151,7 +170,7 @@ async def trial(
                     "world_position": {"x": 1.0, "z": 2.0},
                 })
             return Packet.create(
-                stream_id=f"load-{visit}" if vision_input else "licensed-photo-load",
+                stream_id=f"load-{visit}" if vision_input else ("licensed-photo-load" if sources == 1 else camera),
                 lifecycle=phase,
                 payload=payload,
                 artifacts={
@@ -184,9 +203,17 @@ async def trial(
         identities.add(identifier)
         created_count += int(created)
         lifecycles.append(key)
-        if visit >= 3:
+        if visit >= warm_visits:
+            if enabled and not parallel:
+                summary = payload["data"].get("recognition", {})
+                if summary.get("occurrence_id"):
+                    measured_occurrences.add(summary["occurrence_id"])
             latencies.append(
                 {
+                    "source_index": visit % sources,
+                    "visit": visit,
+                    "emitted_s": sent[key] - started,
+                    "delivered_s": returned_at - started,
                     "phase": key[1],
                     "species": payload["subject"]["category"],
                     "source_to_upsert_ms": (service_started - sent[key]) * 1000,
@@ -203,7 +230,15 @@ async def trial(
 
     class RecognitionCollector(TransformOperatorRuntime):
         async def process_packet(self, value, context):
-            recognition_lifecycles.append((f"load-{value.payload['benchmark_visit']}", value.lifecycle.value))
+            visit = value.payload["benchmark_visit"]
+            key = (f"load-{visit}", value.lifecycle.value)
+            recognition_lifecycles.append(key)
+            if visit >= warm_visits:
+                summary = value.payload["recognition"]
+                recognition_reasons[summary["reason"]] += 1
+                recognition_latencies.append((time.perf_counter() - sent[key]) * 1000)
+                if summary.get("occurrence_id"):
+                    measured_occurrences.add(summary["occurrence_id"])
             check_warmup()
             if len(recognition_lifecycles) == total_packets:
                 recognition_completed.set()
@@ -217,12 +252,12 @@ async def trial(
         register_vision_pipeline_operators(registry)
     registry.register_operator(
         operator_id="test.load_source",
-        config_model=EmptyConfig,
+        config_model=SourceConfig,
         inputs=[],
         outputs=[{"name": "out"}],
         defaults={},
         share_strategy="never",
-        runtime_factory=lambda config, dependencies: Source(),
+        runtime_factory=lambda config, dependencies: Source(config.get("source_index", 0)),
     )
     nodes = [{"id": "source", "operator": "test.load_source", "config": {}}]
     if vision_input:
@@ -303,6 +338,21 @@ async def trial(
             }
             for index, (left, right) in enumerate(pairs)
         ]
+    if sources == 2:
+        # Independent detector/tracker state, shared scheduler, storage and notification subscriber.
+        second_nodes = [
+            {**node, "id": "second_" + node["id"],
+             "config": {"source_index": 1} if node["id"] == "source" else node["config"]}
+            for node in nodes
+        ]
+        second_edges = [
+            {**edge, "id": "second_" + edge["id"],
+             "from": {**edge["from"], "node": "second_" + edge["from"]["node"]},
+             "to": {**edge["to"], "node": "second_" + edge["to"]["node"]}}
+            for edge in edges
+        ]
+        nodes.extend(second_nodes)
+        edges.extend(second_edges)
     graph = build_pipeline_graph_v2(graph_uid="identity_load_fixture", nodes=nodes, edges=edges)
     compiled = PipelineGraphCompiler(registry).compile_pipeline(
         Pipeline(name="identity_load_fixture", graph=graph)
@@ -317,22 +367,38 @@ async def trial(
     usage_before = resource.getrusage(resource.RUSAGE_SELF)
     started = time.perf_counter()
     extraction_worker = None
+    measured_visits_with_evidence = {}
     try:
         await runtime.start()
-        await asyncio.wait_for(completed.wait(), timeout=max(30, total_packets * interval * 3))
+        await asyncio.wait_for(warmed.wait(), timeout=30)
+        await asyncio.wait_for(completed.wait(), timeout=max(30, visits * 3 * interval * 3))
         notifications_finished = time.perf_counter()
         if parallel:
             await asyncio.wait_for(recognition_completed.wait(), timeout=30)
         drain_seconds = time.perf_counter() - notifications_finished
         snapshot = runtime.snapshot()
+        detector_providers = {
+            node_id: runtime._runtime_by_node[node_id]._backend.providers
+            for node_id in ("detect", "second_detect") if node_id in runtime._runtime_by_node
+        }
         if enabled:
             closed_count = gallery._connection.execute(
                 "SELECT count(*) FROM occurrence WHERE closed=1"
             ).fetchone()[0]
-            assert closed_count == visits + 3
-        if parallel:
-            assert recognition_lifecycles == lifecycles
-        if enabled:
+            assert closed_count == measured_visits + warm_visits
+            assert len(measured_occurrences) == measured_visits
+            placeholders = ",".join("?" for _ in measured_occurrences)
+            measured_visits_with_evidence = {
+                (camera, species): count for camera, species, count in gallery._connection.execute(
+                    f"SELECT o.camera_id, p.species, count(DISTINCT p.occurrence_id) "
+                    f"FROM observation p JOIN occurrence o ON o.id = p.occurrence_id "
+                    f"WHERE p.eligible=1 AND p.occurrence_id IN ({placeholders}) GROUP BY o.camera_id, p.species",
+                    tuple(measured_occurrences),
+                )
+            }
+            assert measured_visits_with_evidence == expected_evidence, (
+                "some measured visits did not produce eligible evidence"
+            )
             extraction_worker = await runtime.dependencies.execution_scheduler.run_sync(
                 worker_resources,
                 mode="process_pool",
@@ -341,16 +407,51 @@ async def trial(
                 max_concurrency=1,
             )
 
+        evidence_counts = {
+            row[0]: row[1]
+            for row in gallery._connection.execute(
+                "SELECT species,count(*) FROM observation WHERE eligible=1 GROUP BY species"
+            )
+        }
+        assert len(lifecycles) == total_packets and len(latencies) == measured_visits * 3
+        assert created_count == measured_visits + warm_visits and len(identities) == measured_visits + warm_visits
+        for delivered in ([lifecycles, recognition_lifecycles] if parallel else [lifecycles]):
+            assert all(
+                [phase for name, phase in delivered if name == f"load-{index}"]
+                == ["open", "update", "close"]
+                for index in range(measured_visits + warm_visits)
+            )
+        if publication:
+            assert subscriber.empty()
     except BaseException as error:
         # Preservar contadores antes da parada para distinguir perda, pressão e
         # falha técnica. Nenhuma imagem, vetor ou payload entra no diagnóstico.
+        def incomplete_visits(delivered):
+            # Only list visits actually offered; a warmup failure never started the measurement.
+            phases = {}
+            for name, phase in delivered:
+                phases.setdefault(name, []).append(phase)
+            return {
+                name: phases.get(name, [])
+                for name in sorted({name for name, _ in sent})
+                if phases.get(name) != ["open", "update", "close"]
+            }
+
         (output / "failure.json").write_text(
             json.dumps(
                 {
-                    "instrument_version": 3,
+                    "instrument_version": 5,
                     "error_type": type(error).__name__,
                     "expected_packets": total_packets,
+                    "measured_evidence_expected": {f"{camera}/{species}": count for (camera, species), count in expected_evidence.items()},
+                    "measured_evidence_observed": {f"{camera}/{species}": count for (camera, species), count in measured_visits_with_evidence.items()},
+                    "warmup_complete": warmed.is_set(),
+                    "source_packets_emitted": len(sent),
+                    "notification_incomplete_visits": incomplete_visits(lifecycles),
+                    "recognition_incomplete_visits": incomplete_visits(recognition_lifecycles) if parallel else None,
                     "notification_callbacks": len(lifecycles),
+                    "notifications_created": created_count,
+                    "distinct_notifications": len(identities),
                     "recognition_callbacks": len(recognition_lifecycles),
                     "notification_phases": {
                         phase: sum(item[1] == phase for item in lifecycles)
@@ -367,33 +468,21 @@ async def trial(
     finally:
         await runtime.stop()
         await runtime.dependencies.execution_scheduler.shutdown()
-        evidence_counts = {
-            row[0]: row[1]
-            for row in gallery._connection.execute(
-                "SELECT species,count(*) FROM observation WHERE eligible=1 GROUP BY species"
-            )
-        }
         gallery.close()
         if publication:
-            drained = subscriber.empty()
             publication.broadcaster.unsubscribe(subscriber)
-            assert drained
-    if enabled:
-        assert set(evidence_counts) == {"person", "cat", "dog"}
-        assert sum(evidence_counts.values()) >= visits, (
-            "benchmark must actually execute usable inference"
-        )
-    assert len(lifecycles) == total_packets and len(latencies) == visits * 3
-    assert created_count == visits + 3 and len(identities) == visits + 3
-    assert all(
-        [phase for name, phase in lifecycles if name == f"load-{index}"]
-        == ["open", "update", "close"]
-        for index in range(visits + 3)
-    )
     usage_after = resource.getrusage(resource.RUSAGE_SELF)
     values = [row["milliseconds"] for row in latencies]
+    actual_rates = []
+    for index in range(sources):
+        source_rows = [row for row in latencies if row["source_index"] == index]
+        rates = {}
+        for label, field in (("emitted_hz", "emitted_s"), ("delivered_hz", "delivered_s")):
+            times = [row[field] for row in source_rows]
+            rates[label] = (len(times) - 1) / (max(times) - min(times))
+        actual_rates.append(rates)
     return {
-        "instrument_version": 3,
+        "instrument_version": 5,
         "notification_execution": "NotificationsRuntime.upsert with subscribed JSON consumer" if published else "asyncio.to_thread, matching NotificationsRuntime.upsert",
         "notification_limit": "Includes public projection, broadcaster and JSON consumption; excludes HTTP/browser delivery" if published else "Store persistence only; excludes public projection and broadcaster",
         "identity_enabled": enabled,
@@ -408,10 +497,21 @@ async def trial(
         else None,
         "queue_metrics": snapshot["channels"],
         "usable_inference_observations_by_species": evidence_counts,
-        "measured_visits": visits,
+        "measured_visits_with_eligible_evidence": [
+            {"camera": camera, "species": species, "visits": count}
+            for (camera, species), count in sorted(measured_visits_with_evidence.items())
+        ],
+        "measured_recognition_reasons": dict(recognition_reasons),
+        "source_to_resolver_p95_ms": float(np.percentile(recognition_latencies, 95)) if parallel else None,
+        "sources": sources,
+        "detector_providers": detector_providers,
+        "measured_visits": measured_visits,
+        "measured_visits_per_source": visits,
+        "reference_identities_at_start": 0,
         "measured_packets": len(latencies),
+        "offered_packets_per_second": sources / interval,
         "interval_seconds": interval,
-        "warmup_visits_excluded": 3,
+        "warmup_visits_excluded": warm_visits,
         "emission_lateness_p95_ms": float(np.percentile(emission_lateness, 95)),
         "planned_to_notification_p95_ms": float(
             np.percentile([row["planned_milliseconds"] for row in latencies], 95)
@@ -420,6 +520,12 @@ async def trial(
         "p50_ms": float(np.percentile(values, 50)),
         "p95_ms": float(np.percentile(values, 95)),
         "max_ms": max(values),
+        "p99_ms": float(np.percentile(values, 99)),
+        "actual_rates_per_source": actual_rates,
+        "p95_ms_per_source": [
+            float(np.percentile([row["milliseconds"] for row in latencies if row["source_index"] == index], 95))
+            for index in range(sources)
+        ],
         "timing_by_species": {
             species: {
                 "frame_bytes": int(frames[species].nbytes),
@@ -489,7 +595,8 @@ def main():
     parser.add_argument(
         "--parallel", action="store_true", help="Experimental fanout; requires --enabled"
     )
-    parser.add_argument("--visits", type=int, default=30)
+    parser.add_argument("--sources", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--visits", type=int, default=30, help="Measured visits per source")
     parser.add_argument("--interval", type=float, default=0.04)
     args = parser.parse_args()
     if args.context_only and (args.enabled or args.parallel):
@@ -511,6 +618,7 @@ def main():
             vision_input=args.vision_input,
             published=args.published,
             visits=args.visits,
+            sources=args.sources,
             interval=args.interval,
         )
     )

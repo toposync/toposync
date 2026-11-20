@@ -222,7 +222,9 @@ def estimate_body_and_feet(
             for name in support_names
             if name in points
         ]
-        if len(samples) == 2 and all(point is not None for point in samples):
+        if any(point is None for point in samples):
+            foot["reason"] = "foot_projection_unavailable"
+        elif len(samples) == 2:
             distance = math.dist(*samples)
             if 0.025 <= distance <= 0.45:
                 position = np.mean(samples, axis=0).tolist()

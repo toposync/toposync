@@ -349,6 +349,39 @@ def test_temporal_hidden_feet_keep_original_evidence_and_expire():
     asyncio.run(scenario())
 
 
+def test_current_foot_outside_calibrated_ground_invalidates_its_retention():
+    async def scenario():
+        runtime = PersonGroundRuntime(
+            {"mapping": mapping_config(), "complete_hidden_feet": True},
+            PipelineRuntimeDependencies(),
+        )
+        try:
+            await runtime.process_packet(packet(0.0), None)
+            [stationary] = await runtime.process_packet(packet(0.25), None)
+            assert (
+                stationary.payload["spatial"]["person_ground"]["feet"]["left"]["contact"]
+                == "stationary_support_hypothesis"
+            )
+            incoming = packet(0.30, hidden=("right",))
+            camera = known_camera()
+            outside = camera.project((-2.2, 0, -0.1))
+            assert outside is not None and all(0 <= value <= 1 for value in outside)
+            assert camera.point_at_height(outside, 0) is None
+            landmarks = incoming.payload["vision"]["poses"][0]["landmarks"]
+            next(point for point in landmarks if point["name"] == "left_heel")["position"] = outside
+            [output] = await runtime.process_packet(incoming, None)
+            feet = output.payload["spatial"]["person_ground"]["feet"]
+            assert feet["right"]["contact"] == "retained_support_hypothesis"
+            assert feet["left"]["position"] is None
+            assert feet["left"]["reason"] == "foot_projection_unavailable"
+            [hidden] = await runtime.process_packet(packet(0.4, hidden=("left", "right")), None)
+            assert hidden.payload["spatial"]["person_ground"]["feet"]["left"]["position"] is None
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("offsets", "expected"),
     [

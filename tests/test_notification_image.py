@@ -167,7 +167,7 @@ def test_encoded_malformed_and_unsupported_pixel_types_fail_closed(data):
     assert build(value)[0] is None
 
 
-def test_pixel_and_encoded_limits_do_not_resize_or_reencode_to_fit(monkeypatch):
+def test_pixel_and_encoded_byte_limits_still_fail_closed(monkeypatch):
     assert build(packet(width=2049, height=1024)) == (None, "image_pixel_limit")
     assert build(packet(width=2048, height=1024))[1] == "ready"
     value = packet().with_artifact(replace(packet().artifacts["main"], data=b"x" * (256 * 1024 + 1)))
@@ -175,6 +175,44 @@ def test_pixel_and_encoded_limits_do_not_resize_or_reencode_to_fit(monkeypatch):
     from toposync.runtime.pipelines import operators_sinks
     monkeypatch.setattr(operators_sinks, "_encode_image_bytes", lambda *_a, **_k: (b"x" * (256 * 1024 + 1), ".jpg", "image/jpeg"))
     assert build(packet()) == (None, "image_byte_limit")
+
+
+def test_oversized_raw_jpeg_uses_lower_quality_with_original_dimensions_and_binding():
+    from toposync.runtime.pipelines.operators_sinks import _encode_image_bytes
+
+    value = packet(width=768, height=576)
+    artifact = value.artifacts["main"]
+    artifact.data[:] = np.random.default_rng(7).integers(0, 256, size=artifact.data.shape, dtype=np.uint8)
+    default_jpeg, _, _ = _encode_image_bytes(artifact.data, fmt="jpg", jpeg_quality=80)
+    assert len(default_jpeg) > notification_image.MAX_IMAGE_BYTES
+
+    descriptor, reason = build(value)
+    assert reason == "ready"
+    assert descriptor["imageGeometry"] == artifact.metadata["image_geometry"]
+    assert descriptor["captureEvidence"] == value.payload["capture_evidence"]
+    assert descriptor["expiresAt"] == 1000750
+    blob = base64.b64decode(descriptor["dataBase64"], validate=True)
+    assert len(blob) <= notification_image.MAX_IMAGE_BYTES
+    with Image.open(io.BytesIO(blob)) as decoded:
+        decoded.load()
+        assert decoded.size == (768, 576)
+
+
+def test_oversized_first_encode_cannot_start_a_retry_after_expiry(monkeypatch):
+    from toposync.runtime.pipelines import operators_sinks
+
+    now = [1000.1]
+    qualities = []
+    monkeypatch.setattr(notification_image.time, "time", lambda: now[0])
+
+    def slow_oversized_encoder(*_args, jpeg_quality, **_kwargs):
+        qualities.append(jpeg_quality)
+        now[0] = 1000.75
+        return b"x" * (notification_image.MAX_IMAGE_BYTES + 1), ".jpg", "image/jpeg"
+
+    monkeypatch.setattr(operators_sinks, "_encode_image_bytes", slow_oversized_encoder)
+    assert build(packet()) == (None, "image_expired")
+    assert qualities == [80]
 
 
 def test_rechecks_deadline_after_encoding_without_renewal(monkeypatch):

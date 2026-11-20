@@ -1644,6 +1644,12 @@ class IdentityStore:
                 if action in {"assign", "reject"}
                 else None
             )
+            reference_ids = set(values.get("reference_observation_ids", []))
+            if "reference_observation_ids" in values:
+                if values.get("use_as_reference") or not reference_ids.issubset(
+                    row["id"] for row in observations if row["eligible"] and row["crop"] is not None
+                ):
+                    raise ValueError("select eligible references from the reviewed photos")
             if values.get("require_current_suggestion"):
                 for occurrence_id in {row["occurrence_id"] for row in observations}:
                     current = self.decision(occurrence_id)
@@ -1654,7 +1660,7 @@ class IdentityStore:
                     raise ValueError("identity species does not match observation")
                 if action == "assign":
                     keep_reference = preserve_existing_references and row["reference"] and row["identity_id"] == identity["id"]
-                    use_reference = row["eligible"] and (keep_reference or values.get("use_as_reference", False))
+                    use_reference = row["eligible"] and (keep_reference or row["id"] in reference_ids or values.get("use_as_reference", False))
                     connection.execute(
                         "UPDATE observation SET identity_id=?,confirmed=1,reference=?,cluster_id=NULL WHERE id=?",
                         (

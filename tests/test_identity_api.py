@@ -816,3 +816,45 @@ def test_reidentifying_visit_preserves_only_references_already_approved_for_that
                            json={"expected_revision": gallery.revision})
     assert response.status_code == 200, response.text
     assert gallery.observe(evidence("after-undo", species="cat"), policy("cat")).identity_id == identity
+
+
+def test_identify_selects_individual_references_atomically(client):
+    from io import BytesIO
+    from PIL import Image
+    from test_identity_store import evidence, policy
+
+    store = client.portal.call(client.app.state.services.call, "vision.identity.store")
+    image = BytesIO()
+    Image.new("RGB", (32, 32)).save(image, format="JPEG")
+    good = store.observe(evidence("visit", species="cat"), None, crop=image.getvalue()).observation_id
+    other_vector = [0, 1] + [0] * 14
+    partial = store.observe(evidence("visit", species="cat", capture="partial", vector=other_vector), None, crop=image.getvalue()).observation_id
+    poor = store.observe(evidence("visit", species="cat", capture="poor", quality=False), None, crop=image.getvalue()).observation_id
+    missing = store.observe(evidence("visit", species="cat", capture="missing"), None).observation_id
+    assert good and partial and poor and missing
+    base = "/api/vision/identities"
+    revision = store.revision
+    request = {"action": "identify", "request_key": "select-photos", "expected_revision": revision,
+               "values": {"name": "Tama", "species": "cat", "observation_ids": [partial, good, poor, missing]}}
+    def submit(**choices):
+        return client.post(base + "/curation", json={**request, "values": {**request["values"], **choices}})
+
+    for choices in ({"reference_observation_ids": [missing]}, {"reference_observation_ids": ["outside"]}, {"reference_observation_ids": [good, poor]},
+                    {"reference_observation_ids": [good], "use_as_reference": True}):
+        assert submit(**choices).status_code in {409, 422}
+        assert store.revision == revision and not store.list_identities()
+
+    saved = submit(reference_observation_ids=[good])
+    assert saved.status_code == 200, saved.text
+    assert submit(reference_observation_ids=[good]).json() == saved.json()
+    identity = saved.json()["identity_id"]
+    photos = client.get(base + "/occurrences/visit").json()["observations"]
+    assert len(photos) == 4 and all(row["identity_id"] == identity for row in photos)
+    assert {row["id"] for row in photos if row["reference"]} == {good}
+    undo = client.post(base + "/history/" + saved.json()["operation_id"] + "/undo", json={"expected_revision": store.revision})
+    assert undo.status_code == 200, undo.text
+    assert not store.list_identities()
+    request.update(request_key="after-undo", expected_revision=store.revision)
+    identity = submit(reference_observation_ids=[good]).json()["identity_id"]
+    assert store.observe(evidence("next", species="cat"), policy("cat")).identity_id == identity
+    assert store.observe(evidence("different", species="cat", vector=other_vector), policy("cat")).status == "unknown"

@@ -33,6 +33,7 @@ class IdentifyValues(_Values):
     name: DisplayName | None = None
     species: Literal["person", "cat", "dog"] | None = None
     use_as_reference: StrictBool = False
+    reference_observation_ids: Annotated[list[Identifier], Field(max_length=500)] | None = None
     require_current_suggestion: StrictBool = False
 
     @model_validator(mode="after")

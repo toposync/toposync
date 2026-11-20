@@ -12,7 +12,10 @@ test("gallery retains authorized selection on refresh and clears removed or revo
   await page.route("**/api/vision/identities/observations?*", route => revoked
     ? route.fulfill({ status: 403, json: { detail: "revoked" } })
     : route.fulfill({ json: { observations: new URL(route.request().url()).searchParams.has("identity_id") && !identities.length ? [] : observations, revision: 1, next_cursor: null } }));
-  await page.route("**/api/vision/identities/observations/*/image", route => route.fulfill({ status: 404 }));
+  let partialAvailable = false;
+  await page.route("**/api/vision/identities/observations/*/image", route => partialAvailable || route.request().url().includes("/first/image")
+    ? route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="12"/></svg>' })
+    : route.fulfill({ status: 404 }));
   await page.goto("/settings");
   await page.getByRole("button", { name: /^Pessoas e pets/ }).click();
   const gallery = page.locator(".identityGallery");
@@ -36,6 +39,26 @@ test("gallery retains authorized selection on refresh and clears removed or revo
   await editor.getByRole("searchbox").fill("Nina");
   await expect(save).toBeEnabled();
   expect(submissions).toBe(0);
+  await editor.locator("summary", { hasText: "Fotos de referência" }).press("Enter");
+  const first = editor.getByRole("checkbox", { name: "Usar foto 1" });
+  await expect(first).toBeEnabled();
+  await expect(first).not.toBeChecked();
+  await expect(editor.getByRole("checkbox", { name: "Usar foto 2" })).toBeDisabled();
+  const retryPhoto = editor.getByRole("button", { name: "Recarregar foto 2" });
+  await retryPhoto.press("Enter");
+  await expect(retryPhoto).toBeEnabled();
+  await expect(retryPhoto).toBeFocused();
+  partialAvailable = true;
+  await retryPhoto.press("Enter");
+  await expect(editor.getByRole("checkbox", { name: "Usar foto 2" })).toBeFocused();
+  await editor.locator('img[src*="/first/image"]').click();
+  await expect(first).toBeChecked();
+  const submitted = page.waitForRequest(request => request.url().endsWith("/curation") && request.method() === "POST");
+  await save.press("Enter");
+  const { values } = (await submitted).postDataJSON();
+  expect(values.observation_ids).toEqual(["first", "second"]);
+  expect(values.reference_observation_ids).toEqual(["first"]);
+  await expect(editor.getByRole("alert")).toBeVisible();
   await editor.getByRole("button", { name: "Cancelar" }).click();
   await gallery.getByRole("checkbox", { name: "Selecionar as 2 fotos exibidas do grupo 1", exact: true }).check();
   const refresh = gallery.getByRole("button", { name: "Atualizar", exact: true });

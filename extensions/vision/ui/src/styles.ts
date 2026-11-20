@@ -25,6 +25,10 @@ export const styles = `
 .identityGallery .identityPhoto {width:100%;height:112px;object-fit:cover;border-radius:6px;background:var(--bg)}
 .identityGallery .identityPortrait {width:72px;height:72px;border-radius:12px;object-fit:cover}
 .identityGallery .identityPhotoButton {padding:0;border:0;background:transparent;color:inherit;cursor:zoom-in;border-radius:8px;min-width:0;text-align:left}
+.identityGallery .identityReferencePhoto {display:grid;align-content:start;gap:4px;min-width:0}
+.identityGallery .identityReferencePhoto .identityPhoto {object-fit:contain}
+.identityGallery .identityReferencePhoto label {display:grid;gap:4px;cursor:pointer;overflow-wrap:anywhere}
+.identityGallery .identityReferencePhoto label span {display:flex;align-items:center;gap:4px;min-height:44px}
 .identityGallery .identityFullPhoto {display:block;width:100%;max-height:65vh;object-fit:contain;border-radius:8px;background:var(--bg)}
 .identityGallery .identityInspector {display:grid;gap:12px;padding:12px;border:1px solid var(--borderStrong);border-radius:12px;min-width:0}
 .identityGallery .identityInspector .identityToolbar {justify-content:space-between}

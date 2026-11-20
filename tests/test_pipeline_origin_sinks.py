@@ -1189,3 +1189,13 @@ def test_notify_close_prefers_earliest_frame_on_confidence_tie(tmp_path: Path) -
         assert "/202000__" not in close_url
 
     asyncio.run(scenario())
+
+
+def test_image_conversion_preserves_channels_on_strided_crops():
+    from toposync.runtime.pipelines.operators_sinks import _pil_image_from_array
+
+    bgra = np.arange(4 * 6 * 4, dtype=np.uint8).reshape(4, 6, 4)[::-1, ::2]
+    for crop, order in ((bgra, [2, 1, 0, 3]), (bgra[..., :3], [2, 1, 0])):
+        assert not crop.flags.c_contiguous
+        converted = _pil_image_from_array(crop)
+        np.testing.assert_array_equal(np.asarray(converted), crop[..., order])

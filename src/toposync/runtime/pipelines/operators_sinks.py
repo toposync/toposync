@@ -395,13 +395,12 @@ def _pil_image_from_array(image: Any) -> Any:
     arr = np.asarray(image)
     if arr.dtype != np.uint8:
         arr = arr.astype(np.uint8, copy=False)
-    if arr.ndim == 3 and int(arr.shape[2]) == 3:
-        arr = arr[..., ::-1]
-    elif arr.ndim == 3 and int(arr.shape[2]) == 4:
-        arr = arr[..., [2, 1, 0, 3]]
-    elif arr.ndim != 2:
+    if arr.ndim == 2:
+        return Image.fromarray(np.ascontiguousarray(arr))
+    if arr.ndim != 3 or arr.shape[2] not in (3, 4):
         raise ValueError("Unsupported image shape for JPG/WebP encoding")
-    return Image.fromarray(np.ascontiguousarray(arr))
+    mode, raw_mode = ("RGB", "BGR") if arr.shape[2] == 3 else ("RGBA", "BGRA")
+    return Image.frombytes(mode, (arr.shape[1], arr.shape[0]), arr.tobytes(), "raw", raw_mode)
 
 
 def _encode_image_bytes(

@@ -752,25 +752,26 @@ class IdentityStore:
             return cameras
 
     def curation_camera_ids(self, values: dict) -> set[str]:
-        """Resolve explicit and implicit identities under the curation transaction lock."""
-        cameras: set[str] = set()
-        identities = {
-            values[key] for key in ("identity_id", "source_id", "target_id") if values.get(key)
-        }
-        for observation_id in values.get("observation_ids", []):
-            cameras.update(self.camera_ids(observation_id=observation_id))
-            # Assign/unassign can refresh the entire occurrence decision.
-            identities.update(
-                row[0]
-                for row in self._connection.execute(
-                    "SELECT DISTINCT identity_id FROM observation WHERE identity_id IS NOT NULL AND occurrence_id "
-                    "IN (SELECT occurrence_id FROM observation WHERE id=?)",
-                    (observation_id,),
+        """Resolve the full mutation scope for both API reads and curation transactions."""
+        with self._lock:
+            cameras: set[str] = set()
+            identities = {
+                values[key] for key in ("identity_id", "source_id", "target_id") if values.get(key)
+            }
+            for observation_id in values.get("observation_ids", []):
+                cameras.update(self.camera_ids(observation_id=observation_id))
+                # Assign/unassign can refresh the entire occurrence decision.
+                identities.update(
+                    row[0]
+                    for row in self._connection.execute(
+                        "SELECT DISTINCT identity_id FROM observation WHERE identity_id IS NOT NULL AND occurrence_id "
+                        "IN (SELECT occurrence_id FROM observation WHERE id=?)",
+                        (observation_id,),
+                    )
                 )
-            )
-        for identity_id in identities:
-            cameras.update(self.camera_ids(identity_id=identity_id))
-        return cameras
+            for identity_id in identities:
+                cameras.update(self.camera_ids(identity_id=identity_id))
+            return cameras
 
     def history(self, *, limit: int = 30) -> list[dict]:
         with self._lock:

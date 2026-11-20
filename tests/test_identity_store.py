@@ -856,3 +856,32 @@ def test_history_scope_uses_current_decisions_and_distinguishes_human_provenance
     store.delete_identity(identity, expected_revision=store.revision)
     with pytest.raises(IdentityConflict):
         read()
+
+
+def test_curation_camera_scope_serializes_all_shared_connection_reads(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    store = IdentityStore(tmp_path / "gallery", scope="test")
+    try:
+        observation = store.observe(evidence(), policy()).observation_id
+        unlocked_reads = []
+
+        def another_thread_can_enter():
+            if not store._lock.acquire(blocking=False):
+                return False
+            store._lock.release()
+            return True
+
+        with ThreadPoolExecutor(max_workers=1) as observer:
+            def check_access(statement):
+                if observer.submit(another_thread_can_enter).result():
+                    unlocked_reads.append(statement)
+
+            store._connection.set_trace_callback(check_access)
+            try:
+                assert store.curation_camera_ids({"observation_ids": [observation]}) == {"camera"}
+            finally:
+                store._connection.set_trace_callback(None)
+        assert not unlocked_reads
+    finally:
+        store.close()

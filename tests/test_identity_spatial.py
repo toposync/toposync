@@ -218,3 +218,230 @@ def test_actual_mapping_reprojection_rejects_stale_subject_provenance():
         assert context.position is None and context.calibrated_view_id is None
 
     asyncio.run(scenario())
+
+
+def test_panorama_mapping_another_detection_does_not_place_the_subject_at_its_old_position():
+    from test_camera_panorama_runtime import _job, _packet, _run
+
+    original = _packet()
+    original.payload["image_uv"] = {"u": .5, "v": 0}
+    original.payload["subject"] = {"type": "event", "id": "at-horizon", "category": "cat",
+                                   "world_anchor": {"x": 99, "z": 99}}
+    result = _run(original, {"applies": True, "job": _job()})
+    assert result.payload["mapping"]["status"] == "mapped"
+    assert result.payload["vision"]["detections"][0]["world_anchor"]["x"] == pytest.approx(3)
+    assert result.payload["world_projection"]["reason"] == "no_ground_intersection"
+    assert "world_anchor" not in result.payload
+    assert spatial_context(result).position is None
+
+
+def test_equal_coordinates_in_another_calibration_do_not_validate_the_old_subject_mapping():
+    original = mapped()
+    original.payload["subject"]["mapping"] = {**original.payload["mapping"], "panorama_revision": 2}
+    original.payload["world_anchor"] = {"x": 1, "z": 2}
+    assert spatial_context(original).position is None
+
+
+@pytest.mark.parametrize("late", [False, True])
+@pytest.mark.parametrize("preserved", [False, True])
+def test_extraction_uses_the_bound_individual_for_pixels_and_position(monkeypatch, late, preserved):
+    from toposync_ext_vision.identity.pipelines import IdentityContextRuntime
+
+    async def allowed(*args):
+        return True
+
+    async def scenario():
+        original = mapped()
+        original.payload["source"] = {"source_id": "wide", "device_id": "camera"}
+        original.payload["media"] = {"ts": 1.0}
+        binding_runtime = IdentityContextRuntime({"enabled": True, "late_enrichment": True}, PipelineRuntimeDependencies())
+        bound, = await binding_runtime.process_packet(original, Context())
+        subject = original.payload["subject"]
+        other = {**subject, "id": "area-event", "bbox01": [.5, .5, .9, .9], "world_anchor": {"x": 7, "z": 8}}
+        selected = replace(bound, payload={**bound.payload, "subject": other, "occurrence_reference": {"occurrence_id": "owner"},
+            "area_occurrence": {"observed_subject": subject if preserved else other}})
+        selected = selected.with_artifact(Artifact(name="main", data=np.zeros((128, 128, 3), dtype=np.uint8)))
+        sample = evidence(occurrence_key(selected), species="cat")
+        regions = []
+        def extract(*args, **kwargs):
+            regions.append(kwargs["region"])
+            return ExtractionResult("pending", "evidence_ready", sample)
+        monkeypatch.setattr("toposync_ext_vision.identity.pipelines.extract_in_process", extract)
+        monkeypatch.setattr("toposync_ext_vision.identity.pipelines.occurrence_enrichment_allowed", allowed)
+        runtime = IdentityEvidenceRuntime({"enabled": True, "late_enrichment": late}, PipelineRuntimeDependencies())
+        result, = await runtime.process_packet(selected, Context())
+        assert regions == [tuple(subject["bbox01"])]
+        ev = json.loads(result.artifacts[PRIVATE_EVIDENCE_ARTIFACT].data)["evidence"]
+        assert ev["occurrence_id"] == occurrence_key(bound) and ev["vector"]
+        assert ev["spatial_context"]["position"] == ([1., 2.] if preserved else None)
+        assert result.payload["subject"] == other
+    asyncio.run(scenario())
+
+@pytest.mark.parametrize("descriptor", ["area_occurrence", "frame_occurrence", "region_occurrence"])
+def test_bound_area_individual_survives_entity_projection(descriptor, tmp_path):
+    from test_camera_area_occurrences import AREA, observation
+    from toposync_ext_cameras.area_events import AreaOccurrenceRuntime
+    from toposync_ext_vision.entity_activity import EntityActivityRuntime
+    from toposync_ext_vision.identity.pipelines import IdentityContextRuntime, individual_packet, identity_binding
+
+    async def scenario():
+        tracked = observation(1)
+        tracked.payload.update(
+            camera_id="camera", source={"device_id": "camera", "source_id": "wide"},
+            association={"scope": "local", "entity_id": "animal"}, mapping=mapped().payload["mapping"],
+        )
+        tracked.payload["subject"].update(bbox01=(.1, .2, .4, .9) if descriptor == "frame_occurrence" else [.1, .2, .4, .9], world_anchor={"x": 1, "z": 1})
+        area = AreaOccurrenceRuntime({"area": AREA, "minimum_duration_seconds": 0})
+        occurrence, = await area.process_packet(tracked, None)
+        context = IdentityContextRuntime({"enabled": True, "late_enrichment": True}, PipelineRuntimeDependencies())
+        bound, = await context.process_packet(occurrence, None)
+        activity, = await EntityActivityRuntime({"scope": "local"}).process_packet(bound, None)
+        binding = identity_binding(activity)
+        assert tracked.payload["subject"]["id"] != binding["subject_id"] != activity.payload["subject"]["id"]
+        assert spatial_context(individual_packet(activity, binding)).position == (1., 1.)
+
+        # The same entity can receive another member, in the very same frame and box.
+        concurrent = replace(bound, payload={**bound.payload, "subject": {
+            **bound.payload["subject"], "id": "other-member", "world_anchor": {"x": 7, "z": 8},
+        }})
+        assembler = EntityActivityRuntime({"scope": "local"})
+        first, = await assembler.process_packet(bound, None)
+        second, = await assembler.process_packet(concurrent, None)
+        assert first.payload["subject"]["id"] == second.payload["subject"]["id"]
+        mixed = replace(second, payload={**second.payload, "identity_binding": first.payload["identity_binding"]})
+        from toposync.runtime.services import ServiceRegistry
+        from toposync_ext_vision.identity.pipelines import RecognizeIdentityRuntime
+        from test_identity_pipeline import with_evidence
+        services = ServiceRegistry()
+        store = IdentityStore(tmp_path, scope="two-members")
+        services.register("vision.identity.store", lambda: store)
+        deps = PipelineRuntimeDependencies(services=services)
+        try:
+            mixed = mixed.with_artifact(with_evidence(first).artifacts[PRIVATE_EVIDENCE_ARTIFACT])
+            resolved, = await RecognizeIdentityRuntime({"enabled": True}, deps).process_packet(mixed, Context())
+            assert resolved.payload["recognition"]["reason"] == "individual_occurrence_required"
+            assert not store.observations()
+            extracted, = await IdentityEvidenceRuntime({"enabled": True}, deps).process_packet(mixed, Context())
+            assert extracted.payload["recognition"]["reason"] == "individual_occurrence_required"
+            assert PRIVATE_EVIDENCE_ARTIFACT not in extracted.artifacts
+        finally:
+            store.close()
+
+        # A later occurrence can retain the original subject under any of these descriptors.
+        other = {**activity.payload["subject"], "id": "other", "world_anchor": {"x": 7, "z": 8}}
+        projected = replace(activity, payload={
+            **activity.payload, "subject": other, descriptor: {"observed_subject": occurrence.payload["subject"]},
+        })
+        assert spatial_context(individual_packet(projected, binding)).position == (1., 1.)
+        projected.payload[descriptor] = {"observed_subject": other}
+        assert spatial_context(individual_packet(projected, binding)).position is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("defect", ["missing", "boolean_sequence", "stale_subject", "mutable_box"])
+def test_context_requires_current_capture_and_freezes_the_bound_region(defect):
+    from toposync_ext_vision.identity.pipelines import IdentityContextRuntime, identity_binding
+
+    async def scenario():
+        original = mapped()
+        original.payload["source"] = {"source_id": "wide", "device_id": "camera"}
+        capture = original.payload["capture_evidence"]
+        if defect == "missing":
+            capture.clear()
+        elif defect == "boolean_sequence":
+            capture["sequence"] = True
+        elif defect == "stale_subject":
+            original.payload["subject"]["source_anchor"] = {"capture_evidence": {**capture, "sequence": 99}}
+        context = IdentityContextRuntime({"enabled": True, "late_enrichment": True}, PipelineRuntimeDependencies())
+        bound, = await context.process_packet(original, None)
+        if defect == "mutable_box":
+            original.payload["subject"]["bbox01"][0] = .3
+            assert identity_binding(bound)["bbox01"][0] == .1
+        else:
+            assert occurrence_key(bound) is None
+            assert bound.payload["recognition"]["status"] == "unobservable"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_resolver_rejects_evidence_from_another_frame_with_the_same_timestamp(monkeypatch, tmp_path, late):
+    from toposync_ext_vision.identity.pipelines import IdentityContextRuntime, RecognizeIdentityRuntime
+
+    async def scenario():
+        dependencies = PipelineRuntimeDependencies()
+        context = IdentityContextRuntime({"enabled": True, "late_enrichment": True}, dependencies)
+        original = mapped()
+        original.payload["source"] = {"source_id": "wide", "device_id": "camera"}
+        original = original.with_artifact(Artifact(name="main", data=np.zeros((128, 128, 3), dtype=np.uint8)))
+        first, = await context.process_packet(original, None)
+        next_frame = {**original.payload["capture_evidence"], "sequence": 5}
+        second, = await context.process_packet(replace(original, payload={
+            **original.payload, "capture_evidence": next_frame, "occurrence_reference": {"occurrence_id": "owner"},
+        }), None)
+        key = occurrence_key(first)
+        assert key == occurrence_key(second)
+        sample = evidence(key, species="cat").model_copy(update={"source_id": "wide"})
+        monkeypatch.setattr("toposync_ext_vision.identity.pipelines.extract_in_process",
+                            lambda *args, **kwargs: ExtractionResult("pending", "evidence_ready", sample))
+        observed, = await IdentityEvidenceRuntime({"enabled": True}, dependencies).process_packet(first, Context())
+        store = IdentityStore(tmp_path, scope="two-frames")
+        try:
+            resolver = RecognizeIdentityRuntime({"enabled": True, "late_enrichment": late}, dependencies)
+            with pytest.raises(ValueError, match="evidence_provenance_mismatch"):
+                resolver._resolve_active(second, store, key, observed.artifacts[PRIVATE_EVIDENCE_ARTIFACT])
+            assert not store.observations()
+        finally:
+            store.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_activity_cannot_stipulate_an_unrelated_binding_on_the_same_capture(retained):
+    from toposync_ext_vision.activity_evidence import ActivityEvidenceRuntime
+    from toposync_ext_vision.identity.pipelines import IdentityContextRuntime
+
+    async def scenario():
+        packet = mapped()
+        packet.payload.update(source={"source_id": "wide", "device_id": "camera"}, media={"ts": 1.0})
+        bound, = await IdentityContextRuntime({"enabled": True, "late_enrichment": True},
+                                             PipelineRuntimeDependencies()).process_packet(packet, None)
+        original = bound.payload["subject"]
+        altered = replace(bound, payload={**bound.payload, "subject": {**original, "id": "other"},
+            "frame_occurrence": {"observed_subject": original} if retained else {}})
+        output, = await ActivityEvidenceRuntime().process_packet(altered, None)
+        assert output.payload["activity_observation"]["episode_id"] == "other"
+        assert occurrence_key(output, require_binding=True) is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("kind", ["area", "frame", "region"])
+def test_identity_bound_before_an_occurrence_reaches_the_admitted_activity(kind):
+    from test_camera_area_occurrences import AREA, observation
+    from toposync_ext_cameras.area_events import AreaOccurrenceRuntime
+    from toposync_ext_cameras.pipelines.frame_occurrence import FrameOccurrenceRuntime
+    from toposync_ext_cameras.pipelines.region_occurrence import RegionOccurrenceRuntime
+    from toposync_ext_vision.activity_evidence import ActivityEvidenceRuntime
+    from toposync_ext_vision.identity.pipelines import IdentityContextRuntime
+
+    async def scenario():
+        packet = observation(1)
+        packet.payload.update(camera_id="camera", source={"source_id": "wide", "device_id": "camera"},
+                              media={"ts": 1.}, correlation_id="original",
+                              region_observation={"geometry_key": "region", "classification": "inside"})
+        packet.payload["subject"].update(type="event", bbox01=[.1, .2, .4, .9])
+        context = IdentityContextRuntime({"enabled": True, "late_enrichment": True}, PipelineRuntimeDependencies())
+        bound, = await context.process_packet(packet, None)
+        config = {"categories": ["cat"], "minimum_duration_seconds": 0}
+        operators = {"area": AreaOccurrenceRuntime({**config, "area": AREA}), "frame": FrameOccurrenceRuntime(config),
+                     "region": RegionOccurrenceRuntime(config)}
+        projected, = await operators[kind].process_packet(bound, None)
+        assert projected.payload["subject"]["id"] != packet.payload["subject"]["id"]
+        admitted, = await ActivityEvidenceRuntime().process_packet(projected, None)
+        assert occurrence_key(admitted) == occurrence_key(bound) is not None
+        assert admitted.payload["identity_binding"]["activity_evidence_id"] == admitted.payload["activity_observation"]["evidence_id"]
+
+    asyncio.run(scenario())

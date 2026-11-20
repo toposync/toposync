@@ -379,8 +379,12 @@ class OccurrenceStore:
                 return False
             if evidence is not None:
                 saved = document["evidence"][reference.evidence_id]
-                if any(evidence.get(key) != saved.get(key) for key in (
-                    "camera_id", "source_id", "capture_instance", "capture_generation", "frame_sequence")):
+                position = evidence.get("position")
+                if isinstance(position, tuple):
+                    position = list(position)
+                if position != saved.get("position") or any(evidence.get(key) != saved.get(key) for key in (
+                    "camera_id", "source_id", "capture_instance", "capture_generation", "frame_sequence",
+                    "coordinate_reference", "mapping_revision")):
                     return False
             return len(document["enrichments"]) < self.maximum_enrichments
 

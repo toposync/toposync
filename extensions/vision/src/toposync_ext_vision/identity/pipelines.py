@@ -24,7 +24,7 @@ from toposync.runtime.pipelines.runtime import Artifact, Lifecycle, Packet
 from ..registry import build_default_model_registry
 from .contracts import IdentityEvidence, RecognitionDecision, RecognitionPolicy
 from .extraction import IdentityExtractor, extract_in_process, validate_identity_frame
-from .spatial import spatial_context
+from .spatial import bound_spatial_context, spatial_context
 from toposync.runtime.pipelines.image_geometry import inspection_geometry
 from toposync.runtime.pipelines.inspection import copy_inspection_frame, frame_reference
 from .inspection import evidence_visuals, recognition_visual
@@ -115,17 +115,36 @@ class RecognizeIdentityConfig(BaseModel):
 
 def identity_binding(packet: Packet) -> dict | None:
     binding = packet.payload.get("identity_binding")
-    capture = packet.payload.get("capture_evidence")
-    if not isinstance(binding, dict) or not isinstance(capture, dict):
+    if not isinstance(binding, dict):
+        return None
+    capture = frame_reference(packet)
+    if capture is None or type(binding.get("generation")) is not int or type(binding.get("sequence")) is not int:
         return None
     if (binding.get("camera_id") != packet.payload.get("camera_id")
             or binding.get("source_id") != resolve_source_id(packet)
             or binding.get("observed_at") != resolve_media_ts(packet)
             or any(binding.get(key) != capture.get(key) for key in ("capture_instance", "generation", "sequence"))):
         return None
-    if not all(isinstance(binding.get(key), str) and 0 < len(binding[key]) <= 512 for key in ("source_id", "subject_id", "correlation_id")):
+    if not all(isinstance(binding.get(key), str) and 0 < len(binding[key]) <= 512 for key in ("camera_id", "source_id", "subject_id", "correlation_id")):
+        return None
+    activity = packet.payload.get("entity_activity")
+    if isinstance(activity, dict) and activity.get("member_subject_id") != binding["subject_id"]:
+        return None
+    observation = packet.payload.get("activity_observation")
+    if isinstance(observation, dict) and (
+            not observation.get("evidence_id") or binding.get("activity_evidence_id") != observation["evidence_id"]):
         return None
     return binding
+
+
+class EvidenceProvenanceMismatch(ValueError):
+    pass
+
+
+def _bound_sample(binding: dict | None) -> list | None:
+    if binding is None:
+        return None
+    return [binding.get(key) for key in ("capture_instance", "generation", "sequence", "bbox01", "activity_evidence_id")]
 
 
 def occurrence_key(packet: Packet, *, require_binding: bool = False) -> str | None:
@@ -198,16 +217,59 @@ class IdentityContextRuntime(TransformOperatorRuntime):
                     occurrence_id=None,
                 )
             ]
-        capture = packet.payload.get("capture_evidence")
         subject = packet.payload["subject"]
-        if self.config.late_enrichment and isinstance(capture, dict):
+        if self.config.late_enrichment:
+            capture = frame_reference(packet)
+            if capture is None or not _original_subject_plane(packet, None):
+                return [_summary(packet, status="unobservable", reason="original_frame_required", occurrence_id=None)]
+            region = subject.get("bbox01")
             packet = replace(packet, payload={**packet.payload, "identity_binding": {
                 "source_id": resolve_source_id(packet), "camera_id": packet.payload.get("camera_id"),
-                "subject_id": subject["id"], "category": subject.get("category"), "bbox01": subject.get("bbox01"),
+                "subject_id": subject["id"], "category": subject.get("category"),
+                "bbox01": list(region) if isinstance(region, (list, tuple)) else None,
                 "correlation_id": str(packet.payload.get("correlation_id") or packet.metadata.get("correlation_id")),
                 "observed_at": resolve_media_ts(packet),
                 **{name: capture.get(name) for name in ("capture_instance", "generation", "sequence")}}})
+            if identity_binding(packet) is None:
+                return [_summary(packet, status="unobservable", reason="individual_occurrence_required", occurrence_id=None)]
         return [_summary(packet, status="pending", reason="recognition_scheduled", occurrence_id=key)]
+
+
+def individual_packet(packet: Packet, binding: dict | None, *, current_member_only: bool = False) -> Packet:
+    if binding is None:
+        return packet
+    current = packet.payload.get("subject")
+    activity = packet.payload.get("entity_activity")
+    projected_id = None
+    if isinstance(activity, dict) and activity.get("member_subject_id") == binding["subject_id"]:
+        projected_id = activity.get("activity_id")
+    candidates = [current]
+    for name in ("area_occurrence", "frame_occurrence", "region_occurrence"):
+        descriptor = packet.payload.get(name)
+        if isinstance(descriptor, dict):
+            if current_member_only and (not isinstance(current, dict) or descriptor.get("occurrence_id") != current.get("id")):
+                continue
+            candidates.append(descriptor.get("observed_subject"))
+    for subject in candidates:
+        if not isinstance(subject, dict) or subject.get("type") != "event":
+            continue
+        identifier = subject.get("id")
+        original = identifier == binding["subject_id"]
+        projected = subject is current and identifier and identifier == projected_id
+        if not (original or projected):
+            continue
+        region = subject.get("bbox01")
+        if (subject.get("category") == binding.get("category")
+                and isinstance(region, (list, tuple)) and list(region) == binding.get("bbox01")):
+            return packet if subject is current else replace(packet, payload={**packet.payload, "subject": subject})
+    return replace(packet, payload={**packet.payload, "subject": None})
+
+
+def current_member_binding(packet: Packet) -> dict | None:
+    binding = identity_binding(packet)
+    if binding is not None and individual_packet(packet, binding, current_member_only=True).payload.get("subject"):
+        return binding
+    return None
 
 
 def _original_subject_plane(packet: Packet, artifact: Artifact | None) -> bool:
@@ -280,11 +342,12 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
     async def process_packet(self, packet: Packet, context: Any) -> list[Packet]:
         if not self.config.enabled:
             return [packet]
-        if self.config.late_enrichment and not await occurrence_enrichment_allowed(packet, self.dependencies):
+        activity_owned = self.config.late_enrichment or "occurrence_reference" in packet.payload
+        if activity_owned and not await occurrence_enrichment_allowed(packet, self.dependencies):
             return []
         # A chained extractor owns its output even when this sample is skipped.
         packet = _without_identity_artifacts(packet)
-        key = occurrence_key(packet, require_binding=self.config.late_enrichment)
+        key = occurrence_key(packet, require_binding=activity_owned)
         if key is None:
             return [
                 _summary(
@@ -302,7 +365,9 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
                 _summary(packet, status="pending", reason="occurrence_closed", occurrence_id=key)
             ]
         artifact = packet.artifacts.get(self.config.input_artifact_name)
-        if not _original_subject_plane(packet, artifact):
+        binding = identity_binding(packet)
+        individual = individual_packet(packet, binding)
+        if not _original_subject_plane(individual, artifact):
             return [_summary(packet, status="unobservable", reason="original_frame_required", occurrence_id=key)]
         now = time.monotonic()
         previous = self._keyframes.get(key)
@@ -328,7 +393,7 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
                         occurrence_id=key,
                     )
                 ]
-        subject = identity_binding(packet) if self.config.late_enrichment else packet.payload["subject"]
+        subject = binding or packet.payload["subject"]
         species = str(subject.get("category") or "").lower()
         if species not in {"person", "cat", "dog"}:
             return [
@@ -353,7 +418,7 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
             return [_summary(packet, status="unobservable", reason=image_error, occurrence_id=key)]
         self._sampled[key] = now
         inspection_frame = await copy_inspection_frame(context, artifact.data)
-        if self.config.late_enrichment:
+        if activity_owned:
             self._activity_owners[key] = packet.payload["occurrence_reference"]["occurrence_id"]
         try:
             extractor = self._extractor(species)
@@ -377,11 +442,11 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
                     process_pool_key="vision.identity_evidence",
                     process_pool_deadline_seconds=30.0,
                 ))
-                if self.config.late_enrichment:
+                if activity_owned:
                     self._pending = (packet.payload["occurrence_reference"]["occurrence_id"], task)
                 result = await task
         except asyncio.CancelledError:
-            if self.config.late_enrichment and not context.is_cancelled():
+            if activity_owned and not context.is_cancelled():
                 return []
             raise
         except TimeoutError:
@@ -399,7 +464,7 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
             ]
         finally:
             self._pending = None
-        if self.config.late_enrichment and not await occurrence_enrichment_allowed(packet, self.dependencies):
+        if activity_owned and not await occurrence_enrichment_allowed(packet, self.dependencies):
             return []
         output = _summary(packet, status=result.status, reason=result.reason, occurrence_id=key)
         if result.evidence is not None:
@@ -421,12 +486,15 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
                         and evidence.reference_eligible == last.reference_eligible
                         and evidence.quality < last.quality + 0.1):
                     return [_summary(packet, status="pending", reason="sampling", occurrence_id=key)]
+            spatial = (bound_spatial_context(packet) if binding is not None and individual is packet
+                       else spatial_context(individual))
             data = json.dumps(
                 {
                     "evidence": result.evidence.model_copy(
-                        update={"spatial_context": spatial_context(packet)}
+                        update={"spatial_context": spatial}
                     ).model_dump(),
                     "crop": base64.b64encode(result.crop).decode() if result.crop else None,
+                    **({"bound_sample": _bound_sample(binding)} if binding is not None else {}),
                 },
                 separators=(",", ":"),
                 allow_nan=False,
@@ -483,14 +551,14 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
     def _resolve_active(self, packet: Packet, store: Any, key: str, artifact: Artifact | None):
         # Decodificação, locks e SQLite ficam no executor limitado do operador.
         # Cancelar a espera não interrompe uma transação já iniciada na thread.
-        if self.config.late_enrichment and artifact is None:
+        activity_owned = self.config.late_enrichment or "occurrence_reference" in packet.payload
+        if activity_owned and artifact is None:
             return None
         current = store.decision(key)
         policy = None
         if current is not None and (artifact is None or packet.lifecycle == Lifecycle.CLOSE):
-            policy = self.config.policy_for(
-                str(packet.payload["subject"].get("category") or "").lower(), current.embedding_space
-            )
+            subject = identity_binding(packet) or packet.payload["subject"]
+            policy = self.config.policy_for(str(subject.get("category") or "").lower(), current.embedding_space)
         if packet.lifecycle == Lifecycle.CLOSE:
             store.close_occurrence(key)
         elif artifact is not None:
@@ -502,11 +570,12 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
                 raise ValueError("invalid_evidence_envelope")
             decoded = json.loads(artifact.data)
             evidence = IdentityEvidence.model_validate(decoded["evidence"])
-            if evidence.occurrence_id != key or evidence.camera_id != packet.payload.get(
-                "camera_id"
-            ) or (self.config.late_enrichment and (
-                evidence.source_id != resolve_source_id(packet) or evidence.observed_at != resolve_media_ts(packet))):
-                raise ValueError("evidence_provenance_mismatch")
+            binding = identity_binding(packet)
+            if (evidence.occurrence_id != key or evidence.camera_id != packet.payload.get("camera_id")
+                    or decoded.get("bound_sample") != _bound_sample(binding)
+                    or (binding is not None and (evidence.source_id != binding["source_id"]
+                        or evidence.observed_at != binding["observed_at"] or evidence.species != binding["category"]))):
+                raise EvidenceProvenanceMismatch("evidence_provenance_mismatch")
             policy = self.config.policy_for(evidence.species, evidence.embedding_space)
             if policy is not None:
                 if self._registered_store is not None and self._registered_store is not store:
@@ -519,7 +588,7 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
                 policy,
                 crop=crop,
                 expected_gallery_revision=store.revision,
-                **({"activity_reference": packet.payload["occurrence_reference"]} if self.config.late_enrichment else {}),
+                **({"activity_reference": packet.payload["occurrence_reference"]} if activity_owned else {}),
             )
         elif current is not None:
             incoming = packet.payload.get("recognition", {})
@@ -534,13 +603,14 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
         return current.for_policy(policy.fingerprint() if policy else "") if current is not None else None
 
     async def process_packet(self, packet: Packet, context: Any) -> list[Packet]:
-        if self.config.late_enrichment and not await occurrence_enrichment_allowed(packet, self.dependencies):
+        activity_owned = self.config.late_enrichment or "occurrence_reference" in packet.payload
+        if activity_owned and not await occurrence_enrichment_allowed(packet, self.dependencies):
             return []
         outputs = await self._process_identity(packet, context)
+        if activity_owned and not await occurrence_enrichment_allowed(packet, self.dependencies):
+            return []
         if not self.config.late_enrichment:
             return outputs
-        if not await occurrence_enrichment_allowed(packet, self.dependencies):
-            return []
         results = []
         for output in outputs:
             summary = output.payload.get("recognition", {})
@@ -556,7 +626,7 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
         clean = _without_identity_artifacts(packet)
         if not self.config.enabled:
             return [clean]
-        key = occurrence_key(packet, require_binding=self.config.late_enrichment)
+        key = occurrence_key(packet, require_binding=self.config.late_enrichment or "occurrence_reference" in packet.payload)
         if key is None:
             return [
                 _summary(
@@ -596,6 +666,8 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
                 )
                 return [output]
             return [clean]
+        except EvidenceProvenanceMismatch:
+            return [_summary(clean, status="unobservable", reason="evidence_provenance_mismatch", occurrence_id=key)]
         except Exception:
             return [
                 _summary(

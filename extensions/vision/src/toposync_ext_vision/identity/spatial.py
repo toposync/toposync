@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import math
 
 from pydantic import ValidationError
 
+from toposync.runtime.pipelines.packet_contract import resolve_media_ts, resolve_source_id
 from toposync.runtime.pipelines.runtime import Packet
 
 from .contracts import IdentitySpatialContext
@@ -17,6 +19,31 @@ def spatial_context(packet: Packet) -> IdentitySpatialContext:
         return _spatial_context(packet)
     except (TypeError, ValueError, OverflowError, ValidationError):
         return IdentitySpatialContext(status="unavailable", reason="mapping_context_invalid")
+
+
+def bound_spatial_context(packet: Packet) -> IdentitySpatialContext:
+    # A demand projects the admitted activity and subject, leaving the frame-wide mapping behind.
+    activity = packet.payload.get("activity_observation")
+    if "mapping" in packet.payload or not isinstance(activity, dict):
+        return spatial_context(packet)
+    subject = packet.payload.get("subject")
+    saved = subject.get("mapping") if isinstance(subject, dict) else None
+    capture = packet.payload.get("capture_evidence")
+    if isinstance(saved, dict) and isinstance(capture, dict):
+        estimate = spatial_context(replace(packet, payload={**packet.payload, "mapping": saved}))
+        point = activity.get("position")
+        if (estimate.status == "estimate" and estimate.calibration_revision is not None
+                and isinstance(point, (list, tuple)) and tuple(point) == estimate.position
+                and activity.get("coordinate_reference") == estimate.composition_id
+                and activity.get("mapping_revision") == estimate.calibration_revision
+                and activity.get("camera_id") == packet.payload.get("camera_id")
+                and activity.get("source_id") == resolve_source_id(packet)
+                and activity.get("observed_at") == resolve_media_ts(packet)
+                and activity.get("capture_instance") == capture.get("capture_instance")
+                and activity.get("capture_generation") == capture.get("generation")
+                and activity.get("frame_sequence") == capture.get("sequence")):
+            return estimate
+    return IdentitySpatialContext(status="unavailable", reason="mapping_anchor_mismatch")
 
 
 def _spatial_context(packet: Packet) -> IdentitySpatialContext:
@@ -44,7 +71,16 @@ def _spatial_context(packet: Packet) -> IdentitySpatialContext:
         return unavailable("individual_anchor_invalid")
     # Reprojection can update packet mapping while retaining an older subject anchor.
     # A generic anchor can invalidate this association, never supply its replacement.
+    saved_mapping = subject.get("mapping")
+    if isinstance(saved_mapping, dict) and any(
+        saved_mapping.get(key) != mapping.get(key)
+        for key in ("status", "composition_id", "calibrated_view_id", "map_revision", "panorama_revision", "motion_epoch")
+    ):
+        return unavailable("mapping_anchor_mismatch")
+    projection = packet.payload.get("world_projection")
     projected = packet.payload.get("world_anchor")
+    if projected is None and isinstance(projection, dict) and projection.get("status") == "unavailable":
+        return unavailable("mapping_anchor_mismatch")
     if isinstance(projected, dict) and any(
         type(projected.get(axis)) not in (int, float) or projected.get(axis) != value
         for axis, value in zip(("x", "z"), point, strict=True)

@@ -286,7 +286,7 @@ class AreaOccurrenceRuntime(TransformOperatorRuntime):
             )
         payload.update({
             "subject": subject, "correlation_id": identity,
-            "area_occurrence": {"area": self.area.name, "mode": self.config.mode,
+            "area_occurrence": {"occurrence_id": identity, "area": self.area.name, "mode": self.config.mode,
                 "lifecycle_epoch": self.occurrence_epoch,
                 "lifecycle_sequence": state.occurrence_sequence,
                 "status": status, "observed_subject": packet.payload["subject"],

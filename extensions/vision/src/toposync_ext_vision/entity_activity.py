@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .identity.pipelines import current_member_binding
+
 from toposync.runtime.pipelines import TransformOperatorRuntime
 from toposync.runtime.pipelines.packet_contract import resolve_frame_freshness, resolve_source_id
 from toposync.runtime.pipelines.runtime import Lifecycle
@@ -58,6 +60,14 @@ class EntityActivityRuntime(TransformOperatorRuntime):
                 "reason": reason,
             },
         )
+        if "identity_binding" in payload:
+            binding = current_member_binding(packet)
+            if binding is None:
+                payload["identity_binding"] = None
+            else:
+                # Multiple members can produce the same activity within a single frame.
+                payload["entity_activity"]["member_subject_id"] = binding["subject_id"]
+                payload["entity_activity"]["activity_id"] = subject["id"]
         metadata = {
             **packet.metadata,
             "subject_id": state["id"],

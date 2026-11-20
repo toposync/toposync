@@ -51,6 +51,10 @@ Reconnect within the same processing instance resumes the last contiguous sequen
 
 ## Spatial inspection
 
+Recognition binds the crop to a camera, source, decoder generation, frame sequence and individual occurrence. An area, frame or region occurrence can carry that individual into a multi-camera activity. Before enrichment, the activity records which member produced its evidence. A mismatched member or capture yields no association in the gallery. In-flight evidence from an older extractor without the capture binding is discarded on this path. Existing gallery data remains readable.
+
+For a projected activity, the subject retains its mapping and the persisted contribution supplies the position, coordinate reference and mapping revision. The extractor checks that they agree for the same capture. Missing or conflicting geometry leaves the position unavailable. A valid crop can still be recognized when geometry is unavailable at capture.
+
 The extractor retains a bounded private snapshot of the individual world anchor and available mapping/capture provenance. It distinguishes decoder generations, rejects conflicting current projections or capture evidence, and degrades malformed optional data without discarding visual inference. The authorized observation context endpoint exposes this snapshot without embeddings; reference reconstruction preserves the original snapshot.
 
 This context is inspection-only. Current producers do not provide conservative spatial error bounds and synchronized physical capture intervals, so confidence, calibration readiness and publication time cannot justify a physical identity veto. Overlapping cameras, distant estimates and different compositions do not create or reject a visual identity. The physical-contradiction acceptance scenario remains unvalidated.

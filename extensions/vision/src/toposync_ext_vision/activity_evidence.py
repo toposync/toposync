@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from toposync.runtime.pipelines import TransformOperatorRuntime
 from toposync.runtime.pipelines.runtime import Lifecycle
+from .identity.pipelines import current_member_binding
 from .identity.spatial import spatial_context
 
 
@@ -149,6 +150,11 @@ class ActivityEvidenceRuntime(TransformOperatorRuntime):
                          mapping_revision=spatial.calibration_revision)
         value["evidence_id"] = _evidence_identifier(value)
         value["message_id"] = _identifier([value["episode_id"], value["evidence_id"], value["lifecycle"], reason])
+        if "identity_binding" in payload:
+            binding = current_member_binding(packet)
+            payload = {**payload, "identity_binding": (
+                {**binding, "activity_evidence_id": value["evidence_id"]} if binding is not None else None
+            )}
         metadata = packet.metadata
         if value["episode_id"] != episode:
             if previous is None or previous[1].payload["activity_observation"]["episode_id"] != value["episode_id"]:
@@ -159,6 +165,8 @@ class ActivityEvidenceRuntime(TransformOperatorRuntime):
             subject = {**subject, "id": _identifier([value["episode_id"], member]), "lifecycle": lifecycle.value,
                        "lifecycle_epoch": self.epoch, "lifecycle_sequence": sequence}
             metadata = {**metadata, "subject_id": subject["id"], "subject_lifecycle": lifecycle.value}
+            if activity.get("activity_id") == episode:
+                payload = {**payload, "entity_activity": {**activity, "activity_id": subject["id"]}}
         output = replace(packet, stream_id=subject["id"], lifecycle=lifecycle,
                          payload={**payload, "subject": subject, "activity_observation": value}, metadata=metadata)
         if packet.lifecycle != Lifecycle.CLOSE:

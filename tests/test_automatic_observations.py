@@ -314,7 +314,7 @@ def test_unprepared_spatial_scope_never_silently_becomes_whole_camera():
 
 
 def observed(camera="a", sequence=1, *, lifecycle=Lifecycle.OPEN, entity="vehicle", age=0):
-    original = packet(camera=camera, stamp=sequence, track="local-" + camera)
+    original = packet(camera=camera, stamp=sequence, track="local-" + camera, frame_tracks=["local-" + camera])
     return replace(
         original,
         lifecycle=lifecycle,

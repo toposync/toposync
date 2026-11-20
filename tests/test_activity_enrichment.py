@@ -1,6 +1,7 @@
 """Real automatic graph, crop, history and AI operator; synthetic source and inference."""
 
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -21,7 +22,7 @@ from toposync_ext_ai.pipelines.operators import register_ai_pipeline_operators
 from toposync_ext_ai.pipelines.runtime import AiConditionFilterRuntime
 from toposync_ext_cameras.automatic import plan_observation
 from toposync_ext_vision.identity.extraction import ExtractionResult
-from toposync_ext_vision.identity.pipelines import IdentityEvidenceRuntime
+from toposync_ext_vision.identity.pipelines import IdentityEvidenceRuntime, PRIVATE_EVIDENCE_ARTIFACT
 from toposync_ext_vision.identity.store import IdentityStore
 from test_identity_store import enroll, evidence, policy
 
@@ -48,6 +49,7 @@ def test_record_and_close_precede_slow_enrichment_and_privacy_is_rechecked(tmp_p
         slow_started, release_inference, update_recorded, closed, enriched, processed = (asyncio.Event() for _ in range(6))
         calls = []
         requests = []
+        spatial_estimates = []
         first_recorded = asyncio.Event()
         gallery = IdentityStore(tmp_path / "private", scope="synthetic", activity_authorized=history.occurrences.reference_allowed)
         identity, _, _ = enroll(gallery, name="Synthetic participant")
@@ -58,7 +60,8 @@ def test_record_and_close_precede_slow_enrichment_and_privacy_is_rechecked(tmp_p
         def sample(sequence, lifecycle=Lifecycle.UPDATE):
             value = observed(sequence=sequence, lifecycle=lifecycle)
             return replace(value, payload={**value.payload, "frame_ts": float(sequence),
-                "subject": {**value.payload["subject"], "category": "person", "bbox01": [.1, .1, .4, .9]}},
+                "subject": {**value.payload["subject"], "category": "person", "bbox01": [.1, .1, .4, .9],
+                            "mapping": value.payload["mapping"]}},
                 artifacts={} if interruption == "missing_image" else {
                     "main": Artifact("main", np.zeros((100, 100, 3), dtype=np.uint8))})
 
@@ -97,7 +100,12 @@ def test_record_and_close_precede_slow_enrichment_and_privacy_is_rechecked(tmp_p
                     sample = sample.model_copy(update={"source_id": kwargs["source_id"], "camera_id": kwargs["camera_id"]})
                     return ExtractionResult("observed", "synthetic", evidence=sample)
                 try:
-                    return await super().process_packet(packet, SimpleNamespace(run_blocking=extract, is_cancelled=context.is_cancelled))
+                    outputs = await super().process_packet(packet, SimpleNamespace(run_blocking=extract, is_cancelled=context.is_cancelled))
+                    for output in outputs:
+                        artifact = output.artifacts.get(PRIVATE_EVIDENCE_ARTIFACT)
+                        if artifact:
+                            spatial_estimates.append(json.loads(artifact.data)["evidence"]["spatial_context"])
+                    return outputs
                 finally:
                     processed.set()
 
@@ -182,6 +190,25 @@ def test_record_and_close_precede_slow_enrichment_and_privacy_is_rechecked(tmp_p
             false_source = replace(pending, payload={**pending.payload, "camera_id": "another-camera",
                 "activity_observation": {**pending.payload["activity_observation"], "camera_id": "another-camera"}})
             assert not await occurrence_enrichment_allowed(false_source, runtime.dependencies)
+            if capability == "vision.recognition" and interruption is None:
+                from toposync_ext_vision.identity.pipelines import RecognizeIdentityRuntime
+                for operator in (IdentityEvidenceRuntime, RecognizeIdentityRuntime):
+                    synchronous = operator({"enabled": True}, runtime.dependencies)
+                    assert await synchronous.process_packet(wrong_time, None) == []
+                binding = {**pending.payload["identity_binding"], "activity_evidence_id": "another-contribution"}
+                mixed = replace(pending, payload={**pending.payload, "identity_binding": binding})
+                assert await occurrence_enrichment_allowed(mixed, runtime.dependencies)
+                extractor = IdentityEvidenceRuntime({"enabled": True, "late_enrichment": True}, runtime.dependencies)
+                denied, = await extractor.process_packet(mixed, None)
+                assert PRIVATE_EVIDENCE_ARTIFACT not in denied.artifacts
+                resolver = RecognizeIdentityRuntime({"enabled": True, "late_enrichment": True}, runtime.dependencies)
+                denied, = await resolver.process_packet(denied, None)
+                assert denied.payload["occurrence_enrichment"]["identity_occurrence_id"] is None
+                assert len(gallery.observations()) == 1
+            for changed in ({"position": (7., 8.)}, {"mapping_revision": "different"}, {"coordinate_reference": "other"}):
+                altered = replace(pending, payload={**pending.payload, "activity_observation": {
+                    **pending.payload["activity_observation"], **changed}})
+                assert not await occurrence_enrichment_allowed(altered, runtime.dependencies)
             if interruption == "revoke":
                 await history.revoke_occurrence_enrichment(identifier, expected_revision=before["revision"])
             elif interruption == "delete":
@@ -219,6 +246,9 @@ def test_record_and_close_precede_slow_enrichment_and_privacy_is_rechecked(tmp_p
                     assert [item["status"] for item in after["enrichments"]] == ["observed", "unknown"]
                     assert gallery.decision(after["enrichments"][0]["identity_occurrence_id"]).identity_id == identity
                     assert "Synthetic participant" not in str(after) and identity not in str(after)
+                    assert spatial_estimates[0]["status"] == "estimate"
+                    assert spatial_estimates[0]["position"] == list(requests[0].payload["activity_observation"]["position"])
+                    assert "mapping" not in requests[0].payload
                 if interruption == "missing_image":
                     assert all(item["reason"] == ("missing_image_or_condition" if capability == "ai.context" else "subject_image_missing") for item in after["enrichments"])
                 assert len(history.occurrences.deliveries(identifier)) == 1

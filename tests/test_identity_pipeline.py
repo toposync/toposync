@@ -118,6 +118,54 @@ def test_occurrence_identity_is_independent_of_reused_tracker_id():
     )
 
 
+def test_identity_samples_only_the_original_subject_plane_and_capture(monkeypatch):
+    import numpy as np
+    from types import SimpleNamespace
+    from toposync.runtime.pipelines.image_geometry import image_geometry, transformed_geometry
+    import toposync_ext_vision.identity.pipelines as pipelines
+
+    async def scenario():
+        capture = {"capture_instance": "camera-test", "generation": 1, "sequence": 2}
+        value = packet()
+        value = replace(value, payload={**value.payload, "capture_evidence": capture})
+        pixels = np.zeros((100, 160, 3), dtype=np.uint8)
+        original = Artifact(name="main", data=pixels, metadata={"image_geometry": image_geometry(160, 100, capture)})
+        translated = transformed_geometry(original, [[1, 0, -32], [0, 1, 0], [0, 0, 1]], 160, 100)
+        stale = image_geometry(160, 100, {**capture, "sequence": 1})
+        calls = []
+        def extract(*args, **kwargs):
+            calls.append(kwargs["region"])
+            return SimpleNamespace(evidence=None, status="pending", reason="probe")
+        monkeypatch.setattr(pipelines, "extract_in_process", extract)
+        runtime = IdentityEvidenceRuntime({"enabled": True}, PipelineRuntimeDependencies())
+        runtime._extractor = lambda species: SimpleNamespace(process_specification=lambda: ())
+        for artifact, reason in [
+            (replace(original, metadata=translated), "original_frame_required"),
+            (replace(original, metadata={"image_geometry": stale}), "original_frame_required"),
+            (replace(original, metadata={"image_geometry": {}}), "original_frame_required"),
+            (replace(original, metadata={"source_artifact_name": "main"}), "original_frame_required"),
+            (replace(original, metadata={"attached_from_stream_id": "camera:other", "attached_frame_ts": 0.9}),
+             "original_frame_required"),
+            (original, "probe"),
+        ]:
+            selected = with_evidence(value).with_artifact(artifact)
+            output, = await runtime.process_packet(selected, Context())
+            assert output.payload["recognition"]["reason"] == reason
+            assert output.payload["subject"] == selected.payload["subject"]
+            assert PRIVATE_EVIDENCE_ARTIFACT not in output.artifacts
+        # The invalid next image arrives inside the normal sampling interval.
+        output, = await runtime.process_packet(with_evidence(value).with_artifact(replace(original, metadata=translated)), Context())
+        assert output.payload["recognition"]["reason"] == "original_frame_required"
+        assert PRIVATE_EVIDENCE_ARTIFACT not in output.artifacts
+        stale_subject = {**value.payload["subject"], "source_anchor": {"capture_evidence": stale["capture_evidence"]}}
+        selected = replace(value.with_artifact(original), payload={**value.payload, "subject": stale_subject})
+        output, = await runtime.process_packet(selected, Context())
+        assert output.payload["recognition"]["reason"] == "original_frame_required"
+        assert calls == [tuple(value.payload["subject"]["bbox01"])]
+
+    asyncio.run(scenario())
+
+
 def test_identity_keyframes_skip_repetitions_preserve_quality_changes_and_bound_storage(monkeypatch):
     import numpy as np
     from types import SimpleNamespace

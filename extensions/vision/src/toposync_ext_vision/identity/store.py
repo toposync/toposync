@@ -129,7 +129,9 @@ def _json(value: Any) -> bytes:
 
 
 def _allows_continuity(status: str, reason: str) -> bool:
-    return status in {"pending", "unobservable"} and reason != "ambiguous_face_association"
+    return status in {"pending", "unobservable"} and reason not in {
+        "ambiguous_face_association", "original_frame_required",
+    }
 
 
 class IdentityStore:

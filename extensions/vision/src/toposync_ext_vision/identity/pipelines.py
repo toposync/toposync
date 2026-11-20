@@ -25,7 +25,8 @@ from ..registry import build_default_model_registry
 from .contracts import IdentityEvidence, RecognitionDecision, RecognitionPolicy
 from .extraction import IdentityExtractor, extract_in_process, validate_identity_frame
 from .spatial import spatial_context
-from toposync.runtime.pipelines.inspection import copy_inspection_frame
+from toposync.runtime.pipelines.image_geometry import inspection_geometry
+from toposync.runtime.pipelines.inspection import copy_inspection_frame, frame_reference
 from .inspection import evidence_visuals, recognition_visual
 
 PRIVATE_EVIDENCE_ARTIFACT = "identity_evidence"
@@ -147,6 +148,13 @@ def occurrence_key(packet: Packet, *, require_binding: bool = False) -> str | No
     return hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
 
+def _without_identity_artifacts(packet: Packet) -> Packet:
+    private = {PRIVATE_EVIDENCE_ARTIFACT, PRIVATE_DECISION_ARTIFACT}
+    if private.isdisjoint(packet.artifacts):
+        return packet
+    return replace(packet, artifacts={name: value for name, value in packet.artifacts.items() if name not in private})
+
+
 def _summary(packet: Packet, *, status: str, reason: str, occurrence_id: str | None) -> Packet:
     payload = dict(packet.payload)
     payload["recognition"] = {
@@ -202,6 +210,32 @@ class IdentityContextRuntime(TransformOperatorRuntime):
         return [_summary(packet, status="pending", reason="recognition_scheduled", occurrence_id=key)]
 
 
+def _original_subject_plane(packet: Packet, artifact: Artifact | None) -> bool:
+    if packet.payload.get("frame_crop") or packet.payload.get("frame_warp"):
+        return False
+    subject = packet.payload.get("subject")
+    anchor = subject.get("source_anchor") if isinstance(subject, dict) else None
+    if isinstance(anchor, dict) and anchor.get("capture_evidence") != packet.payload.get("capture_evidence"):
+        return False
+    if artifact is None:
+        return True
+    metadata = artifact.metadata
+    if "image_geometry" not in metadata:
+        # Legacy raw frames have no geometry. A declared derivative needs pixel provenance.
+        return "source_artifact_name" not in metadata and "attached_from_stream_id" not in metadata
+    reference = frame_reference(packet)
+    shape = getattr(artifact.data, "shape", ())
+    if reference is None or len(shape) < 2:
+        return False
+    plane = inspection_geometry(metadata["image_geometry"], shape[1], shape[0], reference)
+    return bool(
+        plane
+        and plane["source_size"] == plane["image_size"]
+        and not plane["valid_domains"]
+        and plane["to_source"] == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    )
+
+
 class IdentityEvidenceRuntime(TransformOperatorRuntime):
     def __init__(self, config: dict, dependencies: PipelineRuntimeDependencies):
         self.config = IdentityEvidenceConfig.model_validate(config)
@@ -248,6 +282,8 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
             return [packet]
         if self.config.late_enrichment and not await occurrence_enrichment_allowed(packet, self.dependencies):
             return []
+        # A chained extractor owns its output even when this sample is skipped.
+        packet = _without_identity_artifacts(packet)
         key = occurrence_key(packet, require_binding=self.config.late_enrichment)
         if key is None:
             return [
@@ -265,6 +301,9 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
             return [
                 _summary(packet, status="pending", reason="occurrence_closed", occurrence_id=key)
             ]
+        artifact = packet.artifacts.get(self.config.input_artifact_name)
+        if not _original_subject_plane(packet, artifact):
+            return [_summary(packet, status="unobservable", reason="original_frame_required", occurrence_id=key)]
         now = time.monotonic()
         previous = self._keyframes.get(key)
         if self.config.keyframe_max_total and self._keyframe_total >= self.config.keyframe_max_total:
@@ -297,7 +336,6 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
                     packet, status="unobservable", reason="unsupported_species", occurrence_id=key
                 )
             ]
-        artifact = packet.artifacts.get(self.config.input_artifact_name)
         region = subject.get("bbox01")
         if (
             artifact is None
@@ -308,15 +346,6 @@ class IdentityEvidenceRuntime(TransformOperatorRuntime):
             return [
                 _summary(
                     packet, status="unobservable", reason="subject_image_missing", occurrence_id=key
-                )
-            ]
-        if packet.payload.get("frame_crop") or packet.payload.get("frame_warp"):
-            return [
-                _summary(
-                    packet,
-                    status="unobservable",
-                    reason="original_frame_required",
-                    occurrence_id=key,
                 )
             ]
         image_error = validate_identity_frame(artifact.data)
@@ -524,18 +553,7 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
     async def _process_identity(self, packet: Packet, context: Any) -> list[Packet]:
         artifact = packet.artifacts.get(PRIVATE_EVIDENCE_ARTIFACT)
         # O consumidor terminal remove evidência mesmo quando desligado ou indisponível.
-        clean = (
-            replace(
-                packet,
-                artifacts={
-                    name: value
-                    for name, value in packet.artifacts.items()
-                    if name not in {PRIVATE_EVIDENCE_ARTIFACT, PRIVATE_DECISION_ARTIFACT}
-                },
-            )
-            if artifact or PRIVATE_DECISION_ARTIFACT in packet.artifacts
-            else packet
-        )
+        clean = _without_identity_artifacts(packet)
         if not self.config.enabled:
             return [clean]
         key = occurrence_key(packet, require_binding=self.config.late_enrichment)

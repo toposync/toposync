@@ -437,6 +437,7 @@ def test_missing_evidence_expires_and_model_failure_is_not_recognition(store):
 @pytest.mark.parametrize(("status", "reason"), [
     ("unavailable", "model_load_failed"),
     ("unobservable", "ambiguous_face_association"),
+    ("unobservable", "original_frame_required"),
     ("unobservable", "face_not_visible"),
 ])
 def test_continuity_respects_the_extraction_result_at_close(store, with_observation, status, reason):

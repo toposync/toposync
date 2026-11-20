@@ -218,8 +218,8 @@ def test_expired_transient_does_not_drop_authorization_for_retained_visit(tmp_pa
 @pytest.mark.parametrize("disabled", [False, True])
 def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monkeypatch, existing, disabled):
     import asyncio
-    from types import SimpleNamespace
     from fastapi import FastAPI
+    from toposync.runtime.config_store import ConfigStore, UserDataPaths
     from toposync.runtime.event_bus import EventBus
     from toposync.runtime.services import ServiceRegistry
     from toposync_ext_vision.plugin import VisionExtension
@@ -235,7 +235,9 @@ def test_extension_resumes_persisted_retention_without_opening_ui(tmp_path, monk
         app = FastAPI()
         from toposync.runtime.notifications import NotificationsRuntime
         app.state.notifications = NotificationsRuntime(data_dir=tmp_path)
-        app.state.config_store = SimpleNamespace(paths=SimpleNamespace(data_dir=tmp_path))
+        app.state.config_store = ConfigStore(paths=UserDataPaths(
+            data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files",
+        ))
         extension = VisionExtension()
         original_sleep = asyncio.sleep
         cycles = 0

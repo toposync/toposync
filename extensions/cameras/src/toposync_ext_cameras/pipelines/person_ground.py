@@ -645,7 +645,7 @@ def register_person_ground_operator(registry):
         config_model=PersonGroundConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],
-        capabilities=["camera", "mapping", "pose", "metadata"],
+        capabilities=["camera", "mapping", "pose", "metadata", "origin_only"],
         defaults=PersonGroundConfig().model_dump(),
         produces_payload_keys=["spatial"],
         state_kind="stateful_per_camera",

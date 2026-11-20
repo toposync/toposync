@@ -311,7 +311,7 @@ def register_pointing_operator(registry):
         config_model=PointingTargetConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],
-        capabilities=["camera", "mapping", "pose", "metadata"],
+        capabilities=["camera", "mapping", "pose", "metadata", "origin_only"],
         defaults=PointingTargetConfig().model_dump(),
         produces_payload_keys=["spatial"],
         state_kind="stateful_per_camera",

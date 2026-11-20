@@ -47,6 +47,9 @@ def test_processing_disconnect_closes_only_affected_origin_and_resumes_with_empt
             async def ack(self, _identifier):
                 pass
 
+            async def release_config(self):
+                pass
+
             async def close(self):
                 pass
 

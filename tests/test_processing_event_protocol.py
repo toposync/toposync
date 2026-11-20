@@ -39,6 +39,27 @@ async def data(iterator):
     return json.loads(next(line[5:].strip() for line in chunk.splitlines() if line.startswith("data:")))
 
 
+def test_live_processing_stream_preserves_packets_larger_than_notification_limit(tmp_path, monkeypatch):
+    owner, endpoint = application(tmp_path, monkeypatch)
+    packet = {"artifacts": {"main": {"data": "a" * (600 * 1024)}}}
+
+    async def scenario():
+        iterator = (await endpoint(request())).body_iterator
+        try:
+            assert await anext(iterator) == "retry: 1000\n\n"
+            assert await data(iterator) == owner.ready_event()
+            await owner._emit_projected_event({
+                "pipeline_name": "observation", "target_node_id": "notify", "packet": packet,
+            })
+            delivered = await data(iterator)
+            assert delivered["pipeline_name"] == "observation"
+            assert delivered["packet"] == packet
+        finally:
+            await iterator.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_stream_uses_epoch_header_to_replay_new_counter(tmp_path, monkeypatch):
     owner, endpoint = application(tmp_path, monkeypatch)
 

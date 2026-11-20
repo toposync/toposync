@@ -56,6 +56,9 @@ async def exercise(tmp_path, monkeypatch, streams, *, fail_first_ack=False):
         async def close(self):
             pass
 
+        async def release_config(self):
+            pass
+
     monkeypatch.setattr(module, "HttpProcessingTransport", Transport)
     paths = UserDataPaths(data_dir=tmp_path, config_path=tmp_path / "config.json", files_dir=tmp_path / "files")
     registry = OperatorRegistry()

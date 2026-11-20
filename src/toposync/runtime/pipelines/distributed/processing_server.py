@@ -15,6 +15,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 from starlette.responses import Response, StreamingResponse
 
+from toposync.extensions import run_extension_shutdown_callbacks
 from toposync.extensions.manager import ExtensionManager
 from toposync.runtime.config_store import AppSettings, ConfigStore, Pipeline, UserDataPaths
 from toposync.runtime.event_bus import EventBus
@@ -47,6 +48,13 @@ from .transport import PROCESSING_READY_EVENT_TYPE
 logger = logging.getLogger("toposync.processing")
 
 
+class ProcessingEventBroadcaster(EventBroadcaster):
+    @classmethod
+    def _bounded_event(cls, event: dict[str, Any]) -> dict[str, Any]:
+        # Processing uses its own artifact limits and cannot consume a notification resync.
+        return event
+
+
 def _env_float(name: str, default: float) -> float:
     raw = str(os.getenv(name, "")).strip()
     if not raw:
@@ -73,6 +81,10 @@ class ProcessingConfig(BaseModel):
     required_capabilities: list[str] = Field(default_factory=list, max_length=16)
     pipelines: list[Pipeline] = Field(default_factory=list)
     settings: AppSettings | None = None
+
+
+class ProcessingConfigRelease(BaseModel):
+    stream_instance_id: str = Field(min_length=1, max_length=64)
 
 
 class ProcessingAck(BaseModel):
@@ -196,7 +208,7 @@ class ProcessingServerRuntime:
         self._execution_scheduler = ExecutionScheduler()
         self._pipeline_telemetry_store = pipeline_telemetry_store
         self._snapshot_store = PipelineStepSnapshotStore(files_dir=config_store.paths.files_dir)
-        self.broadcaster = EventBroadcaster(max_queue_size=500)
+        self.broadcaster = ProcessingEventBroadcaster(max_queue_size=500)
         self._recent_events: deque[dict[str, Any]] = deque(maxlen=max(200, int(max_recent_events)))
         self._replay_events: deque[dict[str, Any]] = deque(maxlen=max(50, int(max_replay_events)))
         self._event_seq = 0
@@ -311,6 +323,13 @@ class ProcessingServerRuntime:
                 await self._config_store.replace_settings(parsed.settings)
             desired = [p for p in parsed.pipelines if getattr(p, "enabled", True) is not False]
             await self._reconcile(desired)
+
+    async def release_config(self, stream_instance_id: str) -> bool:
+        async with self._config_lock:
+            if stream_instance_id != self._stream_instance_id:
+                return False
+            await self._reconcile([])
+            return True
 
     async def _reconcile(self, desired: list[Pipeline]) -> None:
         active = self._active
@@ -668,12 +687,15 @@ def create_processing_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        await runtime.stop()
-        if telemetry_checkpoint is not None:
-            try:
-                await telemetry_checkpoint.close()
-            except Exception:
-                pass
+        try:
+            await runtime.stop()
+        finally:
+            await run_extension_shutdown_callbacks(app)
+            if telemetry_checkpoint is not None:
+                try:
+                    await telemetry_checkpoint.close()
+                except Exception:
+                    pass
 
     @app.post("/api/processing/config")
     async def set_processing_config(body: ProcessingConfig) -> dict[str, Any]:
@@ -693,6 +715,12 @@ def create_processing_app() -> FastAPI:
             raise HTTPException(status_code=409, detail="Unsupported transport capability")
         await runtime.apply_config(body.model_dump(mode="json"))
         return {"ok": True, "stream_instance_id": runtime._stream_instance_id}
+
+    @app.post("/api/processing/config/release")
+    async def release_processing_config(body: ProcessingConfigRelease) -> dict[str, bool]:
+        if not await runtime.release_config(body.stream_instance_id):
+            raise HTTPException(status_code=409, detail="Processing configuration instance changed")
+        return {"ok": True}
 
     @app.get("/api/processing/status")
     async def get_processing_status() -> dict[str, Any]:

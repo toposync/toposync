@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 import pytest
@@ -800,6 +801,26 @@ def test_processing_server_http_interconnect_executes_remote_workload(
                     assert float(probe.get("checksum") or 0.0) > 0.0
 
                 assert processing_counters.get("engines")
+
+                async with httpx.AsyncClient(trust_env=False) as client:
+                    rejected = await client.post(
+                        f"{live_server.base_url}/api/processing/config/release",
+                        json={"stream_instance_id": "superseded-instance"},
+                    )
+                    assert rejected.status_code == 409
+                    assert (await client.get(f"{live_server.base_url}/api/processing/status")).json()["active"]
+
+                current = await config_store.get_pipeline("processing_server_probe")
+                assert current is not None
+                await config_store.replace_pipeline(current.name, current.model_copy(update={"enabled": False}))
+                await orchestrator._reconcile()
+                transport = HttpProcessingTransport(base_url=live_server.base_url)
+                try:
+                    stopped = await transport.status()
+                    assert stopped["active"] is False
+                    assert stopped["pipelines"] == []
+                finally:
+                    await transport.close()
             finally:
                 await orchestrator.stop()
 

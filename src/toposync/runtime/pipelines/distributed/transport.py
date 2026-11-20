@@ -50,6 +50,7 @@ class HttpProcessingTransport:
         self._client = None
         self._private_stream = False
         self._stream_instance_id: str | None = None
+        self._applied_stream_instance_id: str | None = None
 
     async def _ensure_client(self):
         if self._client is not None:
@@ -131,8 +132,8 @@ class HttpProcessingTransport:
         result = await self._post_json(
             "/api/processing/config", payload, error_prefix="Processing config push failed",
         )
+        instance = result.get("stream_instance_id")
         if private:
-            instance = result.get("stream_instance_id")
             if not isinstance(instance, str) or not instance:
                 raise ProcessingContinuityError("missing_processing_stream_instance")
             if self._stream_instance_id is not None and instance != self._stream_instance_id:
@@ -140,7 +141,19 @@ class HttpProcessingTransport:
             self._stream_instance_id = instance
         else:
             self._stream_instance_id = None
+        self._applied_stream_instance_id = instance if isinstance(instance, str) and instance else None
         self._private_stream = private
+
+    async def release_config(self) -> None:
+        if self._applied_stream_instance_id is None:
+            return
+        await self._post_json(
+            "/api/processing/config/release",
+            {"stream_instance_id": self._applied_stream_instance_id},
+            error_prefix="Processing config release failed",
+            timeout_s=min(5.0, self._timeout_s),
+        )
+        self._applied_stream_instance_id = None
 
     async def stream_events(self, *, last_event_id: int = 0,
                             event_epoch: str = "") -> AsyncIterator[dict[str, Any]]:

@@ -99,11 +99,18 @@ class _VisionEntryPoint:
         return VisionExtension
 
 
-def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def _create_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, processing: bool = False) -> TestClient:
     monkeypatch.setenv("TOPOSYNC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("TOPOSYNC_NO_FRONTEND", "1")
     monkeypatch.setenv("TOPOSYNC_AUTH_MODE", "bypass")
     monkeypatch.setattr(ext_manager_mod, "_iter_entry_points", lambda _group: [_VisionEntryPoint()])
+    if processing:
+        from toposync.processing_server import create_app as create_processing_app
+
+        monkeypatch.setenv("TOPOSYNC_ROLE", "processing")
+        monkeypatch.delenv("TOPOSYNC_PROCESSING_USERNAME", raising=False)
+        monkeypatch.delenv("TOPOSYNC_PROCESSING_PASSWORD", raising=False)
+        return TestClient(create_processing_app())
     return TestClient(create_app())
 
 
@@ -201,9 +208,11 @@ def _write_local_build_manifest(path: Path, *, artifact_path: Path, sha256: str)
     return path
 
 
+@pytest.mark.parametrize("processing", [False, True], ids=["origin", "processing"])
 def test_install_processing_server_vision_model_from_configured_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    processing: bool,
 ) -> None:
     source_model = tmp_path / "source" / "custom_detector.onnx"
     source_model.parent.mkdir(parents=True, exist_ok=True)
@@ -220,9 +229,10 @@ def test_install_processing_server_vision_model_from_configured_source(
     monkeypatch.setenv("TOPOSYNC_VISION_MANIFESTS_DIR", str(manifests_dir))
     monkeypatch.setenv("TOPOSYNC_VISION_MODEL_PATH_CUSTOM_DETECTOR_INSTALLABLE", str(source_model))
 
-    with _create_client(tmp_path, monkeypatch) as client:
+    base = "/api/processing" if processing else "/api/processing-servers/local"
+    with _create_client(tmp_path, monkeypatch, processing=processing) as client:
         install_res = client.post(
-            "/api/processing-servers/local/vision/models/custom.detector.installable/install",
+            f"{base}/vision/models/custom.detector.installable/install",
             json={},
         )
         assert install_res.status_code == 200, install_res.text
@@ -233,11 +243,13 @@ def test_install_processing_server_vision_model_from_configured_source(
         deadline = time.time() + 5.0
         last_status: dict[str, object] | None = None
         while time.time() < deadline:
-            status_res = client.get("/api/processing-servers/local/status")
+            status_res = client.get(f"{base}/status")
             assert status_res.status_code == 200, status_res.text
             status_body = status_res.json()
-            assert status_body["ok"] is True
-            detection_items = status_body["status"]["vision"]["task_catalogs"]["detection"]["items"]
+            if not processing:
+                assert status_body["ok"] is True
+                status_body = status_body["status"]
+            detection_items = status_body["vision"]["task_catalogs"]["detection"]["items"]
             model_item = next(item for item in detection_items if item["model_id"] == "custom.detector.installable")
             last_status = model_item.get("install_job")
             if model_item["artifact_exists"] is True and model_item["availability"] == "available":

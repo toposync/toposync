@@ -404,7 +404,8 @@ class PipelinesOrchestrator:
         }, sort_keys=True)
         if remote_sig == self._last_remote_sig:
             return
-        await self._stop_remote()
+        retained_urls = {server.url.rstrip("/") for server in servers if server.id in remote_groups}
+        await self._stop_remote(retained_urls=retained_urls)
         self._last_remote_sig = remote_sig
 
         for sid, group in remote_groups.items():
@@ -487,7 +488,7 @@ class PipelinesOrchestrator:
             finally:
                 self._local_bundle = None
 
-    async def _stop_remote(self) -> None:
+    async def _stop_remote(self, *, retained_urls: frozenset[str] | set[str] = frozenset()) -> None:
         # Stop producers before consumers: a reconnect must not recreate an
         # origin runtime while reconciliation is tearing that runtime down.
         for handle in list(self._servers.values()):
@@ -496,6 +497,11 @@ class PipelinesOrchestrator:
                 await handle.pump_task
             except asyncio.CancelledError:
                 pass
+            if handle.server.url.rstrip("/") not in retained_urls:
+                try:
+                    await handle.transport.release_config()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("processing config release failed server=%s: %s", handle.server.id, exc)
             try:
                 await handle.transport.close()
             except Exception:

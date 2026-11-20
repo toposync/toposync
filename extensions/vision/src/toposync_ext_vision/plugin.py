@@ -217,6 +217,11 @@ class VisionExtension(BaseExtension):
         self._start_identity_maintenance(app, maintain_retained_gallery)
 
     def _start_identity_maintenance(self, app: FastAPI, maintain_existing_gallery) -> None:
+        register_extension_shutdown_callback(app, self.shutdown)
+        notifications = getattr(app.state, "notifications", None)
+        if notifications is None:
+            return
+
         async def invalidate_activity(identifier):
             def invalidate():
                 store = self._identity_gallery(app, create=False)
@@ -224,7 +229,7 @@ class VisionExtension(BaseExtension):
                     store.revoke_activity(identifier)
             await asyncio.to_thread(invalidate)
 
-        app.state.notifications.invalidate_occurrence_derivatives = invalidate_activity
+        notifications.invalidate_occurrence_derivatives = invalidate_activity
 
         async def maintain_identities():
             while True:
@@ -245,7 +250,6 @@ class VisionExtension(BaseExtension):
         self._identity_maintenance_task = asyncio.create_task(
             maintain_identities(), name="vision-identity-maintenance"
         )
-        register_extension_shutdown_callback(app, self.shutdown)
 
     async def shutdown(self) -> None:
         if self._visual_state_publication is not None:

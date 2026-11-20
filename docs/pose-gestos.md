@@ -111,6 +111,11 @@ No modo automático, se dois braços atenderem à geometria, um único gesto de 
 
 `CLOSE`, idade excessiva, mudança de vista/calibração, troca de geração de captura ou identidade invalidam derivados. Consumidores devem expirar o que mostram sem renovar o prazo ao renderizar, receber novamente ou abrir uma notificação antiga. Não sobreponha uma pose à última miniatura disponível sem comprovar que imagem, captura e transformações correspondem.
 
+Na execução distribuída, a captura, a detecção, a pose e o rastreamento podem rodar
+no servidor de processamento. Os operadores de pessoa/pés e de apontamento
+usam a composição e a calibração na origem. Reconhecimento de gestos e filtros
+de expressão também podem rodar na origem quando recebem dados desses operadores.
+
 Na execução por servidor de processamento, perder a conexão encerra as observações
 da origem afetada e descarta suas filas. O fechamento sintetizado pela origem usa
 `shutdown_synthesized`; não é uma confirmação enviada pelo servidor desconectado.
@@ -119,6 +124,10 @@ indisponibilidade à duração anterior. Uma reconexão transitória pode conser
 mesmo sujeito remoto, mas não reabre o registro de notificação já fechado. Reiniciar
 o rastreador gera novos identificadores de evento e stream; `event_code` é somente
 o número sequencial de exibição, não uma identidade persistente.
+
+Ao desativar o último fluxo de um servidor alcançável, a origem solicita o
+encerramento da instância que configurou. Se a instância tiver mudado, o servidor
+recusa essa solicitação e preserva o grafo mais recente.
 
 Servidores atualizados identificam a época dos eventos em `event_epoch`. O cursor
 de retomada e o reconhecimento de recebimento usam essa época para não confundir

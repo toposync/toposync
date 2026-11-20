@@ -343,7 +343,7 @@ def register_vision_pipeline_operators(registry: OperatorRegistry) -> None:
             default_output_policy={"queue": {"max_items": 256, "drop_policy": "keyed_latest_only"}},
             inputs=[{"name": "in", "required": True}],
             outputs=[{"name": "out"}],
-            capabilities=["vision", "pose", "gesture", "event"],
+            capabilities=["vision", "pose", "gesture", "event", "origin_compatible"],
             defaults=VisionGestureRecognizeConfig().model_dump(),
             requires_payload_keys=["subject", "vision"],
             state_kind="stateful_per_subject",

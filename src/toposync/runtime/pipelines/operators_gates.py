@@ -668,7 +668,7 @@ def register_gate_operators(registry: OperatorRegistry) -> None:
         config_model=CoreFilterConfig,
         inputs=[{"name": "in", "required": True}],
         outputs=[{"name": "out"}],
-        capabilities=["filter", "expression"],
+        capabilities=["filter", "expression", "origin_compatible"],
         defaults=CoreFilterConfig().model_dump(),
         pressure_behavior="ignore",
         share_strategy="by_signature",

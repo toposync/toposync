@@ -293,3 +293,42 @@ def test_cli_can_keep_the_other_split_offline_without_skipping_input_checks(tmp_
     (tmp_path / first.photos[0].path).write_bytes(b"changed")
     with pytest.raises(ValueError, match="checksum"):
         evaluation.main()
+
+
+def test_candidate_lists_measure_rank_and_distractors_once_per_visit(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts.identity import evaluate as evaluation
+    from test_identity_store import evidence
+    from toposync_ext_vision.identity.extraction import ExtractionResult
+
+    content = manifest()
+    content["profiles"][0]["policy"].update(automatic_enabled=False, continuity_seconds=0)
+    content["visits"].append({**content["visits"][0], "id": "rival", "identity_label": "other",
+                              "session": "rival-session", "photos": [{"path": "rival.png"}]})
+    content["visits"][1]["photos"].extend([{"path": "repeat.png"}, {"path": "blur.png"}])
+    protocol = write_evaluation_photos(content, tmp_path)
+
+    class Extractor:
+        embedding_space = policy().embedding_space
+
+        def extract(self, frame, *, occurrence_id, observed_at, capture_id, **kwargs):
+            if observed_at == 2:
+                return ExtractionResult("unobservable", "insufficient_resolution")
+            vector = [0.8, 0.6] if occurrence_id == "0" else [1, 0]
+            sample = evidence(occurrence_id, capture=capture_id, observed_at=observed_at, vector=vector + [0] * 14)
+            return ExtractionResult("pending", "evidence_ready", sample)
+
+    monkeypatch.setattr(evaluation, "IdentityExtractor", lambda *args, **kwargs: Extractor())
+    monkeypatch.setattr(evaluation, "build_default_model_registry",
+                        lambda: SimpleNamespace(get_manifest=lambda _: SimpleNamespace(sha256="0" * 64)))
+    profile, = evaluation.evaluate(protocol, tmp_path, tmp_path / "out", "development")["profiles"]
+    known, unknown = profile["visits"]
+    assert known["candidate_lists"]["during_visit"] == {"best_correct_rank": 2, "other_candidate": True, "max_candidates": 2}
+    assert known["candidate_lists"]["at_close"] == {"best_correct_rank": None, "other_candidate": False, "max_candidates": 0}
+    assert unknown["candidate_lists"]["at_close"] == {"best_correct_rank": None, "other_candidate": True, "max_candidates": 2}
+    metrics = profile["metrics"]
+    assert metrics["candidate_lists"]["during_visit"] == {"known_correct_first": 0, "known_correct_listed": 1,
+                                                         "known_with_other_candidate": 1, "unknown_with_candidates": 1}
+    assert metrics["candidate_lists"]["at_close"]["known_correct_listed"] == 0
+    assert metrics["candidate_lists"]["at_close"]["unknown_with_candidates"] == 1
+    assert metrics["false_identifications_of_unknown"] == 0 and not known["accepted"]

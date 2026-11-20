@@ -81,6 +81,8 @@ A fresh macOS installation previously reproduced an 8.53-second event-loop gap d
 
 ## Curation and access
 
+An exact tie between the highest-scoring profiles requires human confirmation, even with a configured competitor margin of zero. Equally scored suggestions retain reference order (highest reference quality first, then observation identifier). If the previously recognized profile shares the lead on a later frame, the visit returns to suggestions until fresh evidence distinguishes it. A strong competing match that exceeds the previous profile still triggers the occurrence conflict rule.
+
 Naming a visit, confirming an association and admitting a photo as a reference are separate actions. In Reference photos, review the full retained crops and select each new reference individually. New references start unchecked. Only eligible, explicitly confirmed photos enter matching; repeated frames and automatic predictions never become independent confirmations by themselves.
 
 Group notifications show separate member photos. Select one person or pet before identifying or correcting; that action applies only to the selected occurrence. Group payloads retain occurrence links, never a shared recognized identity.

@@ -1073,3 +1073,40 @@ def test_legacy_calibration_fingerprint_survives_restore_and_needs_explicit_opt_
                 observed_at=archived.evidence_at, max_age_seconds=10) is None
     finally:
         gallery.close()
+
+
+def test_exact_match_tie_only_suggests_and_orders_by_reference(store, monkeypatch):
+    from itertools import count
+    import uuid
+
+    sequence = count(1)
+    monkeypatch.setattr(uuid, "uuid4", lambda: uuid.UUID(int=next(sequence)))
+    zero_margin = policy().model_copy(update={"competitor_margin": 0})
+    events = sorted(("enroll-A", "enroll-B", "enroll-C", "enroll-D"),
+                    key=lambda event: evidence(event).observation_id(store.scope))
+    identities = {}
+    for event in reversed(events):
+        identities[event], _, _ = enroll(store, name=event, event=event)
+    tied = store.observe(evidence("tie"), zero_margin)
+    assert tied.status == "suggested" and tied.identity_id is None
+    assert tied.candidate_ids == tuple(identities[event] for event in events[:3])
+
+
+def test_new_tie_with_previous_winner_does_not_lock_visit_in_conflict(store):
+    zero_margin = policy().model_copy(update={"competitor_margin": 0})
+    subjects = []
+    for index, (y, z) in enumerate(((0.28, 0), (-0.28, 0), (0, 0.28), (0, -0.28))):
+        vector = [0.96, y, z] + [0] * 13
+        identity, _, _ = enroll(store, name=str(index), event=f"ref-{index}", vector=vector)
+        subjects.append((identity, vector))
+    hidden_winners = []
+    for index, (identity, vector) in enumerate(subjects):
+        visit = f"visit-{index}"
+        assert store.observe(evidence(visit, vector=vector), zero_margin).identity_id == identity
+        tied = store.observe(evidence(visit, capture="tie", observed_at=2), zero_margin)
+        assert tied.status == "suggested" and tied.identity_id is None
+        assert len(tied.candidate_ids) == 3
+        if identity not in tied.candidate_ids:
+            hidden_winners.append(identity)
+        assert store.observe(evidence(visit, vector=vector, capture="clear", observed_at=3), zero_margin).identity_id == identity
+    assert len(hidden_winners) == 1

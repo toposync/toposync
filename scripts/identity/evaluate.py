@@ -170,6 +170,28 @@ def exact_upper(failures: int, trials: int, *, alpha: float = 0.05) -> float | N
     return high
 
 
+def candidate_outcome(lists, expected: str | None) -> dict:
+    return {
+        "best_correct_rank": min((items.index(expected) + 1 for items in lists if expected in items), default=None),
+        "other_candidate": any(candidate != expected for items in lists for candidate in items),
+        "max_candidates": max((len(items) for items in lists), default=0),
+    }
+
+
+def candidate_totals(rows: list[dict]) -> dict:
+    totals = {}
+    for phase in ("during_visit", "at_close"):
+        known = [row["candidate_lists"][phase] for row in rows if row["known"]]
+        unknown = [row["candidate_lists"][phase] for row in rows if not row["known"]]
+        totals[phase] = {
+            "known_correct_first": sum(item["best_correct_rank"] == 1 for item in known),
+            "known_correct_listed": sum(item["best_correct_rank"] is not None for item in known),
+            "known_with_other_candidate": sum(item["other_candidate"] for item in known),
+            "unknown_with_candidates": sum(item["max_candidates"] > 0 for item in unknown),
+        }
+    return totals
+
+
 def summarize(rows: list[dict], coverage_target: float) -> dict:
     unknown = [row for row in rows if not row["known"]]
     known = [row for row in rows if row["known"]]
@@ -362,6 +384,10 @@ def evaluate(protocol: Protocol, root: Path, output: Path, split: str) -> dict:
                             "last_extraction_status": result.status,
                             "final_status": decisions[-1]["status"],
                             "closed_status": closed.status if closed else None,
+                            "candidate_lists": {
+                                "during_visit": candidate_outcome([item.get("candidate_ids", ()) for item in decisions], expected),
+                                "at_close": candidate_outcome([closed.candidate_ids] if closed else [], expected),
+                            },
                             "closed_correct": bool(
                                 expected and closed and closed.status == "recognized" and closed.identity_id == expected
                             ),
@@ -385,7 +411,10 @@ def evaluate(protocol: Protocol, root: Path, output: Path, split: str) -> dict:
                     "enrollment_visits_with_inference_unavailable": sum(
                         item["inference_unavailable"] for item in enrollment_rows
                     ),
-                    "metrics": summarize(rows, profile.nominal_coverage_target),
+                    "metrics": {
+                        **summarize(rows, profile.nominal_coverage_target),
+                        "candidate_lists": candidate_totals(rows),
+                    },
                     "visits": rows,
                 }
             )

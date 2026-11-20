@@ -1108,7 +1108,8 @@ class IdentityStore:
             reference = IdentityEvidence.model_validate(self._open(row["evidence"]))
             score = cosine(evidence.vector, reference.vector)
             scores[identity_id] = max(scores.get(identity_id, -1.0), score)
-        return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        # Stable sort retains the reference quality and observation order for equal scores.
+        return sorted(scores.items(), key=lambda item: item[1], reverse=True)
 
     def _retain_activity_reference(self, connection, reference, occurrence_id, observation_id):
         if reference is None:
@@ -1218,6 +1219,8 @@ class IdentityStore:
                 if evidence.reference_eligible and policy is not None
                 else []
             )
+            top_score = ranked[0][1] if ranked else None
+            leaders = {identity for identity, score in ranked if score == top_score}
             candidates = tuple(
                 identity_id
                 for identity_id, score in ranked[:3]
@@ -1235,6 +1238,7 @@ class IdentityStore:
                 margin = ranked[0][1] - (ranked[1][1] if len(ranked) > 1 else -1.0)
                 if (
                     policy.automatic_enabled
+                    and len(leaders) == 1
                     and ranked[0][1] >= policy.acceptance_similarity
                     and margin >= policy.competitor_margin
                 ):
@@ -1260,7 +1264,7 @@ class IdentityStore:
             ):
                 contradicted = (
                     candidates
-                    and candidates[0] != current.identity_id
+                    and current.identity_id not in leaders
                     and ranked[0][1] >= policy.acceptance_similarity
                 )
                 if contradicted:

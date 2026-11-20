@@ -411,11 +411,13 @@ def main():
     ):
         parser.error("Protocol differs from the externally frozen SHA-256 or exceeds budget")
     protocol = Protocol.model_validate_json(raw)
-    for visit in protocol.visits:
-        for photo in visit.photos:
-            checked_photo(args.data_root, photo)
     if not args.validate_only and (args.split is None or args.model_data_dir is None):
         parser.error("An evaluation split and installed model data directory are required")
+    verified_splits = ["enrollment", args.split] if args.split else ["enrollment", "development", "holdout"]
+    for visit in protocol.visits:
+        if visit.split in verified_splits:
+            for photo in visit.photos:
+                checked_photo(args.data_root, photo)
     args.output.mkdir(mode=0o700, parents=False)
     os.umask(0o077)
     if args.model_data_dir:
@@ -423,6 +425,7 @@ def main():
     report = {
         "protocol_sha256": args.expected_protocol_sha256,
         "validated_only": args.validate_only,
+        "verified_photo_splits": verified_splits,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "started_at": time.time(),

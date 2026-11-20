@@ -261,3 +261,35 @@ def test_low_resolution_after_match_updates_closed_gallery(tmp_path, monkeypatch
     assert known["closed_correct"] == (window > 0)
     assert unknown["closed_status"] is None and not unknown["closed_correct"]
     assert profile["metrics"]["nominal_closed_correct_coverage"] == float(window > 0)
+
+
+@pytest.mark.parametrize("split", ["development", "holdout"])
+def test_cli_can_keep_the_other_split_offline_without_skipping_input_checks(tmp_path, monkeypatch, split):
+    import json
+    import sys
+    import scripts.identity.evaluate as evaluation
+
+    content = manifest()
+    protocol = write_evaluation_photos(content, tmp_path)
+    raw = protocol.model_dump_json().encode()
+    path = tmp_path / "protocol.json"
+    path.write_bytes(raw)
+    withheld = "holdout" if split == "development" else "development"
+    for visit in protocol.visits:
+        if visit.split == withheld:
+            (tmp_path / visit.photos[0].path).unlink()
+    output = tmp_path / "result"
+    args = ["evaluate", "--protocol", str(path), "--expected-protocol-sha256", hashlib.sha256(raw).hexdigest(),
+            "--data-root", str(tmp_path), "--output", str(output)]
+    monkeypatch.setattr(sys, "argv", [*args, "--validate-only"])
+    with pytest.raises(ValueError, match="absent"):
+        evaluation.main()
+    monkeypatch.setattr(sys, "argv", [*args, "--split", split, "--model-data-dir", str(tmp_path)])
+    monkeypatch.setattr(evaluation, "evaluate", lambda *args: {"split": split})
+    evaluation.main()
+    report = json.loads((output / "result.json").read_text())
+    assert report["verified_photo_splits"] == ["enrollment", split]
+    first = next(visit for visit in protocol.visits if visit.split == "enrollment")
+    (tmp_path / first.photos[0].path).write_bytes(b"changed")
+    with pytest.raises(ValueError, match="checksum"):
+        evaluation.main()

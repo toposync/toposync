@@ -29,6 +29,9 @@ Every profile needs nominal known visits and unknown visits in both development 
 
 ## Run in an isolated environment
 
+When a split is selected, mount only its images and enrollment images. The full frozen manifest is still checked for overlapping sessions and image hashes. The report lists the image splits actually verified. Use `--validate-only` without `--split` for an explicit integrity audit of every image.
+
+
 From a source checkout with the project environment installed:
 
 ```sh

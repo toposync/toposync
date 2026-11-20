@@ -51,7 +51,7 @@ export type HumanObservation = {
     selected: string | null;
     mapRevision: string | null;
     candidates: { id: string; distance: number | null; occlusion: string }[];
-    ray: { origin: Position; direction: Position; length: number; halfAngle: number; radius: number } | null;
+    ray: { origin: Position; direction: Position; length: number | null; halfAngle: number; radius: number } | null;
   };
 };
 
@@ -240,21 +240,25 @@ export function readHumanObservation(notification: Notification, now: number, co
   // Older observations carry the verified revision only in pointing. New ground
   // estimates remain independently displayable when that operator is absent.
   result.mapRevision ??= result.pointing.mapRevision;
-  if (pointing.status === "candidate" && result.pointing.candidates.some((value) => value.id === pointing.selected_entity_id)) result.pointing.selected = text(pointing.selected_entity_id);
+  if (pointing.status === "candidate" && result.pointing.candidates.some((value) => value.id === pointing.selected_entity_id && value.distance !== null)) {
+    result.pointing.selected = text(pointing.selected_entity_id);
+  }
   const origin = position(pointing.origin), direction = position(pointing.direction), uncertainty = record(pointing.uncertainty), alignment = record(pointing.alignment);
   const lengths = result.pointing.candidates.map((value) => value.distance).filter((value): value is number => value !== null);
   // Extent must come from actual intersections, never an invented world target.
   if (["candidate", "ambiguous", "none"].includes(text(pointing.status)) && pointing.actions_authorized === false
+    && (pointing.status !== "candidate" || result.pointing.selected !== null)
     && pointing.provenance === "image_3d_geometric_alignment" && pointing.calibration_digest === calibration && pointing.composition_id === composition
     && result.pointing.mapRevision && alignment.metric_accuracy_qualified === false && alignment.global_elevation_ambiguity_resolved === false
     && alignment.method === "image_rays_and_current_metric_support" && finite(alignment.scale) && alignment.scale > 0
     && finite(alignment.maximum_reprojection_error) && alignment.maximum_reprojection_error >= 0 && alignment.maximum_reprojection_error <= 0.03
-    && origin && direction && Math.abs(Math.hypot(...direction) - 1) < 0.001 && lengths.length
+    && origin && direction && Math.abs(Math.hypot(...direction) - 1) < 0.001
     && uncertainty.kind === "uncalibrated_cone" && uncertainty.calibrated === false
     && finite(uncertainty.half_angle_degrees) && uncertainty.half_angle_degrees >= 5 && uncertainty.half_angle_degrees <= 30
     && finite(uncertainty.origin_radius_meters) && uncertainty.origin_radius_meters >= 0 && uncertainty.origin_radius_meters <= 0.75
     && lengths.every((value) => value <= 100)) {
-    result.pointing.ray = { origin, direction, length: Math.max(...lengths), halfAngle: uncertainty.half_angle_degrees, radius: uncertainty.origin_radius_meters };
+    result.pointing.ray = { origin, direction, length: lengths.length ? Math.max(...lengths) : null,
+      halfAngle: uncertainty.half_angle_degrees, radius: uncertainty.origin_radius_meters };
   }
   return result;
 }

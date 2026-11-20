@@ -119,7 +119,7 @@ export function createHumanObservation3D(ctx: Scene3DContext, initial: Notificat
     if (object.visible) {
       marker(model.body, "body"); marker(model.left, "left"); marker(model.right, "right");
       const ray = model.pointing.ray;
-      if (ray) {
+      if (ray && ray.length !== null) {
         const origin = vector(ray.origin), direction = vector(ray.direction), end = origin.clone().addScaledVector(direction, ray.length);
         const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([origin, end]), new THREE.LineBasicMaterial({ color: 0xf59e0b }));
         line.name = "conditional-pointing-ray";

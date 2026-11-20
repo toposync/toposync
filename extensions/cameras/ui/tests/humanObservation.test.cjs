@@ -372,6 +372,7 @@ test("unknown dimensions of pointing do not fabricate a ray; unavailable foot st
   input.payload.data.spatial.pointing.candidates[0].central_ray_distance_meters = null;
   input.payload.data.spatial.person_ground.feet.right = { status: "unavailable", reason: "occluded" };
   const result = read(input, 1000000);
+  assert.equal(result.pointing.selected, null);
   assert.equal(result.pointing.ray, null);
   assert.equal(result.right.position, null);
   assert.equal(result.body.position[0], 2);
@@ -482,6 +483,32 @@ test("ground and pointing cannot mix revisions of the same map", () => {
   const result = read(input, 1000000);
   assert.equal(result.state, "unavailable");
   assert.equal(result.reason, "spatial_map_revision_mismatch");
+});
+
+test("a current pointing direction without an intersection stays readable and has no map extent", async () => {
+  const runtime = loadModules(), input = notification();
+  const { readHumanObservation } = runtime.load("humanObservation");
+  const { createHumanObservation3D } = runtime.load("humanObservationOverlays");
+  const { HumanObservationDetails } = runtime.load("HumanObservationRenderer");
+  const i18n = { useI18n: () => ({ t: (key) => key }) };
+  Object.assign(input.payload.data.spatial.pointing, {
+    status: "none", reason: "no_supported_target", selected_entity_id: null, candidates: [],
+  });
+  const model = readHumanObservation(input, runtime.clock.now);
+  const markup = renderToStaticMarkup(React.createElement(HumanObservationDetails, { notification: input, i18n }));
+  assert.equal(model.pointing.status, "none");
+  assert.equal(model.pointing.ray?.length, null);
+  assert.equal(model.pointing.ray?.direction.join(","), "1,0,0");
+  assert.match(markup, /human\.ray_direction/);
+  assert.match(markup, /human\.no_ray_extent/);
+  assert.doesNotMatch(markup, /human\.no_ray</);
+  const overlay = createHumanObservation3D({ compositionId: "map-1", elements: [], THREE }, input);
+  await runtime.runDue();
+  assert.ok(overlay.object.getObjectByName("human-body-geometric_hypothesis"));
+  assert.equal(overlay.object.getObjectByName("conditional-pointing-ray"), undefined);
+  assert.equal(overlay.object.getObjectByName("uncalibrated-pointing-cone"), undefined);
+  assert.equal(readHumanObservation(input, 1000750).pointing.ray, null);
+  overlay.dispose();
 });
 
 test("real Three.js shapes stay distinct; deadline requests redraw and CLOSE clears objects", async () => {

@@ -25,6 +25,7 @@ export function HumanObservationDetails({ notification, i18n, session }: {
   const read = useMemo(() => session ?? createHumanObservationReader(), [notification.id, session]);
   const [, refresh] = useState(0);
   const model = read(notification, Date.now());
+  const ray = model.pointing.ray;
   useEffect(() => {
     if (model.state !== "current" || model.expiresAt === null) return;
     const deadline = model.expiresAt;
@@ -72,7 +73,13 @@ export function HumanObservationDetails({ notification, i18n, session }: {
             {candidate.id} · <code>{candidate.occlusion}</code>{candidate.distance !== null ? ` · ${candidate.distance.toFixed(3)} m` : ""}
           </li>)}</ul>
         </> : null}
-        {!model.pointing.ray ? <p>{t("ext.cameras.human.no_ray")}</p> : null}
+        {ray ? <>
+          <dl>
+            <dt>{t("ext.cameras.human.ray_origin")}</dt><dd>{ray.origin.map((value) => value.toFixed(3)).join(", ")}</dd>
+            <dt>{t("ext.cameras.human.ray_direction")}</dt><dd>{ray.direction.map((value) => value.toFixed(3)).join(", ")}</dd>
+          </dl>
+          {ray.length === null ? <p>{t("ext.cameras.human.no_ray_extent")}</p> : null}
+        </> : <p>{t("ext.cameras.human.no_ray")}</p>}
         {model.mapRevision ? <p className="cardMeta">{t("ext.cameras.human.map_revision")}: <code>{model.mapRevision}</code></p> : null}
         <p className="cardMeta">{t("ext.cameras.human.map_revision_limit")}</p>
         <p className="cardMeta">{t("ext.cameras.human.partial_2d")}</p>

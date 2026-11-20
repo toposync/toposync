@@ -348,6 +348,47 @@ def test_temporal_hidden_feet_keep_original_evidence_and_expire():
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("offsets", "expected"),
+    [
+        ([0.007, -0.007] * 5, "stationary_support_hypothesis"),
+        ([0.008 * index for index in range(10)], "candidate"),
+    ],
+)
+def test_support_distinguishes_frame_jitter_from_accumulated_motion(offsets, expected):
+    async def scenario():
+        runtime = PersonGroundRuntime(
+            {"mapping": mapping_config(), "complete_hidden_feet": True},
+            PipelineRuntimeDependencies(),
+        )
+        camera = known_camera()
+        for index, offset in enumerate(offsets):
+            timestamp = index / 30
+            incoming = packet(timestamp)
+            landmarks = incoming.payload["vision"]["poses"][0]["landmarks"]
+            for name, depth in (("left_heel", -0.10), ("left_foot_index", 0.13)):
+                landmark = next(point for point in landmarks if point["name"] == name)
+                landmark["position"] = camera.project((-0.13 + offset, 0, depth))
+            [output] = await runtime.process_packet(incoming, None)
+            foot = output.payload["spatial"]["person_ground"]["feet"]["left"]
+            if expected == "candidate" or timestamp < 0.20:
+                assert foot["contact"] == "candidate"
+        assert foot["contact"] == expected
+        [hidden] = await runtime.process_packet(packet(10 / 30, hidden=("left",)), None)
+        hidden_foot = hidden.payload["spatial"]["person_ground"]["feet"]["left"]
+        if expected == "stationary_support_hypothesis":
+            assert hidden_foot["contact"] == "retained_support_hypothesis"
+            assert hidden_foot["image_evidence_timestamp"] == 9 / 30
+            [visible] = await runtime.process_packet(packet(11 / 30), None)
+            visible_foot = visible.payload["spatial"]["person_ground"]["feet"]["left"]
+            assert visible_foot["contact"] == "candidate"
+        else:
+            assert hidden_foot["position"] is None
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_state_isolation_close_out_of_order_and_view_change():
     async def scenario():
         runtime = PersonGroundRuntime(

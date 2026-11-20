@@ -52,7 +52,7 @@ As saídas espaciais distinguem:
 
 - Projeção corporal no chão: hipótese geométrica obtida do tronco e de um intervalo amplo de estatura, não a posição exata de um pé.
 - Pé esquerdo e direito: hipóteses individuais de apoio. A combinação de calcanhar e ponta do pé não comprova contato físico.
-- Pé oculto: previsão curta a partir de apoio anterior compatível com pouca movimentação; a incerteza cresce e o resultado expira. A previsão não alimenta a si mesma como nova observação.
+- Pé oculto: previsão curta a partir de um apoio anterior com pose 3D compatível. Para formar a hipótese de apoio, o pé deve ficar por pelo menos 200 ms a até 4 cm da primeira posição da janela, com deslocamento de até 4 cm entre observações. Se voltar a aparecer, começa uma nova janela. A incerteza cresce a partir da última observação visível e a previsão expira.
 - Alvo apontado: seleção espacial separada da localização corporal. Não substitui a âncora da pessoa.
 
 O prior de estatura não identifica idade, gênero ou outro atributo demográfico. Não estreite o intervalo a partir de previsões anteriores. Sentado, deitado, pé elevado e posturas incompatíveis exigem abstenção. Ambiguidade monocular pode persistir mesmo com boa reprojeção: uma hipótese não vira medição por parecer plausível.

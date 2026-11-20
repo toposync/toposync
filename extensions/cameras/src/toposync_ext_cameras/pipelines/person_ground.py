@@ -24,6 +24,10 @@ from ..processing.metric_camera import MetricCamera, validate_pose_image_axes
 from .postprocess import CameraMappingConfig, CameraMappingRuntime
 
 
+_MINIMUM_STATIONARY_SUPPORT_SECONDS = 0.20
+_STATIONARY_SUPPORT_TOLERANCE_METERS = 0.04
+
+
 class PersonGroundConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = True
@@ -325,6 +329,7 @@ class _History:
     view: str
     body: list[float] | None
     feet: dict[str, dict]
+    support_origins: dict[str, tuple[float, ...]]
     capture_instance: str
     capture_generation: int
     capture_sequence: int
@@ -505,24 +510,28 @@ class PersonGroundRuntime(TransformOperatorRuntime):
         result["support_geometry_reason"] = axes_reason
         body_position = result["body"].get("position")
         image_feet = {}
+        support_origins = {}
         for side, foot in result["feet"].items():
             old = previous.feet.get(side) if previous else None
             if foot.get("position") is not None:
                 foot["image_evidence_timestamp"] = timestamp
                 foot["valid_for_seconds"] = self.config.maximum_history_seconds
                 foot["body_at_image_evidence"] = body_position
-                stationary = False
                 stable_since = timestamp
-                if (
-                    old
-                    and timestamp > old["image_evidence_timestamp"]
-                    and foot.get("support_consistency") == "relative_3d_compatible"
-                    and old.get("support_consistency") == "relative_3d_compatible"
-                ):
-                    elapsed = timestamp - old["image_evidence_timestamp"]
-                    if math.dist(old["position"], foot["position"]) / elapsed <= 0.20:
-                        stable_since = old.get("stable_since", old["image_evidence_timestamp"])
-                        stationary = timestamp - stable_since >= 0.20
+                if foot.get("support_consistency") == "relative_3d_compatible":
+                    position = tuple(foot["position"])
+                    origin = previous.support_origins.get(side) if previous else None
+                    # A fixed origin detects accumulated movement without amplifying frame jitter.
+                    if (
+                        origin is not None
+                        and max(math.dist(position, origin), math.dist(position, old["position"]))
+                        <= _STATIONARY_SUPPORT_TOLERANCE_METERS
+                    ):
+                        stable_since = old["stable_since"]
+                    else:
+                        origin = position
+                    support_origins[side] = origin
+                stationary = timestamp - stable_since >= _MINIMUM_STATIONARY_SUPPORT_SECONDS
                 foot["stable_since"] = stable_since
                 foot["contact"] = "stationary_support_hypothesis" if stationary else "candidate"
                 image_feet[side] = dict(foot)
@@ -566,6 +575,7 @@ class PersonGroundRuntime(TransformOperatorRuntime):
             view,
             body_position,
             image_feet,
+            support_origins,
             capture["capture_instance"],
             capture["generation"],
             capture["sequence"],

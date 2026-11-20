@@ -133,11 +133,30 @@ class RecognitionDecision(BaseModel):
     evidence_at: float = Field(default=0.0, allow_inf_nan=False)
     policy_fingerprint: str = Field(default="", max_length=64)
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_candidates_after_human_decision(cls, values):
+        if isinstance(values, dict) and values.get("provenance") == "human" and values.get("candidate_ids"):
+            return {**values, "candidate_ids": ()}
+        return values
+
     @model_validator(mode="after")
     def accepted_identity_only(self):
         if (self.status == "recognized") != (self.identity_id is not None):
             raise ValueError("only recognized decisions carry an accepted identity")
         return self
+
+    def for_policy(self, fingerprint: str) -> RecognitionDecision:
+        """Project a shared visit into the requesting branch without changing history."""
+        if self.provenance == "human" or not (self.identity_id or self.candidate_ids):
+            return self
+        if fingerprint and self.policy_fingerprint == fingerprint:
+            return self
+        return self.model_copy(update={
+            "identity_id": None, "candidate_ids": (), "provenance": "none",
+            "status": "unavailable" if not fingerprint else "unobservable",
+            "reason": "calibration_required" if not fingerprint else "recognition_policy_changed",
+        })
 
     def packet_summary(self) -> dict:
         # Nomes, candidatos e biometria são consultados pela API autorizada.

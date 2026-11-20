@@ -62,7 +62,11 @@ async def read_identity_decision(
         )
         if not 0 <= time.time() - packet.created_at <= max_age_seconds:
             return None
-        return current
+        if current is None:
+            return None
+        # The packet omits private candidates. Revalidation cannot expand its scope.
+        permitted = current.model_copy(update={"candidate_ids": ()})
+        return permitted if permitted == decision.model_copy(update={"candidate_ids": ()}) else None
     except Exception:
         return None
 
@@ -100,6 +104,10 @@ class RecognizeIdentityConfig(BaseModel):
         if len({(policy.species, policy.embedding_space) for policy in self.policies}) != len(self.policies):
             raise ValueError("Each species and embedding space must have one recognition policy")
         return self
+
+    def policy_for(self, species: str, space: str) -> RecognitionPolicy | None:
+        return next((item for item in self.policies
+                     if item.species == species and item.embedding_space == space), None)
 
 
 def identity_binding(packet: Packet) -> dict | None:
@@ -425,6 +433,11 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
         if self.config.late_enrichment and artifact is None:
             return None
         current = store.decision(key)
+        policy = None
+        if current is not None and (artifact is None or packet.lifecycle == Lifecycle.CLOSE):
+            policy = self.config.policy_for(
+                str(packet.payload["subject"].get("category") or "").lower(), current.embedding_space
+            )
         if packet.lifecycle == Lifecycle.CLOSE:
             store.close_occurrence(key)
         elif artifact is not None:
@@ -441,15 +454,7 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
             ) or (self.config.late_enrichment and (
                 evidence.source_id != resolve_source_id(packet) or evidence.observed_at != resolve_media_ts(packet))):
                 raise ValueError("evidence_provenance_mismatch")
-            policy = next(
-                (
-                    item
-                    for item in self.config.policies
-                    if item.species == evidence.species
-                    and item.embedding_space == evidence.embedding_space
-                ),
-                None,
-            )
+            policy = self.config.policy_for(evidence.species, evidence.embedding_space)
             if policy is not None:
                 store.register_policy(policy)
             crop = base64.b64decode(decoded["crop"], validate=True) if decoded.get("crop") else None
@@ -462,15 +467,6 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
             )
         elif current is not None:
             incoming = packet.payload.get("recognition", {})
-            policy = next(
-                (
-                    item
-                    for item in self.config.policies
-                    if item.embedding_space == current.embedding_space
-                    and item.species == str(packet.payload["subject"].get("category") or "").lower()
-                ),
-                None,
-            )
             current = store.no_evidence(
                 key,
                 observed_at=resolve_media_ts(packet),
@@ -479,7 +475,7 @@ class RecognizeIdentityRuntime(TransformOperatorRuntime):
                 continuity_seconds=policy.continuity_seconds if policy else 0,
                 expected_policy_fingerprint=policy.fingerprint() if policy else "",
             )
-        return current
+        return current.for_policy(policy.fingerprint() if policy else "") if current is not None else None
 
     async def process_packet(self, packet: Packet, context: Any) -> list[Packet]:
         if self.config.late_enrichment and not await occurrence_enrichment_allowed(packet, self.dependencies):

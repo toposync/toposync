@@ -1144,7 +1144,7 @@ class IdentityStore:
             ):
                 raise IdentityConflict("occurrence provenance changed")
             current = (
-                RecognitionDecision.model_validate(self._open(previous["decision"]))
+                RecognitionDecision.model_validate(self._open(previous["decision"])).for_policy(policy.fingerprint() if policy else "")
                 if previous
                 else None
             )
@@ -1171,9 +1171,6 @@ class IdentityStore:
                 if not connection.execute("SELECT 1 FROM activity_reference WHERE observation_id=?", (observation_id,)).fetchone():
                     self._retain_activity_reference(connection, None, evidence.occurrence_id, observation_id)
                 self._retain_activity_reference(connection, activity_reference, evidence.occurrence_id, observation_id)
-                if current and policy and current.policy_fingerprint != policy.fingerprint():
-                    return current.model_copy(update={"identity_id": None, "status": "unobservable", "provenance": "none",
-                        "candidate_ids": (), "reason": "recognition_policy_changed"})
                 return current
             if previous and (previous["closed"] or evidence.observed_at < previous["latest_at"]):
                 return current
@@ -1319,6 +1316,10 @@ class IdentityStore:
             current = self._stored_decision(occurrence_id)
             if current is None or current.provenance == "human":
                 return current
+            if expected_policy_fingerprint is not None:
+                projected = current.for_policy(expected_policy_fingerprint)
+                if projected is not current:
+                    return projected
             row = connection.execute(
                 "SELECT closed,latest_at FROM occurrence WHERE id=?", (occurrence_id,)
             ).fetchone()

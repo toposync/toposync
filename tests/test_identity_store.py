@@ -885,3 +885,23 @@ def test_curation_camera_scope_serializes_all_shared_connection_reads(tmp_path):
         assert not unlocked_reads
     finally:
         store.close()
+
+
+def test_replaying_a_manually_named_visit_preserves_the_human_decision(store):
+    identity, enrolled_sample, _ = enroll(store)
+    changed = policy().model_copy(update={"calibration_revision": "new-profile"})
+    replay = store.observe(enrolled_sample, changed)
+    assert replay.provenance == "human" and replay.identity_id == identity
+
+
+def test_human_decision_excludes_machine_candidates_in_new_and_legacy_records(store):
+    import json
+    from toposync_ext_vision.identity.contracts import RecognitionDecision
+
+    identity, sample, _ = enroll(store)
+    other, _, _ = enroll(store, name="Bento", event="different-visit", vector=[0, 1] + [0] * 14)
+    conflicting_sample = evidence(sample.occurrence_id, vector=[0, 1] + [0] * 14, capture="later", observed_at=2)
+    confirmed = store.observe(conflicting_sample, policy())
+    assert confirmed.identity_id == identity and confirmed.candidate_ids == ()
+    legacy = {**confirmed.model_dump(), "candidate_ids": [other]}
+    assert RecognitionDecision.model_validate_json(json.dumps(legacy)).candidate_ids == ()

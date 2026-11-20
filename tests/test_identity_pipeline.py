@@ -294,7 +294,13 @@ def test_consumer_expires_automatic_evidence_even_on_a_fresh_packet(tmp_path):
             )
         )
         fresh = replace(resolved, payload={**resolved.payload, "frame_ts": 2.5})
-        assert (await read_identity_decision(fresh, services)).identity_id == identity
+        permitted = await read_identity_decision(fresh, services)
+        assert permitted.identity_id == identity and permitted.candidate_ids == ()
+        different_reason = fresh.with_artifact(Artifact(
+            name=PRIVATE_DECISION_ARTIFACT, private=True,
+            data=decision.model_copy(update={"reason": "different_projection"}).model_dump_json().encode(),
+        ))
+        assert await read_identity_decision(different_reason, services) is None
         # Packet creation time is fresh in all cases; the evidence age controls continuity.
         expired = replace(resolved, payload={**resolved.payload, "frame_ts": 3.01})
         assert await read_identity_decision(expired, services) is None
@@ -573,6 +579,41 @@ def test_canceled_resolution_keeps_its_executor_slot_until_persistence_finishes(
                 *(task for task in (first, second) if task), return_exceptions=True
             )
             await scheduler.shutdown()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_uncalibrated_branch_cannot_reuse_automatic_name_on_replay_or_close(tmp_path):
+    from test_identity_store import enroll, evidence, policy
+
+    async def scenario():
+        store = IdentityStore(tmp_path, scope="test")
+        services = ServiceRegistry()
+        services.register("vision.identity.store", lambda: store)
+        profile = policy("cat")
+        try:
+            identity, _, _ = enroll(store, species="cat")
+            event = packet()
+            sample = evidence(occurrence_key(event), species="cat", observed_at=1)
+            incoming = event.with_artifact(Artifact(name=PRIVATE_EVIDENCE_ARTIFACT, private=True,
+                data=json.dumps({"evidence": sample.model_dump(), "crop": None}).encode()))
+            dependencies = PipelineRuntimeDependencies(services=services)
+            calibrated = RecognizeIdentityRuntime({"enabled": True, "policies": [profile.model_dump()]}, dependencies)
+            uncalibrated = RecognizeIdentityRuntime({"enabled": True}, dependencies)
+            accepted, = await calibrated.process_packet(incoming, Context())
+            assert (await read_identity_decision(accepted, services)).identity_id == identity
+            followup = replace(event, lifecycle=Lifecycle.UPDATE, payload={
+                **event.payload, "frame_ts": 2.0,
+                "recognition": {"status": "pending", "reason": "sampling"},
+            })
+            for replay in (incoming, followup, replace(event, lifecycle=Lifecycle.CLOSE), incoming):
+                result, = await uncalibrated.process_packet(replay, Context())
+                assert result.payload["recognition"]["status"] == "unavailable"
+                assert result.payload["recognition"]["reason"] == "calibration_required"
+                assert await read_identity_decision(result, services) is None
+            assert store.decision(occurrence_key(event)).identity_id == identity
+        finally:
             store.close()
 
     asyncio.run(scenario())

@@ -786,3 +786,33 @@ def test_assistant_empty_identity_never_calls_embedding_or_answer_model(client):
         assert response.json()["search"]["reason"] == "no_associated_notifications"
     finally:
         gallery.close()
+
+
+def test_reidentifying_visit_preserves_only_references_already_approved_for_that_profile(client):
+    from test_identity_store import evidence, policy
+
+    gallery = client.portal.call(client.app.state.services.call, "vision.identity.store")
+    original = gallery.observe(evidence("curated", species="cat"), None)
+    identity_url = "/api/vision/identities"
+    def identify(selection, **choice):
+        response = client.post(identity_url + "/curation", json={
+            "action": "identify", "expected_revision": gallery.revision, "request_key": f"edit-{gallery.revision}",
+            "values": {"observation_ids": selection, **choice},
+        })
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    identity = identify([original.observation_id], name="Amora", species="cat", use_as_reference=True)["identity_id"]
+    reused = gallery.observe(evidence("curated", species="cat", capture="another", observed_at=2), None)
+    selected = [original.observation_id, reused.observation_id]
+    identify(selected, identity_id=identity, use_as_reference=False)
+    items = client.get(identity_url + "/occurrences/curated").json()["observations"]
+    assert {row["id"] for row in items if row["reference"]} == {original.observation_id}
+    assert gallery.observe(evidence("return", species="cat"), policy("cat")).identity_id == identity
+    moved = identify(selected, name="Lua", species="cat")
+    assert not any(row["reference"] for row in client.get(identity_url + "/occurrences/curated").json()["observations"])
+    assert gallery.observe(evidence("after-correction", species="cat"), policy("cat")).identity_id is None
+    response = client.post(identity_url + "/history/" + moved["operation_id"] + "/undo",
+                           json={"expected_revision": gallery.revision})
+    assert response.status_code == 200, response.text
+    assert gallery.observe(evidence("after-undo", species="cat"), policy("cat")).identity_id == identity

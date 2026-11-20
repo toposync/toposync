@@ -207,6 +207,7 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
   const matching = available.filter((item) => item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const [name, setName] = useState("");
   const [reference, setReference] = useState(false);
+  const canAddReference = observations.some(item => item.eligible && !(mode === "existing" && item.reference && item.identity_id === identity));
   const { observationIds } = reviewedSelection(revision, observations);
   const [draft] = useState(() => reviewed ?? { revision, observationIds });
   const stale = revision !== draft.revision || observationIds.length !== draft.observationIds.length
@@ -218,25 +219,25 @@ function Editor({ species, observations, identities, revision, t, onClose, initi
   return <form className="identityForm" onSubmit={(event) => {
     event.preventDefault();
     if (!canSave || busy) return;
-    void run("/curation", { action: "identify", expected_revision: draft.revision, values: { species, observation_ids: draft.observationIds, ...(mode === "new" ? { name: name.trim() } : { identity_id: identity }), use_as_reference: reference } }).then((saved) => { if (saved) onClose(true); });
+    void run("/curation", { action: "identify", expected_revision: draft.revision, values: { species, observation_ids: draft.observationIds, ...(mode === "new" ? { name: name.trim() } : { identity_id: identity }), use_as_reference: canAddReference && reference } }).then((saved) => { if (saved) onClose(true); });
   }}>
     <h3 tabIndex={-1} ref={title}>{t("who")}</h3><p className="identityMuted">{t("selection", { count: observations.length })}</p>
     <fieldset disabled={busy}>
-      {available.length > 0 && <label><input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} />{t("existing")}</label>}
+      {available.length > 0 && <label><input type="radio" checked={mode === "existing"} onChange={() => { setMode("existing"); setReference(false); }} />{t("existing")}</label>}
       {mode === "existing" && <>
         <label className="identityField">{t("search")}<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} autoComplete="off" /></label>
         <div className="identityChoices" role="group" aria-label={t("choose")}>
           {matching.map((item) => <label className={`identityChoice ${identity === item.id ? "isSelected" : ""}`} key={item.id}>
-            <input type="radio" name={choiceName} value={item.id} aria-label={labels.get(item.id)} checked={identity === item.id} onChange={() => setIdentity(item.id)} />
+            <input type="radio" name={choiceName} value={item.id} aria-label={labels.get(item.id)} checked={identity === item.id} onChange={() => { setIdentity(item.id); setReference(false); }} />
             {item.representative_id && <Photo observation={{ id: item.representative_id }} portrait t={t} />}
             <span className="identityName">{labels.get(item.id)}</span>
           </label>)}
           {!matching.length && <p className="identityMuted">{t("noMatches")}</p>}
         </div>
       </>}
-      <label><input type="radio" checked={mode === "new"} onChange={() => setMode("new")} />{t("create")}</label>
+      <label><input type="radio" checked={mode === "new"} onChange={() => { setMode("new"); setReference(false); }} />{t("create")}</label>
       {mode === "new" && <label className="identityField">{t("name")}<input maxLength={120} required value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" /></label>}
-      <label><input type="checkbox" disabled={!observations.some((item) => item.eligible)} checked={reference} onChange={(event) => setReference(event.target.checked)} />{t("reference")}</label><p className="identityMuted">{t("referenceHelp")}</p>
+      <label><input type="checkbox" disabled={!canAddReference} checked={canAddReference && reference} onChange={(event) => setReference(event.target.checked)} />{t("reference")}</label><p className="identityMuted">{t("referenceHelp")}</p>
       {stale ? <ErrorMessage t={t} message="conflict" onRetry={() => { onClose(); changed(); }} /> : error && <ErrorMessage t={t} message={error} />}
       <div className="identityActions"><button className="chipButton" type="button" onClick={() => onClose()}>{t("cancel")}</button><button className="primaryButton" type="submit" disabled={!canSave}>{t(busy ? "saving" : "save")}</button></div>
     </fieldset>

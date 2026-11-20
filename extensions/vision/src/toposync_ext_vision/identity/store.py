@@ -1586,7 +1586,8 @@ class IdentityStore:
             )
             return result
 
-    def _apply_curation(self, connection, action: str, values: dict, revision: int) -> dict:
+    def _apply_curation(self, connection, action: str, values: dict, revision: int,
+                        *, preserve_existing_references: bool = False) -> dict:
         if action == "identify":
             identity_id = values.get("identity_id")
             if not identity_id:
@@ -1598,6 +1599,7 @@ class IdentityStore:
                 "assign",
                 {**values, "identity_id": identity_id},
                 revision,
+                preserve_existing_references=True,
             )
             return {**assigned, "identity_id": identity_id}
         if action in {"create", "rename"}:
@@ -1644,11 +1646,13 @@ class IdentityStore:
                 if identity and identity["species"] != row["species"]:
                     raise ValueError("identity species does not match observation")
                 if action == "assign":
+                    keep_reference = preserve_existing_references and row["reference"] and row["identity_id"] == identity["id"]
+                    use_reference = row["eligible"] and (keep_reference or values.get("use_as_reference", False))
                     connection.execute(
                         "UPDATE observation SET identity_id=?,confirmed=1,reference=?,cluster_id=NULL WHERE id=?",
                         (
                             identity["id"],
-                            int(row["eligible"] and bool(values.get("use_as_reference", False))),
+                            int(bool(use_reference)),
                             row["id"],
                         ),
                     )
